@@ -123,7 +123,7 @@ const firebaseConfig = {
   measurementId: "G-G12VFC2D32"
 };
 const fbApp = initializeApp(firebaseConfig), auth = getAuth(fbApp), db = initializeFirestore(fbApp, { experimentalAutoDetectLongPolling: true });
-const IMPORT_API = ''; /* ضع هنا رابط الـ Worker بعد نشره، مثال: https://rahaltv-import.USER.workers.dev */
+const IMPORT_API = 'https://rahaltv-import.rahaal712.workers.dev/'; /* ضع هنا رابط الـ Worker بعد نشره، مثال: https://rahaltv-import.USER.workers.dev */
 let CLOUD_OK = false, CLOUD_BUSY = false, CLOUD_ERR = '', CLOUD_EMPTY = false, LOGIN_MSG = '', REMEMBER = localStorage.getItem('adm_rem')==='1';
 const SYNCED = new Map();   /* id -> JSON آخر نسخة محفوظة في Firebase */
 const SITE_NAME = "منصتي للمشاهدة";   /* اسم الموقع الافتراضي */
