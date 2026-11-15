@@ -90,6 +90,11 @@ section.row{margin-top:36px}
 main{position:relative}
 .player{position:relative;aspect-ratio:16/9;background:#000;border-radius:16px;overflow:hidden;margin-top:26px;border:1px solid var(--line);box-shadow:0 24px 60px rgba(0,0,0,.55)}
 .player video,.player iframe{width:100%;height:100%;border:0;display:block}
+.srvs{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:14px 0 0}
+.srvs .sl{color:var(--muted);font-size:.9rem;margin-inline-end:4px}
+.srvb{padding:6px 16px;border-radius:99px;background:var(--surface);border:1px solid var(--line);color:inherit;cursor:pointer;transition:all .25s var(--ease)}
+.srvb:hover{border-color:var(--accent);transform:translateY(-2px)}
+.srvb.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .start{position:relative;display:block;width:100%;height:100%;padding:0}
 .start img{width:100%;height:100%;object-fit:cover;display:block;filter:brightness(.65);transition:filter .4s,transform .8s var(--ease)}
 .start:hover img{filter:brightness(.9);transform:scale(1.04)}
@@ -141,21 +146,7 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
 <main id="app"></main>
 <footer><div class="wrap" id="foot"></div></footer>
 
-<script type="module">
-/* Firebase بيتحمّل في الخلفية (dynamic import) عشان الصفحة ما تستناهوش */
-const FBV = "https://www.gstatic.com/firebasejs/11.0.2/", firebaseConfig = {
-  apiKey: "AIzaSyCkaiWGZZ06-FswbvNH8N1ysgkiIjeknVQ",
-  authDomain: "rahaltv.firebaseapp.com",
-  projectId: "rahaltv",
-  storageBucket: "rahaltv.firebasestorage.app",
-  messagingSenderId: "258640370330",
-  appId: "1:258640370330:web:9abe6611f8d3fe9f1add23",
-  measurementId: "G-G12VFC2D32"
-};
-let _fb = null;
-const fbLoad = () => _fb || (_fb = Promise.all([import(FBV+'firebase-app.js'), import(FBV+'firebase-firestore.js')]).then(([a,f]) => {
-  const app = a.initializeApp(firebaseConfig);
-  return { app, f, db: f.initializeFirestore(app, { experimentalAutoDetectLongPolling: true }) }; }));
+<script>
 /* ============ إعدادات الموقع: عدّل هنا فقط ============ */
 const SITE = { name: "منصتي للمشاهدة", footer: "جميع الحقوق محفوظة. المحتوى معروض بترخيص من أصحابه." };
 
@@ -224,6 +215,12 @@ function poster(i){
 const card = (i,n=0) => `<a class="card" href="#${i.id}" style="--i:${Math.min(n,14)}">${poster(i)}<h3>${esc(i.title)}</h3><small>${i.year}</small></a>`;
 const rowHtml = (title, list, link) => list.length ? `<section class="row rv"><div class="head"><h2>${title}</h2><div class="ctl">${link?`<a href="#${link}">عرض الكل</a>`:''}<button class="arr" data-d="-1" aria-label="السابق">›</button><button class="arr" data-d="1" aria-label="التالي">‹</button></div></div><div class="scroller">${list.map((x,n)=>card(x,n)).join('')}</div></section>` : '';
 
+/* السيرفرات: لو العمل فيه servers بنستخدمها، وإلا بنرجع لحقل video القديم */
+function serversOf(i){
+  const l = (Array.isArray(i.servers) ? i.servers : []).filter(x => x && x.url);
+  if(!l.length && i.video) l.push({name:'سيرفر 1', url:i.video});
+  return l;
+}
 function playerHtml(v, auto){
   if(!v) return `<div class="empty">ضع رابط الفيديو في حقل video لهذا العمل ليظهر المشغّل هنا.</div>`;
   if(/\.(mp4|webm|m3u8)(\?|$)/i.test(v)) return `<video controls playsinline ${auto?'autoplay':''} src="${esc(v)}"></video>`;
@@ -268,10 +265,11 @@ function listing(title, list, withChips){
 }
 
 function detail(i, s=0, e=0){
-  const ser = i.type==='series', season = ser ? (i.seasons[s] || {episodes:[]}) : null, video = ser ? (season.episodes[e] || {}).video : i.video;
+  const ser = i.type==='series', season = ser ? (i.seasons[s] || {episodes:[]}) : null, sv = ser ? [] : serversOf(i), video = ser ? (season.episodes[e] || {}).video : (sv[0] ? sv[0].url : '');
   const similar = ITEMS.filter(x=>x.id!==i.id && x.genres.some(g=>i.genres.includes(g))).slice(0,10);
   app.innerHTML = `<div class="backdrop" style="background-image:${url(i.poster||cover(i))}"></div><div class="wrap rel">
     <div class="player" id="pl"></div>
+    ${sv.length>1?`<div class="srvs" id="srvs"><span class="sl">السيرفرات:</span>${sv.map((x,n)=>`<button type="button" class="srvb ${n?'':'on'}" data-n="${n}">${esc(x.name||('سيرفر '+(n+1)))}</button>`).join('')}</div>`:''}
     ${ser?`<div class="seasons">${i.seasons.map((x,n)=>`<button class="ep ${n===s?'on':''}" data-s="${n}">${esc(x.name)}</button>`).join('')}</div>
     <div class="eps">${season.episodes.map((x,n)=>`<button class="ep ${n===e?'on':''}" data-s="${s}" data-e="${n}">${esc(x.t)}</button>`).join('')}</div>`:''}
     <div class="detail">${poster(i)}<div>
@@ -282,8 +280,11 @@ function detail(i, s=0, e=0){
   const pl = $('#pl');
   const startHtml = `<button class="start" aria-label="تشغيل"><img class="${i.poster?'bl':''}" src="${esc(i.poster||cover(i))}" alt=""><span class="pbtn">▶</span></button>`;
   const showStart = () => { pl.innerHTML = startHtml; pl.firstChild.onclick = play; };
-  const play = () => { pl.innerHTML = playerHtml(video, true); const v = pl.querySelector('video'); if(v) v.play().catch(showStart); };
+  let curV = video;
+  const play = () => { pl.innerHTML = playerHtml(curV, true); const v = pl.querySelector('video'); if(v) v.play().catch(showStart); };
   if(video) play(); else pl.innerHTML = playerHtml('');
+  app.querySelectorAll('.srvb').forEach(b => b.onclick = () => { const x = sv[+b.dataset.n]; if(!x) return; curV = x.url;
+    app.querySelectorAll('.srvb').forEach(c => c.classList.toggle('on', c===b)); play(); });
   app.querySelectorAll('.ep').forEach(b => b.onclick = () => detail(i, +b.dataset.s, b.dataset.e ? +b.dataset.e : 0));
   requestAnimationFrame(()=>requestAnimationFrame(()=>$('.ring').classList.add('go')));
   document.title = i.title + ' | ' + SITE.name;
@@ -319,50 +320,12 @@ let st; $('#q').addEventListener('input', e => { clearTimeout(st); const q = e.t
 $('#sf').onsubmit = e => { e.preventDefault(); const q = $('#q').value.trim(); if(q) search(q); };
 addEventListener('scroll', sync, {passive:true});
 $('#bn').textContent = SITE.name; $('#foot').textContent = SITE.footer;
-(() => {
-  const CK = 'catalog_cache_v2', sig = o => JSON.stringify(o);
-  const timeout = (p, ms) => Promise.race([p, new Promise((_,rj) => setTimeout(() => rj(new Error('timeout')), ms))]);
-  let shown = null;                                   /* آخر بيانات معروضة */
-  const apply = (d, st) => {
-    ITEMS.splice(0, ITEMS.length, ...d);
-    if(st){ Object.assign(SITE, st); $('#bn').textContent = SITE.name; $('#foot').textContent = SITE.footer; }
-    shown = sig([d, st]);
-  };
-  const fromFirebase = async () => {
-    const r = await timeout((async () => { const {f, db} = await fbLoad();
-      return Promise.all([f.getDocs(f.collection(db,'items')), f.getDoc(f.doc(db,'config','site'))]); })(), 20000);
-    const [qs, cs] = r;
-    if(qs.empty) return null;
-    return { d: qs.docs.map(x => x.data()).sort((a,b) => (a.ord ?? 1e15) - (b.ord ?? 1e15)), st: cs.exists() ? cs.data() : null };
-  };
-  const fromFile = async () => {
-    const r = await timeout(fetch('catalog.json', {cache:'no-store'}), 8000); if(!r.ok) throw 0;
-    const j = await r.json(), d = Array.isArray(j) ? j : j.items; if(!Array.isArray(d)) throw 0;
-    return { d, st: Array.isArray(j) ? null : (j.site || null) };
-  };
-  const save = r => { try{ localStorage.setItem(CK, sig(r)); }catch(e){} };
-  let started = false;
-  const start = r => { if(started || !r) return; started = true; apply(r.d, r.st); addEventListener('hashchange', route); route();
-    fbLoad().then(({app}) => import(FBV+'firebase-analytics.js').then(m => m.isSupported().then(ok => { if(ok) m.getAnalytics(app); }))).catch(()=>{}); };
-
-  /* 1) عرض فوري من النسخة المخزنة على الجهاز إن وُجدت */
-  try{ const c = JSON.parse(localStorage.getItem(CK) || 'null'); if(c && Array.isArray(c.d)) start(c); }catch(e){}
-
-  /* 2) Firebase وcatalog.json بالتوازي: أول نتيجة صالحة تعرض لو مفيش نسخة مخزنة */
-  const fb = fromFirebase().catch(e => { console.warn('Firestore:', e); return null; });
-  const fl = fromFile().catch(() => null);
-  Promise.any([fb.then(r => r || Promise.reject()), fl.then(r => r || Promise.reject())]).then(start).catch(() => {});
-
-  /* 3) لما يوصل رد Firebase نحدّث الصفحة لو البيانات اتغيّرت */
-  fb.then(r => {
-    if(!r){ fl.then(f => { if(!started){ start(f); } }); return; }
-    save(r);
-    if(!started){ start(r); return; }
-    if(sig([r.d, r.st]) !== shown){
-      apply(r.d, r.st);
-      if(!['detail','search'].includes(document.body.dataset.p)) route();   /* ما نقطعش مشاهدة شغّالة */
-    }
-  });
+(async () => {
+  let d = null;
+  try{ d = JSON.parse(localStorage.getItem('catalog_v1') || 'null'); }catch(e){}
+  if(!Array.isArray(d)){ try{ const r = await fetch('catalog.json', {cache:'no-store'}); if(r.ok) d = await r.json(); }catch(e){} }
+  if(Array.isArray(d)) ITEMS.splice(0, ITEMS.length, ...d);
+  addEventListener('hashchange', route); route();
 })();
 </script>
 </body>
