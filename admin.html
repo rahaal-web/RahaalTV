@@ -123,7 +123,7 @@ const firebaseConfig = {
   measurementId: "G-G12VFC2D32"
 };
 const fbApp = initializeApp(firebaseConfig), auth = getAuth(fbApp), db = initializeFirestore(fbApp, { experimentalAutoDetectLongPolling: true });
-let CLOUD_OK = false, CLOUD_EMPTY = false, LOGIN_MSG = '', REMEMBER = localStorage.getItem('adm_rem')==='1';
+let CLOUD_OK = false, CLOUD_BUSY = false, CLOUD_ERR = '', CLOUD_EMPTY = false, LOGIN_MSG = '', REMEMBER = localStorage.getItem('adm_rem')==='1';
 const SYNCED = new Map();   /* id -> JSON آخر نسخة محفوظة في Firebase */
 const SITE_NAME = "منصتي للمشاهدة";   /* اسم الموقع الافتراضي */
 const SITE_URL = "https://claude.ai/artifact/R3KdSLS7JBZ24m7EBCovwx";
@@ -182,7 +182,7 @@ async function pushChanges(){
   if(ops.length) toast('تم الحفظ في Firebase ✓');
 }
 const persist = () => {
-  if(!CLOUD_OK){ toast('لا يوجد اتصال بـ Firebase، لم يتم الحفظ. أعد تحميل الصفحة.'); return false; }
+  if(!CLOUD_OK){ toast(CLOUD_BUSY ? 'جارٍ الاتصال بـ Firebase… انتظر قليلًا ثم أعد المحاولة.' : 'لا يوجد اتصال بـ Firebase، لم يتم الحفظ ('+CLOUD_ERR+').'); return false; }
   const first = SYNCED.size === 0;
   ITEMS.forEach((i,k) => { if(i.ord == null) i.ord = first ? k : Date.now()+k; });
   syncQ = syncQ.then(pushChanges).catch(err => { console.error(err); toast('فشل الحفظ في Firebase: '+(err.code||err.message)); });
@@ -229,20 +229,24 @@ function showLogin(msg=''){
 }
 
 /* ---------- تحميل البيانات ---------- */
-async function load(){
+async function loadLocal(){
   let d = null, st = null;
-  try{
-    const [qs, cs] = await Promise.race([Promise.all([getDocs(collection(db,'items')), getDoc(doc(db,'config','site'))]), new Promise((_,rj) => setTimeout(() => rj(new Error('انتهت مهلة الاتصال')), 20000))]);
-    CLOUD_OK = true; CLOUD_EMPTY = qs.empty; SYNCED.clear();
-    if(!qs.empty){ d = qs.docs.map(x => x.data()).sort((a,b) => (a.ord ?? 1e15) - (b.ord ?? 1e15)); d.forEach(i => SYNCED.set(i.id, JSON.stringify(i))); }
-    if(cs.exists()) st = cs.data();
-  }catch(e){ CLOUD_OK = false; console.error(e); toast('تعذّر الاتصال بـ Firebase: '+(e.code||e.message)); }
-  /* قاعدة البيانات فارغة (أول مرة): نعرض catalog.json لحين رفعه */
-  if(!Array.isArray(d)){ try{ const r = await fetch('catalog.json',{cache:'no-store'}); if(r.ok){ const j = await r.json(); if(Array.isArray(j)) d = j; else if(j && Array.isArray(j.items)){ d = j.items; st = st || j.site; } } }catch(e){} }
+  try{ const r = await fetch('catalog.json',{cache:'no-store'}); if(r.ok){ const j = await r.json(); if(Array.isArray(j)) d = j; else if(j && Array.isArray(j.items)){ d = j.items; st = j.site; } } }catch(e){}
   ITEMS.splice(0, ITEMS.length, ...(Array.isArray(d) ? d : SEED));
   SET = Object.assign({name:SITE_NAME,footer:''}, st || {});
 }
-async function showApp(){ $('#root').innerHTML = '<p style="padding:40px;text-align:center;color:#a49fc4">جارٍ تحميل البيانات من Firebase…</p>'; await load(); render(); }
+async function loadCloud(){
+  CLOUD_BUSY = true; CLOUD_ERR = '';
+  try{
+    const [qs, cs] = await Promise.race([Promise.all([getDocs(collection(db,'items')), getDoc(doc(db,'config','site'))]), new Promise((_,rj) => setTimeout(() => rj(new Error('انتهت مهلة الاتصال (12 ثانية)')), 12000))]);
+    CLOUD_OK = true; CLOUD_EMPTY = qs.empty; SYNCED.clear();
+    if(!qs.empty){ const d = qs.docs.map(x => x.data()).sort((a,b) => (a.ord ?? 1e15) - (b.ord ?? 1e15)); d.forEach(i => SYNCED.set(i.id, JSON.stringify(i))); ITEMS.splice(0, ITEMS.length, ...d); }
+    if(cs.exists()) SET = Object.assign({name:SITE_NAME,footer:''}, cs.data());
+  }catch(e){ CLOUD_OK = false; CLOUD_ERR = e.code || e.message; console.error('Firestore:', e); toast('تعذّر الاتصال بـ Firebase: '+CLOUD_ERR); }
+  CLOUD_BUSY = false;
+}
+async function load(){ await loadLocal(); await loadCloud(); }
+async function showApp(){ $('#root').innerHTML = '<p style="padding:40px;text-align:center;color:#a49fc4">جارٍ التحميل…</p>'; await loadLocal(); render(); loadCloud().then(() => { if(sess() && !$('#dg').open) render(); }); }
 
 /* ---------- الهيكل ---------- */
 const nv = k => `<button class="nv ${view===k?'on':''}" data-v="${k}">${ic(k)}<span>${VIEWS[k][0]}</span>${k==='publish'&&CLOUD_EMPTY?'<i class="dot2" title="البيانات غير مرفوعة"></i>':''}</button>`;
@@ -264,7 +268,7 @@ function dash(){
   const avg = ITEMS.length ? (ITEMS.reduce((n,i)=>n+(+i.rating||0),0)/ITEMS.length).toFixed(1) : '—';
   const nv2 = ITEMS.filter(noVideo), np = ITEMS.filter(i=>!i.poster), recent = [...ITEMS].sort((a,b)=>(b.added||'').localeCompare(a.added||'')).slice(0,5), top = [...ITEMS].sort((a,b)=>b.rating-a.rating).slice(0,5);
   const li = i => `<div class="li"><img src="${esc(i.poster||art(i.title,100,150))}" alt=""><div><b>${esc(i.title)}</b><small>${kind(i)} • ${i.year}</small></div><span class="rate">★ ${i.rating}</span><button class="ib" data-a="edit" data-id="${i.id}">تعديل</button></div>`;
-  return `${CLOUD_EMPTY?`<div class="alert">⚠ قاعدة بيانات Firebase فارغة. <button class="ib" data-v="publish">ارفع البيانات الآن</button></div>`:''}
+  return `${CLOUD_BUSY?`<div class="alert">⏳ جارٍ الاتصال بـ Firebase… يمكنك التصفح الآن، والحفظ يتفعّل بعد الاتصال.</div>`:(!CLOUD_OK?`<div class="alert">⚠ لا يوجد اتصال بـ Firebase (${esc(CLOUD_ERR)}). لن تُحفظ التعديلات.</div>`:'')}${CLOUD_EMPTY?`<div class="alert">⚠ قاعدة بيانات Firebase فارغة. <button class="ib" data-v="publish">ارفع البيانات الآن</button></div>`:''}
     <div class="stats"><div class="stat"><b>${ITEMS.length}</b><span>إجمالي الأعمال</span></div><div class="stat"><b>${mv}</b><span>أفلام</span></div><div class="stat"><b>${ITEMS.length-mv}</b><span>مسلسلات</span></div><div class="stat"><b>${eps}</b><span>حلقات</span></div><div class="stat"><b>${avg}</b><span>متوسط التقييم</span></div></div>
     <div class="cols"><div class="panel"><h3>توزيع التصنيفات</h3>${gs.map(([g,n])=>`<div class="r"><span>${esc(g)}</span><div class="t2"><i data-w="${n/mx*100}"></i></div><b>${n}</b></div>`).join('')||'<p>لا توجد بيانات.</p>'}</div>
     <div class="panel"><h3>اكتمال البيانات</h3><div class="li"><div>أعمال بدون رابط فيديو</div><span class="pill ${nv2.length?'warn':'ok'}">${nv2.length}</span></div><div class="li"><div>أعمال بدون بوستر</div><span class="pill ${np.length?'warn':'ok'}">${np.length}</span></div>
@@ -291,7 +295,7 @@ function genres(){
 }
 const settings = () => `<form class="panel form1" id="sf"><h3>بيانات الموقع</h3><label class="f">اسم الموقع<input name="name" required value="${esc(SET.name)}"></label><label class="f">نص التذييل<input name="footer" value="${esc(SET.footer)}"></label><div><button class="btn sm">حفظ الإعدادات</button></div></form>`;
 function publish(){
-  return `<div class="cols" style="margin-top:0"><div class="panel"><h3>الاتصال بـ Firebase</h3><p><span class="pill ${CLOUD_OK?'ok':'warn'}">${CLOUD_OK?'متصل بمشروع rahaltv':'غير متصل'}</span></p>
+  return `<div class="cols" style="margin-top:0"><div class="panel"><h3>الاتصال بـ Firebase</h3><p><span class="pill ${CLOUD_OK?'ok':'warn'}">${CLOUD_OK?'متصل بمشروع rahaltv':(CLOUD_BUSY?'جارٍ الاتصال…':'غير متصل: '+esc(CLOUD_ERR))}</span></p>
     <p style="margin:10px 0">كل تعديل يُحفظ مباشرة في Firestore ويظهر للزوّار عند تحديث صفحة الموقع، بدون تصدير أو رفع ملفات.</p>
     ${CLOUD_EMPTY?`<div class="alert">قاعدة البيانات فارغة. ارفع الأعمال الحالية (${ITEMS.length}) والإعدادات مرة واحدة.</div><div class="row2"><button class="btn sm" data-a="upload">رفع البيانات إلى Firebase</button></div>`:''}
     <div class="row2"><button class="btn g sm" data-a="restore">إعادة تحميل من Firebase</button></div></div>
