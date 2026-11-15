@@ -37,4 +37,119 @@
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm text-gray-400 mb-1">نوع المحتوى</label>
-                        <select id="contentType" class="w-full bg-gray-900
+                        <select id="contentType" class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-gray-100 focus:outline-none focus:border-blue-500">
+                            <option value="movie">فيلم</option>
+                            <option value="series">مسلسل</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">عنوان المحتوى</label>
+                        <input type="text" id="contentTitle" required class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-gray-100 focus:outline-none focus:border-blue-500">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">السنة</label>
+                        <input type="number" id="contentYear" class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-gray-100 focus:outline-none focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">التقييم</label>
+                        <input type="text" id="contentRating" class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-gray-100 focus:outline-none focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">المدة (بالدقائق)</label>
+                        <input type="number" id="contentMinutes" class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-gray-100 focus:outline-none focus:border-blue-500">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">رابط البوستر (الصورة)</label>
+                    <input type="url" id="contentPoster" class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-gray-100 focus:outline-none focus:border-blue-500">
+                </div>
+
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">رابط الفيديو / المشغل</label>
+                    <input type="url" id="contentVideo" class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-gray-100 focus:outline-none focus:border-blue-500">
+                </div>
+
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">القصة / الملخص</label>
+                    <textarea id="contentSummary" rows="3" class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-gray-100 focus:outline-none focus:border-blue-500"></textarea>
+                </div>
+
+                <div class="flex justify-end pt-4">
+                    <button type="submit" class="bg-green-600 hover:bg-green-700 px-6 py-2 rounded-lg font-medium transition">
+                        <i class="fas fa-save ml-1"></i> حفظ المحتوى
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- سكربت التشغيل وجلب البيانات وتوصيل الـ Worker -->
+    <script>
+        // رابط الـ Cloudflare Worker الخاص بك
+        const IMPORT_API = 'https://rahaltv-import.rahaal712.workers.dev';
+
+        async function fetchContentData() {
+            const urlInput = document.getElementById('importUrlInput').value.trim();
+            const statusEl = document.getElementById('importStatus');
+            const btnText = document.getElementById('btnText');
+            const btnSpinner = document.getElementById('btnSpinner');
+            const importBtn = document.getElementById('importBtn');
+
+            if (!urlInput) {
+                statusEl.textContent = 'الرجاء إدخال رابط صحيح أولاً!';
+                statusEl.className = 'text-xs text-red-400 mt-2';
+                return;
+            }
+
+            // تفعيل مؤشر التحميل
+            importBtn.disabled = true;
+            btnText.textContent = 'جاري الجلب...';
+            btnSpinner.classList.remove('hidden');
+            statusEl.textContent = 'جاري الاتصال وسحب البيانات من الرابط...';
+            statusEl.className = 'text-xs text-yellow-400 mt-2';
+
+            try {
+                // إرسال الطلب للـ Worker مع تمرير الرابط عبر المعامل url
+                const response = await fetch(`${IMPORT_API}?url=${encodeURIComponent(urlInput)}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                // تعبئة حقول النموذج بالبيانات المسترجعة تلقائياً
+                document.getElementById('contentType').value = data.type || 'movie';
+                document.getElementById('contentTitle').value = data.title || '';
+                document.getElementById('contentYear').value = data.year || '';
+                document.getElementById('contentRating').value = data.rating || '';
+                document.getElementById('contentMinutes').value = data.minutes || '';
+                document.getElementById('contentPoster').value = data.poster || '';
+                document.getElementById('contentVideo').value = data.video || '';
+                document.getElementById('contentSummary').value = data.summary || '';
+
+                statusEl.textContent = 'تم جلب البيانات بنجاح! يمكنك مراجعتها وتعديلها ثم حفظها.';
+                statusEl.className = 'text-xs text-green-400 mt-2';
+
+            } catch (err) {
+                console.error(err);
+                statusEl.textContent = 'حدث خطأ أثناء الجلب: ' + err.message;
+                statusEl.className = 'text-xs text-red-400 mt-2';
+            } finally {
+                // إعادة الزر لحالته الطبيعية
+                importBtn.disabled = false;
+                btnText.textContent = 'جلب البيانات';
+                btnSpinner.classList.add('hidden');
+            }
+        }
+
+        function saveContent(event) {
+            event.preventDefault();
+            alert('تم تجهيز البيانات للحفظ بنجاح!');
+        }
+    </script>
+</body>
+</html>
