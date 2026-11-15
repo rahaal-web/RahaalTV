@@ -322,9 +322,25 @@ addEventListener('scroll', sync, {passive:true});
 $('#bn').textContent = SITE.name; $('#foot').textContent = SITE.footer;
 (async () => {
   let d = null;
-  try{ d = JSON.parse(localStorage.getItem('catalog_v1') || 'null'); }catch(e){}
-  if(!Array.isArray(d)){ try{ const r = await fetch('catalog.json', {cache:'no-store'}); if(r.ok) d = await r.json(); }catch(e){} }
-  if(Array.isArray(d)) ITEMS.splice(0, ITEMS.length, ...d);
+  /* 1) Firebase: نفس قاعدة بيانات لوحة التحكم، فأي عمل بتضيفه يظهر هنا مباشرة */
+  try{
+    const [{initializeApp}, {initializeFirestore, collection, getDocs, getDoc, doc}] = await Promise.all([
+      import('https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js'),
+      import('https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js')]);
+    const fb = initializeApp({apiKey:"AIzaSyCkaiWGZZ06-FswbvNH8N1ysgkiIjeknVQ", authDomain:"rahaltv.firebaseapp.com", projectId:"rahaltv", appId:"1:258640370330:web:9abe6611f8d3fe9f1add23"}, 'site');
+    const fdb = initializeFirestore(fb, {experimentalAutoDetectLongPolling:true});
+    const [qs, cs] = await Promise.race([Promise.all([getDocs(collection(fdb,'items')), getDoc(doc(fdb,'config','site'))]),
+      new Promise((_,rj) => setTimeout(() => rj(new Error('timeout')), 10000))]);
+    if(!qs.empty) d = qs.docs.map(x => x.data()).sort((a,b) => (a.ord ?? 1e15) - (b.ord ?? 1e15));
+    if(cs.exists()){ Object.assign(SITE, cs.data()); $('#bn').textContent = SITE.name; $('#foot').textContent = SITE.footer; }
+  }catch(e){ console.warn('Firebase:', e.code || e.message); }
+  /* 2) احتياطي: التخزين المحلي ثم catalog.json */
+  if(!Array.isArray(d)){ try{ d = JSON.parse(localStorage.getItem('catalog_v1') || 'null'); }catch(e){} }
+  if(!Array.isArray(d)){ try{ const r = await fetch('catalog.json', {cache:'no-store'}); if(r.ok){ const j = await r.json(); d = Array.isArray(j) ? j : (j && j.items); } }catch(e){} }
+  if(Array.isArray(d)){
+    d.forEach(i => { i.genres = i.genres || []; i.cast = i.cast || []; i.seasons = i.seasons || []; });
+    ITEMS.splice(0, ITEMS.length, ...d);
+  }
   addEventListener('hashchange', route); route();
 })();
 </script>
