@@ -319,18 +319,47 @@ let st; $('#q').addEventListener('input', e => { clearTimeout(st); const q = e.t
 $('#sf').onsubmit = e => { e.preventDefault(); const q = $('#q').value.trim(); if(q) search(q); };
 addEventListener('scroll', sync, {passive:true});
 $('#bn').textContent = SITE.name; $('#foot').textContent = SITE.footer;
-(async () => {
-  let d = null, st = null;
-  try{
-    const [qs, cs] = await Promise.all([getDocs(collection(db,'items')), getDoc(doc(db,'config','site'))]);
-    if(!qs.empty) d = qs.docs.map(x => x.data()).sort((a,b) => (a.ord ?? 1e15) - (b.ord ?? 1e15));
-    if(cs.exists()) st = cs.data();
-  }catch(e){ console.warn('Firestore:', e); }
-  /* احتياطي: لو قاعدة البيانات فارغة أو فيه مشكلة اتصال نقرأ catalog.json */
-  if(!Array.isArray(d)){ try{ const r = await fetch('catalog.json', {cache:'no-store'}); if(r.ok){ const j = await r.json(); d = Array.isArray(j) ? j : j.items; if(!st && j.site) st = j.site; } }catch(e){} }
-  if(Array.isArray(d)) ITEMS.splice(0, ITEMS.length, ...d);
-  if(st){ Object.assign(SITE, st); $('#bn').textContent = SITE.name; $('#foot').textContent = SITE.footer; }
-  addEventListener('hashchange', route); route();
+(() => {
+  const CK = 'catalog_cache_v2', sig = o => JSON.stringify(o);
+  const timeout = (p, ms) => Promise.race([p, new Promise((_,rj) => setTimeout(() => rj(new Error('timeout')), ms))]);
+  let shown = null;                                   /* آخر بيانات معروضة */
+  const apply = (d, st) => {
+    ITEMS.splice(0, ITEMS.length, ...d);
+    if(st){ Object.assign(SITE, st); $('#bn').textContent = SITE.name; $('#foot').textContent = SITE.footer; }
+    shown = sig([d, st]);
+  };
+  const fromFirebase = async () => {
+    const [qs, cs] = await timeout(Promise.all([getDocs(collection(db,'items')), getDoc(doc(db,'config','site'))]), 8000);
+    if(qs.empty) return null;
+    return { d: qs.docs.map(x => x.data()).sort((a,b) => (a.ord ?? 1e15) - (b.ord ?? 1e15)), st: cs.exists() ? cs.data() : null };
+  };
+  const fromFile = async () => {
+    const r = await timeout(fetch('catalog.json', {cache:'no-store'}), 8000); if(!r.ok) throw 0;
+    const j = await r.json(), d = Array.isArray(j) ? j : j.items; if(!Array.isArray(d)) throw 0;
+    return { d, st: Array.isArray(j) ? null : (j.site || null) };
+  };
+  const save = r => { try{ localStorage.setItem(CK, sig(r)); }catch(e){} };
+  let started = false;
+  const start = r => { if(started || !r) return; started = true; apply(r.d, r.st); addEventListener('hashchange', route); route(); };
+
+  /* 1) عرض فوري من النسخة المخزنة على الجهاز إن وُجدت */
+  try{ const c = JSON.parse(localStorage.getItem(CK) || 'null'); if(c && Array.isArray(c.d)) start(c); }catch(e){}
+
+  /* 2) Firebase وcatalog.json بالتوازي: أول نتيجة صالحة تعرض لو مفيش نسخة مخزنة */
+  const fb = fromFirebase().catch(e => { console.warn('Firestore:', e); return null; });
+  const fl = fromFile().catch(() => null);
+  Promise.any([fb.then(r => r || Promise.reject()), fl.then(r => r || Promise.reject())]).then(start).catch(() => {});
+
+  /* 3) لما يوصل رد Firebase نحدّث الصفحة لو البيانات اتغيّرت */
+  fb.then(r => {
+    if(!r){ fl.then(f => { if(!started){ start(f); } }); return; }
+    save(r);
+    if(!started){ start(r); return; }
+    if(sig([r.d, r.st]) !== shown){
+      apply(r.d, r.st);
+      if(!['detail','search'].includes(document.body.dataset.p)) route();   /* ما نقطعش مشاهدة شغّالة */
+    }
+  });
 })();
 </script>
 </body>
