@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>منصتي للمشاهدة</title>
 <meta name="theme-color" content="#12101c">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <meta name="description" content="شاهد أحدث الأفلام والمسلسلات">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;400;600;700&display=swap" rel="stylesheet">
@@ -265,6 +268,7 @@ function openAuth(mode='in'){
   if(!d.open) d.showModal();
 }
 const contRow = () => rowHtml('تابع المشاهدة', Object.values(U.hist).sort((a,b) => b.at - a.at).map(h => ITEMS.find(i => i.id===h.id)).filter(Boolean).slice(0,12), '', 1);
+const genreRows = () => [...new Set(ITEMS.flatMap(i => i.genres))].map(g => [g, byNew.filter(i => i.genres.includes(g))]).filter(x => x[1].length >= 3).sort((a,b) => b[1].length - a[1].length).slice(0,4).map(([g,l]) => rowHtml(g, l)).join('');
 const heroList = () => { const f = byNew.filter(i => i.featured); return (f.length ? f : byNew).slice(0,6); };
 function mePage(){
   if(!U.user){ app.innerHTML = `<div class="wrap" style="text-align:center;padding:120px 0"><h2>سجّل دخولك</h2><p class="mu" style="margin:10px 0 22px">أنشئ حسابًا لحفظ قائمتك ومتابعة المشاهدة من أي جهاز.</p><div class="hb" style="justify-content:center"><button class="btn" id="lg">تسجيل الدخول</button><button class="btn g2" id="rg">حساب جديد</button></div></div>`;
@@ -347,7 +351,7 @@ function home(){
   if(!ITEMS.length){ app.innerHTML = `<div class="wrap"><p class="empty" style="padding:140px 0;height:auto">لا توجد أعمال بعد.</p></div>`; return; }
   app.innerHTML = heroHtml(heroList()) + `<div class="wrap">${contRow()}${rowHtml('قائمتي', ITEMS.filter(i => isFav(i.id)))}
     ${rowHtml('المضاف حديثًا', byNew.slice(0,12))}${rowHtml('الأعلى تقييمًا', byRate.slice(0,12))}
-    ${rowHtml('الأفلام', byNew.filter(i=>i.type==='movie'), 'movies')}${rowHtml('المسلسلات', byNew.filter(i=>i.type==='series'), 'series')}</div>`;
+    ${rowHtml('الأفلام', byNew.filter(i=>i.type==='movie'), 'movies')}${rowHtml('المسلسلات', byNew.filter(i=>i.type==='series'), 'series')}${genreRows()}</div>`;
   startHero();
 }
 
@@ -456,6 +460,7 @@ $('#bn').textContent = SITE.name; $('#foot').textContent = SITE.footer;
   }
   addEventListener('hashchange', route); route();
 })();
+if('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 </script>
 </body>
 </html>

@@ -160,12 +160,13 @@ const P = {dash:'<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" 
  movies:'<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18M3 7.5h4M3 12h18M3 16.5h4M17 3v18M17 7.5h4M17 16.5h4"/>',
  series:'<rect width="20" height="15" x="2" y="7" rx="2"/><path d="m17 2-5 5-5-5"/>',
  genres:'<path d="M12.6 2.6A2 2 0 0 0 11.2 2H4a2 2 0 0 0-2 2v7.2a2 2 0 0 0 .6 1.4l8.7 8.7a2.4 2.4 0 0 0 3.4 0l6.6-6.6a2.4 2.4 0 0 0 0-3.4z"/><circle cx="7.5" cy="7.5" r=".5"/>',
+ users:'<circle cx="9" cy="7" r="4"/><path d="M2 21v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2M16 3.1a4 4 0 0 1 0 7.8M22 21v-2a4 4 0 0 0-3-3.9"/>',
  settings:'<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
  publish:'<path d="M12 13v8M8 17l4-4 4 4"/><path d="M20 17.6A5 5 0 0 0 18 8h-1.3A8 8 0 1 0 4 16.3"/>',
  security:'<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
  log:'<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>'};
 const ic = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${P[n]}</svg>`;
-const VIEWS = {dash:['الرئيسية','نظرة عامة على المحتوى والنشاط'],movies:['الأفلام','إدارة الأفلام'],series:['المسلسلات','إدارة المسلسلات والحلقات'],genres:['التصنيفات','تنظيم تصنيفات الأعمال'],
+const VIEWS = {dash:['الرئيسية','نظرة عامة على المحتوى والنشاط'],movies:['الأفلام','إدارة الأفلام'],series:['المسلسلات','إدارة المسلسلات والحلقات'],genres:['التصنيفات','تنظيم تصنيفات الأعمال'],users:['المستخدمون','الحسابات المسجّلة وآخر نشاطها'],
   settings:['إعدادات الموقع','الاسم ونص التذييل'],publish:['Firebase والنسخ الاحتياطي','حالة الاتصال والنسخ الاحتياطي'],security:['الحساب والأمان','كلمة المرور والجلسة'],log:['سجل النشاط','آخر العمليات في اللوحة']};
 
 /* ---------- أدوات ---------- */
@@ -267,11 +268,11 @@ const nv = k => `<button class="nv ${view===k?'on':''}" data-v="${k}">${ic(k)}<s
 function render(){
   const s = sess(); if(!s){ showLogin(); return; }
   $('#root').innerHTML = `<div class="shell"><aside class="sb" id="sb"><a class="brand" href="${SITE_URL}" target="_blank" rel="noopener"><span class="mark">▶</span>${esc(SET.name)}</a>
-    <div class="sg">المحتوى</div>${nv('dash')}${nv('movies')}${nv('series')}${nv('genres')}<div class="sg">الموقع</div>${nv('settings')}${nv('publish')}<div class="sg">النظام</div>${nv('security')}${nv('log')}
+    <div class="sg">المحتوى</div>${nv('dash')}${nv('movies')}${nv('series')}${nv('genres')}${nv('users')}<div class="sg">الموقع</div>${nv('settings')}${nv('publish')}<div class="sg">النظام</div>${nv('security')}${nv('log')}
     <div class="me"><div class="av">${esc(s.u[0].toUpperCase())}</div><div style="flex:1;min-width:0"><b style="font-size:.9rem">${esc(s.u)}</b><br><small style="color:var(--muted)">مدير</small></div><button class="ib" data-a="logout">خروج</button></div></aside>
     <div class="main"><div class="tb2"><button class="burger" data-a="menu" aria-label="القائمة">☰</button><div><h1>${VIEWS[view][0]}</h1><small>${VIEWS[view][1]}</small></div>
     <div class="sp"><a class="btn g sm" href="${SITE_URL}" target="_blank" rel="noopener">عرض الموقع</a><button class="btn g sm" data-a="aiimport">✨ استيراد من رابط</button><button class="btn sm" data-a="add">+ عمل جديد</button></div></div>
-    <div class="pg2">${({dash,movies:()=>works('movie'),series:()=>works('series'),genres,settings,publish,security,log})[view]()}</div></div></div>`;
+    <div class="pg2">${({dash,movies:()=>works('movie'),series:()=>works('series'),genres,users,settings,publish,security,log})[view]()}</div></div></div>`;
   after();
 }
 
@@ -302,6 +303,16 @@ function rows(type){
   return l.map(i=>`<tr><td><img class="th" src="${esc(i.poster||art(i.title,100,150))}" alt=""></td><td><b>${esc(i.title)}</b></td><td>${type==='series'?epsOf(i)+' حلقة':i.minutes+' د'}</td><td>${i.year}</td><td class="rate">★ ${i.rating}</td><td>${esc(i.genres.join('، '))}</td>
     <td>${noVideo(i)?'<span class="pill warn">بدون فيديو</span>':'<span class="pill ok">جاهز</span>'}</td><td style="white-space:nowrap"><button class="ib" data-a="edit" data-id="${i.id}">تعديل</button><a class="ib" href="${SITE_URL}#${i.id}" target="_blank" rel="noopener">عرض</a><button class="ib del" data-a="del" data-id="${i.id}">حذف</button></td></tr>`).join('')
     || `<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--muted)">لا توجد أعمال مطابقة.</td></tr>`;
+}
+let ULOAD = 0, UL = [], UERR = '';
+function users(){
+  if(!ULOAD){ ULOAD = 1; getDocs(collection(db,'users')).then(q => { UL = q.docs.map(d => ({id:d.id, ...d.data()})).sort((a,b) => (b.updated||0)-(a.updated||0)); ULOAD = 2; }).catch(e => { UERR = e.code||e.message; ULOAD = 3; }).then(() => { if(view==='users') render(); }); }
+  if(ULOAD===1) return '<p class="note">جارٍ تحميل المستخدمين…</p>';
+  if(ULOAD===3) return `<div class="alert">تعذّر تحميل المستخدمين (${esc(UERR)}). أضف للمدير صلاحية قراءة مجموعة users في قواعد Firestore ثم أعد المحاولة.</div><button class="btn g sm" data-a="ureload">إعادة المحاولة</button>`;
+  const title = id => (ITEMS.find(i => i.id===id)||{}).title || '—';
+  return `<p class="note">${UL.length} مستخدم. يظهر الحساب هنا بعد أن يشاهد صاحبه عملًا أو يضيفه لقائمته.</p><div class="row2" style="margin-bottom:14px"><button class="btn g sm" data-a="ureload">تحديث</button></div>
+    <div class="tw"><table><thead><tr><th>الاسم</th><th>أعمال في قائمته</th><th>آخر مشاهدة</th><th>آخر نشاط</th></tr></thead><tbody>${UL.map(u => { const h = Object.values(u.hist||{}).sort((x,y) => y.at-x.at)[0];
+      return `<tr><td><b>${esc(u.name||u.id.slice(0,6))}</b></td><td>${(u.favs||[]).length}</td><td>${h ? esc(title(h.id)) : '—'}</td><td>${u.updated ? new Date(u.updated).toLocaleString('ar-EG') : '—'}</td></tr>`; }).join('') || '<tr><td colspan="4" style="padding:30px;text-align:center;color:var(--muted)">لا يوجد مستخدمون بعد.</td></tr>'}</tbody></table></div>`;
 }
 function genres(){
   const gc = {}; ITEMS.forEach(i=>i.genres.forEach(g=>gc[g]=(gc[g]||0)+1));
@@ -353,6 +364,7 @@ document.addEventListener('click', async e => {
   else if(a==='import') $('#imp').click();
   else if(a==='upload'){ if(persist()){ setDoc(doc(db,'config','site'), SET).catch(err => toast('فشل رفع الإعدادات: '+(err.code||err.message))); CLOUD_EMPTY = false; logAct('رفع البيانات إلى Firebase',ITEMS.length+' عمل'); toast('جارٍ رفع '+ITEMS.length+' عمل…'); render(); } }
   else if(a==='restore' && confirm('إعادة تحميل البيانات من Firebase؟')){ await syncQ; await load(); logAct('إعادة تحميل من Firebase'); toast('تم التحديث'); render(); }
+  else if(a==='ureload'){ ULOAD = 0; render(); }
   else if(a==='clearlog' && confirm('مسح سجل النشاط؟')){ ls.set('admin_log_v1',[]); render(); }
 });
 $('#imp').onchange = async e => { if(!confirm('الاستيراد سيستبدل كل البيانات الحالية في Firebase. متابعة؟')){ e.target.value = ''; return; } try{ const j = JSON.parse(await e.target.files[0].text()), d = Array.isArray(j) ? j : j.items; if(!Array.isArray(d)) throw 0;
