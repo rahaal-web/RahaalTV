@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Rahaal TV </title>
+<title>منصتي للمشاهدة</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;400;600;700&display=swap" rel="stylesheet">
 <style>
@@ -142,10 +142,8 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
 <footer><div class="wrap" id="foot"></div></footer>
 
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
-import { getFirestore, collection, getDocs, doc, getDoc } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
-import { getAnalytics, isSupported } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-analytics.js";
-const firebaseConfig = {
+/* Firebase بيتحمّل في الخلفية (dynamic import) عشان الصفحة ما تستناهوش */
+const FBV = "https://www.gstatic.com/firebasejs/11.0.2/", firebaseConfig = {
   apiKey: "AIzaSyCkaiWGZZ06-FswbvNH8N1ysgkiIjeknVQ",
   authDomain: "rahaltv.firebaseapp.com",
   projectId: "rahaltv",
@@ -154,8 +152,10 @@ const firebaseConfig = {
   appId: "1:258640370330:web:9abe6611f8d3fe9f1add23",
   measurementId: "G-G12VFC2D32"
 };
-const fbApp = initializeApp(firebaseConfig), db = getFirestore(fbApp);
-isSupported().then(ok => { if(ok) getAnalytics(fbApp); }).catch(()=>{});
+let _fb = null;
+const fbLoad = () => _fb || (_fb = Promise.all([import(FBV+'firebase-app.js'), import(FBV+'firebase-firestore.js')]).then(([a,f]) => {
+  const app = a.initializeApp(firebaseConfig);
+  return { app, f, db: f.initializeFirestore(app, { experimentalAutoDetectLongPolling: true }) }; }));
 /* ============ إعدادات الموقع: عدّل هنا فقط ============ */
 const SITE = { name: "منصتي للمشاهدة", footer: "جميع الحقوق محفوظة. المحتوى معروض بترخيص من أصحابه." };
 
@@ -329,7 +329,9 @@ $('#bn').textContent = SITE.name; $('#foot').textContent = SITE.footer;
     shown = sig([d, st]);
   };
   const fromFirebase = async () => {
-    const [qs, cs] = await timeout(Promise.all([getDocs(collection(db,'items')), getDoc(doc(db,'config','site'))]), 8000);
+    const r = await timeout((async () => { const {f, db} = await fbLoad();
+      return Promise.all([f.getDocs(f.collection(db,'items')), f.getDoc(f.doc(db,'config','site'))]); })(), 20000);
+    const [qs, cs] = r;
     if(qs.empty) return null;
     return { d: qs.docs.map(x => x.data()).sort((a,b) => (a.ord ?? 1e15) - (b.ord ?? 1e15)), st: cs.exists() ? cs.data() : null };
   };
@@ -340,7 +342,8 @@ $('#bn').textContent = SITE.name; $('#foot').textContent = SITE.footer;
   };
   const save = r => { try{ localStorage.setItem(CK, sig(r)); }catch(e){} };
   let started = false;
-  const start = r => { if(started || !r) return; started = true; apply(r.d, r.st); addEventListener('hashchange', route); route(); };
+  const start = r => { if(started || !r) return; started = true; apply(r.d, r.st); addEventListener('hashchange', route); route();
+    fbLoad().then(({app}) => import(FBV+'firebase-analytics.js').then(m => m.isSupported().then(ok => { if(ok) m.getAnalytics(app); }))).catch(()=>{}); };
 
   /* 1) عرض فوري من النسخة المخزنة على الجهاز إن وُجدت */
   try{ const c = JSON.parse(localStorage.getItem(CK) || 'null'); if(c && Array.isArray(c.d)) start(c); }catch(e){}
