@@ -397,9 +397,20 @@ function openImport(){
       const d = await r.json(); if(!r.ok) throw new Error(d.error || ('خطأ '+r.status));
       let poster = '';
       if(d.poster){ try{ poster = await shrink(await (await fetch(d.poster)).blob()); }catch(_){} }
+      // اختيار رابط الفيديو المستخرج من الـ Worker، مع الحفاظ على أولوية الرابط اليدوي.
+      const serverList = Array.isArray(d.servers) ? d.servers : [];
+      const extractedVideo =
+        vid ||
+        d.video_url ||
+        d.video ||
+        serverList.find(s => s && typeof s === 'object' && s.url && s.type === 'video')?.url ||
+        serverList.find(s => typeof s === 'string' && s.trim()) ||
+        serverList.find(s => s && typeof s === 'object' && s.url)?.url ||
+        '';
+
       dg.close();
       openForm(null, d.type, {type:d.type, title:d.title||'', year:d.year||2026, rating:d.rating||7, minutes:d.minutes||100, country:d.country||'',
-        genres:d.genres||[], cast:d.cast||[], summary:d.summary||'', poster, video: vid});
+        genres:d.genres||[], cast:d.cast||[], summary:d.summary||'', poster, video: extractedVideo});
       logAct('استيراد من رابط', d.title||url); toast('راجع البيانات ثم اضغط حفظ');
     }catch(err){ er.textContent = 'فشل الاستخراج: '+(err.message||err); btn.disabled = false; btn.textContent = 'استخراج البيانات'; }
   };
