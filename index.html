@@ -168,8 +168,8 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
 @keyframes sh{to{background-position:-200% 0}}
 .bn{display:none}
 @media(max-width:760px){.ubtn{margin-inline-start:auto}#nav{display:none}.hb .btn{padding:10px 20px}
-.bn{display:flex;position:fixed;inset-inline:0;bottom:0;z-index:40;background:rgba(18,16,28,.96);backdrop-filter:blur(12px);border-top:1px solid var(--line);padding:6px 6px calc(6px + env(safe-area-inset-bottom,0px))}
-.bn a{flex:1;display:grid;justify-items:center;font-size:.72rem;color:var(--muted);padding:2px}.bn a b{font-size:1.25rem;line-height:1.3;font-weight:400}.bn a.on{color:var(--accent)}
+.bn{display:flex;overflow-x:auto;scrollbar-width:none;position:fixed;inset-inline:0;bottom:0;z-index:40;background:rgba(18,16,28,.96);backdrop-filter:blur(12px);border-top:1px solid var(--line);padding:6px 6px calc(6px + env(safe-area-inset-bottom,0px))}
+.bn a{flex:1 0 72px;display:grid;justify-items:center;font-size:.72rem;color:var(--muted);padding:2px}.bn a b{font-size:1.25rem;line-height:1.3;font-weight:400}.bn a.on{color:var(--accent)}
 body{padding-bottom:calc(72px + env(safe-area-inset-bottom,0px))}.scroller{grid-auto-columns:140px}.grid{grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:14px}.nx{width:36px;height:36px}}
 </style>
 </head>
@@ -224,7 +224,7 @@ const $ = s => document.querySelector(s), app = $('#app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const hue = t => [...t].reduce((a,c)=>a+c.charCodeAt(0),0) % 360;
 const U = {user:null, favs:[], hist:{}}; let FB = null, svT;
-const stamp = i => i.addedAt || Date.parse(i.added||'') || 0, isNew = i => Date.now() - stamp(i) < 7*864e5;
+const stamp = i => i.addedAt || (i.ord > 1e12 ? i.ord : 0) || Date.parse(i.added||'') || 0, isNew = i => Date.now() - stamp(i) < 7*864e5;
 const isFav = id => U.favs.includes(id), LK = () => 'rt_data_' + (U.user ? U.user.uid : 'guest');
 const AE = {'auth/invalid-credential':'البريد أو كلمة المرور غير صحيحة.','auth/wrong-password':'البريد أو كلمة المرور غير صحيحة.','auth/user-not-found':'البريد أو كلمة المرور غير صحيحة.','auth/email-already-in-use':'هذا البريد مسجّل بالفعل.','auth/weak-password':'كلمة المرور ضعيفة (6 أحرف على الأقل).','auth/invalid-email':'البريد الإلكتروني غير صالح.','auth/network-request-failed':'تعذّر الاتصال بالإنترنت.','auth/too-many-requests':'محاولات كثيرة، حاول لاحقًا.'};
 const mergeH = (a, b) => { Object.entries(b||{}).forEach(([k,v]) => { if(!a[k] || a[k].at < v.at) a[k] = v; }); };
@@ -268,6 +268,11 @@ function openAuth(mode='in'){
   if(!d.open) d.showModal();
 }
 const contRow = () => rowHtml('تابع المشاهدة', Object.values(U.hist).sort((a,b) => b.at - a.at).map(h => ITEMS.find(i => i.id===h.id)).filter(Boolean).slice(0,12), '', 1);
+const DEFMENU = [{t:'الرئيسية',u:'#home'},{t:'الأفلام',u:'#movies'},{t:'المسلسلات',u:'#series'}];
+const ico = u => u==='#home' ? '⌂' : u==='#movies' ? '🎞' : u==='#series' ? '📺' : u.startsWith('#genre:') ? '🏷' : '●';
+function buildNav(){ const m = (SITE.menu && SITE.menu.length) ? SITE.menu : DEFMENU, ex = u => /^https?:/i.test(u) ? ' target="_blank" rel="noopener"' : '';
+  $('#nav').innerHTML = m.map(x => `<a href="${esc(x.u)}" data-p="${esc(x.u.replace('#',''))}"${ex(x.u)}>${esc(x.t)}</a>`).join('');
+  $('.bn').innerHTML = m.map(x => `<a href="${esc(x.u)}" data-p="${esc(x.u.replace('#',''))}"${ex(x.u)}><b>${ico(x.u)}</b>${esc(x.t)}</a>`).join('') + '<a href="#me" data-p="me"><b>☺</b>حسابي</a>'; }
 const genreRows = () => [...new Set(ITEMS.flatMap(i => i.genres))].map(g => [g, byNew.filter(i => i.genres.includes(g))]).filter(x => x[1].length >= 3).sort((a,b) => b[1].length - a[1].length).slice(0,4).map(([g,l]) => rowHtml(g, l)).join('');
 const heroList = () => { const f = byNew.filter(i => i.featured); return (f.length ? f : byNew).slice(0,6); };
 function mePage(){
@@ -414,14 +419,15 @@ const sync = () => $('header').classList.toggle('top', scrollY < 30 && document.
 
 
 function route(){
-  clearInterval(timer); rebuild();
-  const h = (location.hash||'#home').slice(1), item = ITEMS.find(i=>i.id===h);
-  document.body.dataset.p = item ? 'detail' : (['movies','series','me'].includes(h) ? h : 'home');
+  clearInterval(timer); rebuild(); buildNav();
+  const h = (location.hash||'#home').slice(1), item = ITEMS.find(i=>i.id===h); let hd = h; try{ hd = decodeURIComponent(h); }catch(e){} const gname = hd.startsWith('genre:') ? hd.slice(6) : '';
+  document.body.dataset.p = item ? 'detail' : gname ? 'genre' : (['movies','series','me'].includes(h) ? h : 'home');
   document.title = SITE.name; $('#q').value = '';
-  document.querySelectorAll('#nav a,.bn a').forEach(a=>a.classList.toggle('on',a.dataset.p===h));
+  document.querySelectorAll('#nav a,.bn a').forEach(a=>a.classList.toggle('on',a.dataset.p===hd));
   if(item) detail(item);
   else if(h==='movies') listing('الأفلام', byNew.filter(i=>i.type==='movie'), true);
   else if(h==='series') listing('المسلسلات', byNew.filter(i=>i.type==='series'), true);
+  else if(gname) listing(gname, byNew.filter(i=>i.genres.includes(gname)), false);
   else if(h==='me') mePage();
   else home();
   app.classList.remove('pg'); void app.offsetWidth; app.classList.add('pg');
