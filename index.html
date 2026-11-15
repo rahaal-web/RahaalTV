@@ -141,7 +141,21 @@ body{padding-bottom:env(safe-area-inset-bottom,0px)}
 <main id="app"></main>
 <footer><div class="wrap" id="foot"></div></footer>
 
-<script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
+import { getFirestore, collection, getDocs, doc, getDoc } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
+import { getAnalytics, isSupported } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-analytics.js";
+const firebaseConfig = {
+  apiKey: "AIzaSyCkaiWGZZ06-FswbvNH8N1ysgkiIjeknVQ",
+  authDomain: "rahaltv.firebaseapp.com",
+  projectId: "rahaltv",
+  storageBucket: "rahaltv.firebasestorage.app",
+  messagingSenderId: "258640370330",
+  appId: "1:258640370330:web:9abe6611f8d3fe9f1add23",
+  measurementId: "G-G12VFC2D32"
+};
+const fbApp = initializeApp(firebaseConfig), db = getFirestore(fbApp);
+isSupported().then(ok => { if(ok) getAnalytics(fbApp); }).catch(()=>{});
 /* ============ إعدادات الموقع: عدّل هنا فقط ============ */
 const SITE = { name: "منصتي للمشاهدة", footer: "جميع الحقوق محفوظة. المحتوى معروض بترخيص من أصحابه." };
 
@@ -306,10 +320,16 @@ $('#sf').onsubmit = e => { e.preventDefault(); const q = $('#q').value.trim(); i
 addEventListener('scroll', sync, {passive:true});
 $('#bn').textContent = SITE.name; $('#foot').textContent = SITE.footer;
 (async () => {
-  let d = null;
-  try{ d = JSON.parse(localStorage.getItem('catalog_v1') || 'null'); }catch(e){}
-  if(!Array.isArray(d)){ try{ const r = await fetch('catalog.json', {cache:'no-store'}); if(r.ok) d = await r.json(); }catch(e){} }
+  let d = null, st = null;
+  try{
+    const [qs, cs] = await Promise.all([getDocs(collection(db,'items')), getDoc(doc(db,'config','site'))]);
+    if(!qs.empty) d = qs.docs.map(x => x.data()).sort((a,b) => (a.ord ?? 1e15) - (b.ord ?? 1e15));
+    if(cs.exists()) st = cs.data();
+  }catch(e){ console.warn('Firestore:', e); }
+  /* احتياطي: لو قاعدة البيانات فارغة أو فيه مشكلة اتصال نقرأ catalog.json */
+  if(!Array.isArray(d)){ try{ const r = await fetch('catalog.json', {cache:'no-store'}); if(r.ok){ const j = await r.json(); d = Array.isArray(j) ? j : j.items; if(!st && j.site) st = j.site; } }catch(e){} }
   if(Array.isArray(d)) ITEMS.splice(0, ITEMS.length, ...d);
+  if(st){ Object.assign(SITE, st); $('#bn').textContent = SITE.name; $('#foot').textContent = SITE.footer; }
   addEventListener('hashchange', route); route();
 })();
 </script>
