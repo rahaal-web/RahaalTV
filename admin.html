@@ -193,6 +193,17 @@ const noVideo = i => i.type==='movie' ? !i.video : !(i.seasons||[]).some(s=>s.ep
 const epsOf = i => (i.seasons||[]).reduce((n,s)=>n+s.episodes.length,0);
 const shrink = file => new Promise(res => { const im = new Image(); im.onload = () => { const w=300,h=450,c=document.createElement('canvas'); c.width=w; c.height=h;
   const x=c.getContext('2d'), r=Math.max(w/im.width,h/im.height); x.drawImage(im,(w-im.width*r)/2,(h-im.height*r)/2,im.width*r,im.height*r); res(c.toDataURL('image/webp',.82)); }; im.src = URL.createObjectURL(file); });
+const serversToText = ss => (ss||[]).map(x => (x.name ? x.name+' | ' : '')+x.url).join('\n');
+const textToServers = t => { const out=[], seen=new Set();
+  String(t||'').split(/\n+/).forEach((line,i) => { line=line.trim(); if(!line) return;
+    let name='', url='';
+    const m = line.match(/<iframe[^>]*?\ssrc\s*=\s*["']([^"']+)["']/i);
+    if(m){ url = m[1]; }
+    else { const k = line.lastIndexOf('|'); if(k>-1){ name = line.slice(0,k).trim(); url = line.slice(k+1).trim(); } else url = line; }
+    if(url.startsWith('//')) url = 'https:'+url;
+    if(!/^https?:\/\//i.test(url) || seen.has(url)) return;
+    seen.add(url); out.push({name: name || 'سيرفر '+(out.length+1), url}); });
+  return out; };
 const seasonsToText = ss => (ss||[]).map(s => '# '+s.name+'\n'+s.episodes.map(e => e.t+' | '+(e.video||'')).join('\n')).join('\n');
 const textToSeasons = t => { const out=[]; let cur=null;
   t.split('\n').map(l=>l.trim()).filter(Boolean).forEach(l => {
@@ -345,7 +356,7 @@ document.addEventListener('click', async e => {
 $('#imp').onchange = async e => { if(!confirm('الاستيراد سيستبدل كل البيانات الحالية في Firebase. متابعة؟')){ e.target.value = ''; return; } try{ const j = JSON.parse(await e.target.files[0].text()), d = Array.isArray(j) ? j : j.items; if(!Array.isArray(d)) throw 0;
   ITEMS.splice(0,ITEMS.length,...d); if(j.site){ SET = Object.assign(SET,j.site); setDoc(doc(db,'config','site'), SET); } persist(); logAct('استيراد ملف',d.length+' عمل'); toast('تم الاستيراد'); render(); }catch(_){ toast('الملف غير صالح'); } e.target.value = ''; };
 function openForm(id,pt,pre){
-  const it = ITEMS.find(x=>x.id===id) || Object.assign({type:pt||'movie',genres:[],cast:[],year:2026,rating:7,minutes:100,country:'',summary:'',video:'',poster:'',cover:'',seasons:[{name:'الموسم 1',episodes:[]}]}, pre||{});
+  const it = ITEMS.find(x=>x.id===id) || Object.assign({type:pt||'movie',genres:[],cast:[],year:2026,rating:7,minutes:100,country:'',summary:'',video:'',servers:[],poster:'',cover:'',seasons:[{name:'الموسم 1',episodes:[]}]}, pre||{});
   let pdata = it.poster || ''; const dg = $('#dg');
   dg.innerHTML = `<form id="fm"><h2>${id?'تعديل عمل':'إضافة عمل جديد'}</h2><div class="fg">
     <label class="f">النوع<select name="type"><option value="movie" ${it.type==='movie'?'selected':''}>فيلم</option><option value="series" ${it.type==='series'?'selected':''}>مسلسل</option></select></label>
@@ -361,17 +372,19 @@ function openForm(id,pt,pre){
       <input type="file" id="pf" accept="image/*"><input name="purl" placeholder="أو الصق رابط صورة" value="${pdata.startsWith('data:')?'':esc(pdata)}"></div></div></div>
     <label class="f w">صورة الغلاف العريضة (اختياري، رابط)<input name="cover" value="${esc(it.cover||'')}"></label>
     <label class="f w" id="fv">رابط الفيديو (ملف mp4 / m3u8 أو رابط embed)<input name="video" value="${esc(it.video||'')}"></label>
+    <label class="f w" id="fsv">أكواد سيرفرات المشاهدة<textarea name="servers" dir="ltr" style="min-height:120px" placeholder="سيرفر 1 | https://...&#10;أو الصق كود iframe كامل في سطر">${esc(serversToText(it.servers))}</textarea>
+      <small>سطر لكل سيرفر بالشكل: الاسم | الرابط — أو الصق كود &lt;iframe&gt; وهيتم سحب الرابط منه. أول سيرفر هو الأساسي لو خانة الفيديو فاضية.</small></label>
     <label class="f w" id="fs">المواسم والحلقات<textarea name="seasons" style="min-height:150px" placeholder="# الموسم 1&#10;الحلقة 1 | https://...">${esc(seasonsToText(it.seasons))}</textarea>
       <small>سطر لكل حلقة بالشكل: اسم الحلقة | رابط الفيديو. ابدأ كل موسم بسطر يبدأ بعلامة #</small></label></div>
     <div class="acts"><button type="button" class="btn g sm" data-a="close">إلغاء</button><button class="btn sm">حفظ</button></div></form>`;
-  const fm = $('#fm'), sync2 = () => { const m = fm.elements.type.value==='movie'; $('#fv').classList.toggle('hid',!m); $('#fs').classList.toggle('hid',m); };
+  const fm = $('#fm'), sync2 = () => { const m = fm.elements.type.value==='movie'; $('#fv').classList.toggle('hid',!m); $('#fsv').classList.toggle('hid',!m); $('#fs').classList.toggle('hid',m); };
   fm.elements.type.onchange = sync2; sync2();
   $('#pf').onchange = async e => { if(e.target.files[0]){ pdata = await shrink(e.target.files[0]); $('#pp').src = pdata; fm.elements.purl.value = ''; } };
   fm.elements.purl.oninput = e => { pdata = e.target.value.trim(); if(pdata) $('#pp').src = pdata; };
   fm.onsubmit = e => { e.preventDefault(); const g = n => fm.elements[n].value.trim(), list = n => g(n).split(/[,،]/).map(x=>x.trim()).filter(Boolean), type = g('type');
     const o = { id: it.id || type[0]+Date.now().toString(36), type, title:g('title'), year:+g('year')||2026, rating:+g('rating')||0, minutes:+g('minutes')||0, country:g('country'),
       genres: list('genres').length ? list('genres') : ['أخرى'], cast:list('cast'), summary:g('summary'), poster:pdata, cover:g('cover'), added: it.added || new Date().toISOString().slice(0,10), ord: it.ord };
-    if(type==='movie') o.video = g('video'); else o.seasons = textToSeasons(fm.elements.seasons.value);
+    if(type==='movie'){ o.servers = textToServers(fm.elements.servers.value); o.video = g('video') || (o.servers[0]?o.servers[0].url:''); } else o.seasons = textToSeasons(fm.elements.seasons.value);
     const k = ITEMS.findIndex(x=>x.id===o.id); if(k<0) ITEMS.push(o); else ITEMS[k] = o;
     if(persist()){ dg.close(); toast(id?'تم حفظ التعديل':'تمت إضافة العمل'); logAct(id?'تعديل عمل':'إضافة عمل',o.title); render(); } };
   dg.showModal();
@@ -399,7 +412,7 @@ function openImport(){
       if(d.poster){ try{ poster = await shrink(await (await fetch(d.poster)).blob()); }catch(_){} }
       dg.close();
       openForm(null, d.type, {type:d.type, title:d.title||'', year:d.year||2026, rating:d.rating||7, minutes:d.minutes||100, country:d.country||'',
-        genres:d.genres||[], cast:d.cast||[], summary:d.summary||'', poster, video: vid});
+        genres:d.genres||[], cast:d.cast||[], summary:d.summary||'', poster, video: vid || d.video_url || (d.servers&&d.servers[0]?d.servers[0].url:''), servers: d.servers||[]});
       logAct('استيراد من رابط', d.title||url); toast('راجع البيانات ثم اضغط حفظ');
     }catch(err){ er.textContent = 'فشل الاستخراج: '+(err.message||err); btn.disabled = false; btn.textContent = 'استخراج البيانات'; }
   };
