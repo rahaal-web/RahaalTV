@@ -209,7 +209,7 @@ function render(){
     <div class="sg">المحتوى</div>${nv('dash')}${nv('movies')}${nv('series')}${nv('genres')}<div class="sg">الموقع</div>${nv('settings')}${nv('publish')}<div class="sg">النظام</div>${nv('security')}${nv('log')}
     <div class="me"><div class="av">${esc(s.u[0].toUpperCase())}</div><div style="flex:1;min-width:0"><b style="font-size:.9rem">${esc(s.u)}</b><br><small style="color:var(--muted)">مدير</small></div><button class="ib" data-a="logout">خروج</button></div></aside>
     <div class="main"><div class="tb2"><button class="burger" data-a="menu" aria-label="القائمة">☰</button><div><h1>${VIEWS[view][0]}</h1><small>${VIEWS[view][1]}</small></div>
-    <div class="sp"><a class="btn g sm" href="${SITE_URL}" target="_blank" rel="noopener">عرض الموقع</a><button class="btn sm" data-a="add">+ عمل جديد</button></div></div>
+    <div class="sp"><a class="btn g sm" href="${SITE_URL}" target="_blank" rel="noopener">عرض الموقع</a><button class="btn g sm" data-a="qfilm">استيراد من Qfilm</button><button class="btn sm" data-a="add">+ عمل جديد</button></div></div>
     <div class="pg2">${({dash,movies:()=>works('movie'),series:()=>works('series'),genres,settings,publish,security,log})[view]()}</div></div></div>`;
   after();
 }
@@ -279,7 +279,7 @@ function after(){
 document.addEventListener('click', async e => {
   const v = e.target.closest('[data-v]'); if(v){ view = v.dataset.v; F = {q:'',g:'',s:'new',m:''}; render(); scrollTo(0,0); return; }
   const b = e.target.closest('[data-a]'); if(!b) return; const a = b.dataset.a, id = b.dataset.id;
-  if(a==='add') openForm(null, view==='series'?'series':'movie'); else if(a==='edit') openForm(id); else if(a==='close') $('#dg').close();
+  if(a==='add') openForm(null, view==='series'?'series':'movie'); else if(a==='edit') openForm(id); else if(a==='qfilm') openQfilmImport(); else if(a==='close') $('#dg').close();
   else if(a==='menu') $('#sb').classList.toggle('open');
   else if(a==='logout'){ logAct('تسجيل خروج'); endSess(); showLogin(); }
   else if(a==='del'){ const it = ITEMS.find(x=>x.id===id); if(it && confirm('حذف «'+it.title+'» نهائيًا؟')){ ITEMS.splice(ITEMS.indexOf(it),1); if(persist()){ logAct('حذف عمل',it.title); toast('تم الحذف'); render(); } } }
@@ -293,8 +293,59 @@ document.addEventListener('click', async e => {
 });
 $('#imp').onchange = async e => { try{ const j = JSON.parse(await e.target.files[0].text()), d = Array.isArray(j) ? j : j.items; if(!Array.isArray(d)) throw 0;
   ITEMS.splice(0,ITEMS.length,...d); if(j.site){ SET = Object.assign(SET,j.site); ls.set('site_settings_v1',SET); } persist(); logAct('استيراد ملف',d.length+' عمل'); toast('تم الاستيراد'); render(); }catch(_){ toast('الملف غير صالح'); } e.target.value = ''; };
-function openForm(id,pt){
-  const it = ITEMS.find(x=>x.id===id) || {type:pt||'movie',genres:[],cast:[],year:2026,rating:7,minutes:100,country:'',summary:'',video:'',poster:'',cover:'',seasons:[{name:'الموسم 1',episodes:[]}]};
+
+/* ---------- الاستيراد من Qfilm عبر Cloudflare Worker ---------- */
+const QFILM_WORKER = 'https://rahaltv-import.rahal712.workers.dev/';
+function openQfilmImport(){
+  const dg = $('#dg');
+  dg.innerHTML = `<form id="qf"><h2>استيراد فيلم من Qfilm</h2>
+    <p style="color:var(--muted);margin-bottom:14px">الصق رابط صفحة الفيلم من Qfilm، وسيتم جلب بياناته وروابط المشاهدة تلقائيًا.</p>
+    <label class="f w">رابط صفحة الفيلم<input name="url" type="url" required dir="ltr" placeholder="https://movie.qfilm.tv/watch.php?vid=..." style="text-align:left"></label>
+    <div id="qfmsg" class="err" style="margin-top:10px"></div>
+    <div class="acts"><button type="button" class="btn g sm" data-a="close">إلغاء</button><button class="btn sm" id="qfsubmit">جلب البيانات</button></div></form>`;
+  dg.showModal();
+  const form = $('#qf');
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const url = form.elements.url.value.trim(), btn = $('#qfsubmit'), msg = $('#qfmsg');
+    btn.disabled = true; btn.textContent = 'جاري جلب البيانات...'; msg.textContent = '';
+    try{
+      const response = await fetch(QFILM_WORKER,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({url})
+      });
+      const raw = await response.text();
+      let data;
+      try{ data = JSON.parse(raw); }catch(_){ throw new Error('استجابة غير مفهومة من خدمة الاستيراد.'); }
+      if(!response.ok) throw new Error(data.error || data.message || ('فشل الاتصال ('+response.status+').'));
+      if(data.error) throw new Error(data.error);
+      if(data.data && typeof data.data==='object') data = data.data;
+      const servers = Array.isArray(data.servers) ? data.servers : [];
+      const video = (servers.find(x=>x && x.type==='embed' && x.url)?.url)
+        || data.video_url || data.video || data.embed_url
+        || (servers.find(x=>x && x.url && /embed/i.test(x.url))||{}).url
+        || (servers.find(x=>x && x.url)||{}).url || '';
+      if(!data.title && !video && !data.poster) throw new Error('لم يتم العثور على بيانات للفيلم. تأكد من رابط صفحة Qfilm.');
+      const imported = {
+        type:'movie', title:data.title||'', year:+data.year||new Date().getFullYear(),
+        rating:+data.rating||0, minutes:+data.minutes||0, country:data.country||'',
+        genres:Array.isArray(data.genres)?data.genres:[], cast:Array.isArray(data.cast)?data.cast:[],
+        summary:data.summary||'', poster:data.poster||'', cover:'', video
+      };
+      dg.close();
+      openForm(null,'movie',imported);
+      if(!video) toast('تم جلب البيانات، لكن لم يتم العثور على رابط مشغل.');
+    }catch(err){
+      msg.textContent = err.message || 'حدث خطأ أثناء الاستيراد.';
+    }finally{
+      btn.disabled = false; btn.textContent = 'جلب البيانات';
+    }
+  };
+}
+function openForm(id,pt,importedData){
+  const base = ITEMS.find(x=>x.id===id) || {type:pt||'movie',genres:[],cast:[],year:2026,rating:7,minutes:100,country:'',summary:'',video:'',poster:'',cover:'',seasons:[{name:'الموسم 1',episodes:[]}]};
+  const it = importedData ? {...base,...importedData,genres:Array.isArray(importedData.genres)?importedData.genres:[],cast:Array.isArray(importedData.cast)?importedData.cast:[]} : base;
   let pdata = it.poster || ''; const dg = $('#dg');
   dg.innerHTML = `<form id="fm"><h2>${id?'تعديل عمل':'إضافة عمل جديد'}</h2><div class="fg">
     <label class="f">النوع<select name="type"><option value="movie" ${it.type==='movie'?'selected':''}>فيلم</option><option value="series" ${it.type==='series'?'selected':''}>مسلسل</option></select></label>
@@ -309,7 +360,7 @@ function openForm(id,pt){
     <div class="f w"><span>البوستر</span><div class="pp"><img id="pp" src="${esc(pdata||art(it.title||'عمل',100,150))}" alt=""><div style="flex:1;display:grid;gap:8px">
       <input type="file" id="pf" accept="image/*"><input name="purl" placeholder="أو الصق رابط صورة" value="${pdata.startsWith('data:')?'':esc(pdata)}"></div></div></div>
     <label class="f w">صورة الغلاف العريضة (اختياري، رابط)<input name="cover" value="${esc(it.cover||'')}"></label>
-    <label class="f w" id="fv">رابط الفيديو (ملف mp4 / m3u8 أو رابط embed)<input name="video" value="${esc(it.video||'')}"></label>
+    <label class="f w" id="fv">رابط الفيديو (ملف mp4 / m3u8 أو رابط embed)<input name="video" dir="ltr" style="text-align:left" value="${esc(it.video||'')}"><small>روابط Embed هي صفحات مشغل، وليست ملفات MP4 مباشرة.</small></label>
     <label class="f w" id="fs">المواسم والحلقات<textarea name="seasons" style="min-height:150px" placeholder="# الموسم 1&#10;الحلقة 1 | https://...">${esc(seasonsToText(it.seasons))}</textarea>
       <small>سطر لكل حلقة بالشكل: اسم الحلقة | رابط الفيديو. ابدأ كل موسم بسطر يبدأ بعلامة #</small></label></div>
     <div class="acts"><button type="button" class="btn g sm" data-a="close">إلغاء</button><button class="btn sm">حفظ</button></div></form>`;
