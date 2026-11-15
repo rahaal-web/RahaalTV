@@ -246,7 +246,7 @@ async function loadCloud(){
   CLOUD_BUSY = false;
 }
 async function load(){ await loadLocal(); await loadCloud(); }
-async function showApp(){ $('#root').innerHTML = '<p style="padding:40px;text-align:center;color:#a49fc4">جارٍ التحميل…</p>'; await loadLocal(); render(); loadCloud().then(() => { if(sess() && !$('#dg').open) render(); }); }
+async function showApp(){ $('#root').innerHTML = '<p style="padding:40px;text-align:center;color:#a49fc4">جارٍ التحميل…</p>'; const cloud = loadCloud(); await loadLocal(); render(); cloud.then(() => { if(sess() && !$('#dg').open) render(); }); }
 
 /* ---------- الهيكل ---------- */
 const nv = k => `<button class="nv ${view===k?'on':''}" data-v="${k}">${ic(k)}<span>${VIEWS[k][0]}</span>${k==='publish'&&CLOUD_EMPTY?'<i class="dot2" title="البيانات غير مرفوعة"></i>':''}</button>`;
