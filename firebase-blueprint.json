@@ -158,6 +158,7 @@
         "maintenanceMode": { "type": "boolean" },
         "maintenanceMessage": { "type": "string", "maxLength": 500 },
         "playerTheme": { "type": "object", "description": "Customizable internal video player theme configuration" },
+        "homeConfig": { "type": "object", "description": "Customizable homepage layout, hero, and ordered sections configuration" },
         "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
         "updatedAt": { "type": "string", "format": "date-time" }
       },

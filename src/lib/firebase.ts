@@ -39,6 +39,7 @@ import {
   isDedicatedAppShortUrl,
 } from './permalink';
 import { DEFAULT_PLAYER_THEME, saveStoredPlayerTheme } from './playerTheme';
+import { DEFAULT_HOME_CONFIG, saveStoredHomeConfig } from './homeConfig';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -593,23 +594,45 @@ export async function saveWatchlistToFirestore(uid: string, watchlistIds: string
   }
 }
 
-export async function saveSiteSettingsToFirestore(settings: SiteSettings, uid: string) {
+export async function saveSiteSettingsToFirestore(
+  settings: SiteSettings,
+  uid: string
+): Promise<{ syncedHomeToCloud: boolean }> {
   const path = 'settings/general';
   const normalizedTheme = saveStoredPlayerTheme(settings.playerTheme || DEFAULT_PLAYER_THEME);
+  const normalizedHome = saveStoredHomeConfig(settings.homeConfig || DEFAULT_HOME_CONFIG);
+  const corePayload = {
+    siteName: settings.siteName.trim().slice(0, 80) || 'RahaL TV',
+    tagline: settings.tagline.trim().slice(0, 300) || 'منصة RahaL TV الترفيهية',
+    announcementText: settings.announcementText.trim().slice(0, 300),
+    tickerEnabled: Boolean(settings.tickerEnabled),
+    featuredLimit: Math.min(20, Math.max(1, Number(settings.featuredLimit) || 5)),
+    maintenanceMode: Boolean(settings.maintenanceMode),
+    maintenanceMessage: (settings.maintenanceMessage || '').trim().slice(0, 500),
+    playerTheme: normalizedTheme,
+    updatedBy: uid,
+    updatedAt: serverTimestamp(),
+  };
+
   try {
     await setDoc(doc(db, 'settings', 'general'), {
-      siteName: settings.siteName.trim().slice(0, 80) || 'RahaL TV',
-      tagline: settings.tagline.trim().slice(0, 300) || 'منصة RahaL TV الترفيهية',
-      announcementText: settings.announcementText.trim().slice(0, 300),
-      tickerEnabled: Boolean(settings.tickerEnabled),
-      featuredLimit: Math.min(20, Math.max(1, Number(settings.featuredLimit) || 5)),
-      maintenanceMode: Boolean(settings.maintenanceMode),
-      maintenanceMessage: (settings.maintenanceMessage || '').trim().slice(0, 500),
-      playerTheme: normalizedTheme,
-      updatedBy: uid,
-      updatedAt: serverTimestamp(),
+      ...corePayload,
+      homeConfig: normalizedHome,
     });
+    return { syncedHomeToCloud: true };
   } catch (error) {
+    const code =
+      typeof error === 'object' && error !== null && 'code' in error
+        ? String((error as { code?: unknown }).code || '')
+        : '';
+    if (code === 'permission-denied') {
+      try {
+        await setDoc(doc(db, 'settings', 'general'), corePayload);
+        return { syncedHomeToCloud: false };
+      } catch (innerErr) {
+        handleFirestoreError(innerErr, OperationType.WRITE, path);
+      }
+    }
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }

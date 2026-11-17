@@ -1506,7 +1506,7 @@ export function FooterInfoModal({
               {topic === 'terms' && 'سياسة الاستخدام'}
               {topic === 'privacy' && 'سياسة الخصوصية'}
               {topic === 'community' && 'مجتمع RahaL TV'}
-              {topic === 'requests' && 'طلبات الزوار — اطلب فيلمك أو مسلسلك'}
+              {topic === 'requests' && 'اتصل بنا وطلبات الزوار — اطلب فيلمك أو مسلسلك'}
             </h2>
           </div>
           <button

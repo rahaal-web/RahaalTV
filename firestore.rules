@@ -166,12 +166,44 @@ service cloud.firestore {
         && theme.showBrandBadge is bool;
     }
 
+    function isValidHomeConfig(cfg) {
+      return cfg is map
+        && cfg.keys().hasAll([
+          'showHero', 'heroMode', 'heroMediaId', 'heroBadgeText', 'heroHeadline',
+          'heroDescription', 'heroPrimaryCta', 'heroShowHighlights',
+          'showQuickFilters', 'showCategoryBar', 'showFullLibrary',
+          'showRequestBanner', 'cardsPerRow', 'cardStyle', 'sections'
+        ])
+        && cfg.keys().hasOnly([
+          'showHero', 'heroMode', 'heroMediaId', 'heroBadgeText', 'heroHeadline',
+          'heroDescription', 'heroPrimaryCta', 'heroShowHighlights',
+          'showQuickFilters', 'showCategoryBar', 'showFullLibrary',
+          'showRequestBanner', 'cardsPerRow', 'cardStyle', 'sections'
+        ])
+        && cfg.showHero is bool
+        && cfg.heroMode in ['auto', 'manual', 'brand']
+        && cfg.heroMediaId is string && cfg.heroMediaId.size() <= 128
+        && cfg.heroBadgeText is string && cfg.heroBadgeText.size() <= 50
+        && cfg.heroHeadline is string && cfg.heroHeadline.size() <= 160
+        && cfg.heroDescription is string && cfg.heroDescription.size() <= 320
+        && cfg.heroPrimaryCta is string && cfg.heroPrimaryCta.size() >= 1 && cfg.heroPrimaryCta.size() <= 40
+        && cfg.heroShowHighlights is bool
+        && cfg.showQuickFilters is bool
+        && cfg.showCategoryBar is bool
+        && cfg.showFullLibrary is bool
+        && cfg.showRequestBanner is bool
+        && cfg.cardsPerRow in [4, 5, 6]
+        && cfg.cardStyle in ['clean', 'classic']
+        && cfg.sections is list && cfg.sections.size() >= 1 && cfg.sections.size() <= 12
+        && cfg.sections[0] is map;
+    }
+
     function isValidSiteSettings(data) {
       return data.keys().hasAll([
         'siteName', 'tagline', 'announcementText', 'tickerEnabled', 'featuredLimit', 'maintenanceMode', 'maintenanceMessage', 'updatedBy', 'updatedAt'
       ])
       && data.keys().hasOnly([
-        'siteName', 'tagline', 'announcementText', 'tickerEnabled', 'featuredLimit', 'maintenanceMode', 'maintenanceMessage', 'updatedBy', 'updatedAt', 'playerTheme'
+        'siteName', 'tagline', 'announcementText', 'tickerEnabled', 'featuredLimit', 'maintenanceMode', 'maintenanceMessage', 'updatedBy', 'updatedAt', 'playerTheme', 'homeConfig'
       ])
       && data.siteName is string && data.siteName.size() >= 1 && data.siteName.size() <= 80
       && data.tagline is string && data.tagline.size() >= 1 && data.tagline.size() <= 300
@@ -181,6 +213,7 @@ service cloud.firestore {
       && data.maintenanceMode is bool
       && data.maintenanceMessage is string && data.maintenanceMessage.size() <= 500
       && (!('playerTheme' in data) || isValidPlayerTheme(data.playerTheme))
+      && (!('homeConfig' in data) || isValidHomeConfig(data.homeConfig))
       && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
       && data.updatedAt is timestamp;
     }

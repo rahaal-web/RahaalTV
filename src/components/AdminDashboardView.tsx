@@ -31,6 +31,7 @@ import {
   Server,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Star,
   Trash2,
@@ -42,6 +43,7 @@ import {
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 import { ASSETS, CATALOG_ITEMS } from '../data/catalog';
+import { HomeBuilderPanel } from './HomeBuilderPanel';
 import { MediaPreviewModal } from './MediaPreviewModal';
 import {
   bulkDeleteMediaFromFirestore,
@@ -86,10 +88,16 @@ import {
   saveStoredPlayerTheme,
 } from '../lib/playerTheme';
 import {
+  loadStoredHomeConfig,
+  normalizeHomeConfig,
+  saveStoredHomeConfig,
+} from '../lib/homeConfig';
+import {
   AdminRoleRecord,
   CastMember,
   DownloadMirror,
   EpisodeItem,
+  HomeLayoutConfig,
   MediaItem,
   MediaKind,
   PlayerThemeConfig,
@@ -100,6 +108,16 @@ import {
   UserProfileRecord,
   VisitorRequest,
 } from '../types/media';
+
+export type AdminTab =
+  | 'overview'
+  | 'home_builder'
+  | 'catalog'
+  | 'scraper'
+  | 'site_scraper'
+  | 'requests'
+  | 'users'
+  | 'settings';
 
 interface AdminDashboardViewProps {
   user: User | null;
@@ -112,6 +130,7 @@ interface AdminDashboardViewProps {
   usersList: UserProfileRecord[];
   adminsList: AdminRoleRecord[];
   siteSettings: SiteSettings;
+  requestedTab?: { tab: AdminTab; nonce: number };
   onExitDashboard: () => void;
   onPreviewMedia: (item: MediaItem) => void;
   onDeleteStarterItems: (ids: string[]) => void;
@@ -120,14 +139,6 @@ interface AdminDashboardViewProps {
   onNotify: (msg: string) => void;
 }
 
-type AdminTab =
-  | 'overview'
-  | 'catalog'
-  | 'scraper'
-  | 'site_scraper'
-  | 'requests'
-  | 'users'
-  | 'settings';
 type EditorSubTab = 'basic' | 'servers' | 'downloads' | 'seasons_cast';
 
 const POSTER_CHOICES = [
@@ -353,6 +364,7 @@ export function AdminDashboardView({
   usersList,
   adminsList,
   siteSettings,
+  requestedTab,
   onExitDashboard,
   onPreviewMedia,
   onDeleteStarterItems,
@@ -360,7 +372,12 @@ export function AdminDashboardView({
   onRestoreStarterItems,
   onNotify,
 }: AdminDashboardViewProps) {
-  const [activeTab, setActiveTab] = useState<AdminTab>('overview');
+  const [activeTab, setActiveTab] = useState<AdminTab>(requestedTab?.tab || 'overview');
+  useEffect(() => {
+    if (requestedTab?.tab) {
+      setActiveTab(requestedTab.tab);
+    }
+  }, [requestedTab?.nonce, requestedTab?.tab]);
   const [busyAction, setBusyAction] = useState(false);
   const [adminSigningIn, setAdminSigningIn] = useState(false);
   const [adminAuthError, setAdminAuthError] = useState<string | null>(null);
@@ -431,14 +448,20 @@ export function AdminDashboardView({
   const [settingsForm, setSettingsForm] = useState<SiteSettings>(() => ({
     ...siteSettings,
     playerTheme: normalizePlayerTheme(siteSettings.playerTheme || loadStoredPlayerTheme()),
+    homeConfig: normalizeHomeConfig(siteSettings.homeConfig || loadStoredHomeConfig()),
   }));
   const [customApiUrl, setCustomApiUrl] = useState<string>(() => getCustomApiBaseUrl());
   useEffect(() => {
     setSettingsForm({
       ...siteSettings,
       playerTheme: normalizePlayerTheme(siteSettings.playerTheme || loadStoredPlayerTheme()),
+      homeConfig: normalizeHomeConfig(siteSettings.homeConfig || loadStoredHomeConfig()),
     });
   }, [siteSettings]);
+
+  const activeHomeConfig = normalizeHomeConfig(
+    settingsForm.homeConfig || siteSettings.homeConfig || loadStoredHomeConfig()
+  );
 
   const activePlayerTheme = normalizePlayerTheme(
     settingsForm.playerTheme || siteSettings.playerTheme || loadStoredPlayerTheme()
@@ -1341,13 +1364,44 @@ export function AdminDashboardView({
     setBusyAction(true);
     try {
       const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
-      await saveSiteSettingsToFirestore(
-        { ...settingsForm, playerTheme: normalizedTheme },
+      const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
+      const res = await saveSiteSettingsToFirestore(
+        { ...settingsForm, playerTheme: normalizedTheme, homeConfig: normalizedHome },
         user.uid
       );
-      onNotify('تم حفظ الإعدادات وثيم المشغل الداخلي وتطبيقهما تلقائياً بنجاح');
+      onNotify(
+        res?.syncedHomeToCloud === false
+          ? 'تم حفظ الإعدادات في Firestore وحفظ تخطيط الرئيسية محلياً (حدث قواعد Firestore للمزامنة السحابية)'
+          : 'تم حفظ الإعدادات وتخصيص الرئيسية وثيم المشغّل بنجاح'
+      );
     } catch {
       onNotify('تعذر حفظ الإعدادات');
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleSaveHomeConfig = async (nextHome: HomeLayoutConfig) => {
+    const cleanHome = saveStoredHomeConfig(nextHome);
+    setSettingsForm((prev) => ({ ...prev, homeConfig: cleanHome }));
+    if (!user) {
+      onNotify('تم حفظ تخطيط الصفحة الرئيسية محلياً — سجّل الدخول كمشرف للمزامنة');
+      return;
+    }
+    setBusyAction(true);
+    try {
+      const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
+      const res = await saveSiteSettingsToFirestore(
+        { ...settingsForm, playerTheme: normalizedTheme, homeConfig: cleanHome },
+        user.uid
+      );
+      onNotify(
+        res?.syncedHomeToCloud === false
+          ? 'تم تطبيق تخطيط الرئيسية محلياً — يرجى تحديث firestore.rules في لوحة Firebase لمزامنتها لكل الزوار'
+          : 'تم حفظ تخطيط الصفحة الرئيسية ومزامنته للجميع في Firestore بنجاح!'
+      );
+    } catch {
+      onNotify('تم حفظ التعديلات محلياً — تعذرت المزامنة مع Firestore');
     } finally {
       setBusyAction(false);
     }
@@ -1362,7 +1416,11 @@ export function AdminDashboardView({
     }
     setBusyAction(true);
     try {
-      await saveSiteSettingsToFirestore({ ...settingsForm, playerTheme: clean }, user.uid);
+      const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
+      await saveSiteSettingsToFirestore(
+        { ...settingsForm, playerTheme: clean, homeConfig: normalizedHome },
+        user.uid
+      );
       onNotify('تم حفظ وتطبيق ثيم المشغّل الداخلي تلقائياً على جميع مشغّلات الموقع!');
     } catch {
       onNotify('تعذر حفظ الثيم في قاعدة البيانات');
@@ -2037,6 +2095,12 @@ export function AdminDashboardView({
             {(
               [
                 { id: 'overview', label: 'نظرة عامة والإحصائيات', icon: BarChart3 },
+                {
+                  id: 'home_builder',
+                  label: 'تخصيص الصفحة الرئيسية',
+                  icon: SlidersHorizontal,
+                  badge: 'تحكم كامل',
+                },
                 { id: 'catalog', label: `الأفلام والمسلسلات (${catalog.length})`, icon: Film },
                 { id: 'scraper', label: 'جلب عمل واحد (رابط)', icon: Wand2 },
                 {
@@ -2063,7 +2127,17 @@ export function AdminDashboardView({
                   type="button"
                   onClick={() => {
                     setActiveTab(tab.id);
-                    if (tab.id === 'settings') setSettingsForm(siteSettings);
+                    if (tab.id === 'settings' || tab.id === 'home_builder') {
+                      setSettingsForm({
+                        ...siteSettings,
+                        playerTheme: normalizePlayerTheme(
+                          siteSettings.playerTheme || loadStoredPlayerTheme()
+                        ),
+                        homeConfig: normalizeHomeConfig(
+                          siteSettings.homeConfig || loadStoredHomeConfig()
+                        ),
+                      });
+                    }
                   }}
                   className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-xs sm:text-sm font-bold transition-colors cursor-pointer ${
                     active
@@ -2223,7 +2297,45 @@ export function AdminDashboardView({
                     </div>
                   </div>
                 </div>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-3xl bg-gradient-to-l from-[#1a1a1a] via-[#121c26] to-[#0c1821] border border-white/10 p-5">
+                  <div>
+                    <h2 className="font-display text-base font-extrabold text-white flex items-center gap-2">
+                      <SlidersHorizontal className="w-4 h-4 text-[#E50914]" />
+                      التحكم الكامل في الصفحة الرئيسية
+                    </h2>
+                    <p className="text-xs text-[#b7c9ef] mt-1">
+                      رتّب أقسام الصفحة الرئيسية، اختر البطل والنمط (شبكة أو صفوف أفقية)، وأخفِ أي عنصر لتقليل الزحام بضغطة واحدة.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('home_builder')}
+                    className="shrink-0 inline-flex items-center gap-2 rounded-xl bg-[#E50914] hover:bg-[#f40612] px-5 py-3 text-xs font-extrabold text-white shadow-lg cursor-pointer"
+                  >
+                    <SlidersHorizontal className="w-4 h-4" />
+                    <span>فتح محرر الصفحة الرئيسية</span>
+                  </button>
+                </div>
               </div>
+            )}
+
+            {/* TAB 1B: FULL HOME PAGE BUILDER */}
+            {activeTab === 'home_builder' && (
+              <HomeBuilderPanel
+                catalog={catalog}
+                homeConfig={activeHomeConfig}
+                tickerEnabled={settingsForm.tickerEnabled}
+                busyAction={busyAction}
+                onChangeHomeConfig={(next) =>
+                  setSettingsForm((prev) => ({ ...prev, homeConfig: next }))
+                }
+                onChangeTickerEnabled={(enabled) =>
+                  setSettingsForm((prev) => ({ ...prev, tickerEnabled: enabled }))
+                }
+                onSaveHomeConfig={handleSaveHomeConfig}
+                onPreviewHome={onExitDashboard}
+                onNotify={onNotify}
+              />
             )}
 
             {/* TAB 2: CATALOG MANAGEMENT */}

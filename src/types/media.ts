@@ -138,6 +138,49 @@ export interface PlayerThemeConfig {
   showBrandBadge: boolean;
 }
 
+export type HomeHeroMode = 'auto' | 'manual' | 'brand';
+
+export type HomeSectionSource =
+  | 'latest'
+  | 'movies'
+  | 'series'
+  | 'top_rated'
+  | 'trending'
+  | 'ramadan'
+  | 'wrestling'
+  | 'category'
+  | 'custom';
+
+export interface HomeSectionConfig {
+  id: string;
+  title: string;
+  subtitle: string;
+  enabled: boolean;
+  source: HomeSectionSource;
+  categoryFilter?: string;
+  customMediaIds?: string[];
+  limit: number;
+  layout: 'grid' | 'row';
+}
+
+export interface HomeLayoutConfig {
+  showHero: boolean;
+  heroMode: HomeHeroMode;
+  heroMediaId: string;
+  heroBadgeText: string;
+  heroHeadline: string;
+  heroDescription: string;
+  heroPrimaryCta: string;
+  heroShowHighlights: boolean;
+  showQuickFilters: boolean;
+  showCategoryBar: boolean;
+  showFullLibrary: boolean;
+  showRequestBanner: boolean;
+  cardsPerRow: 4 | 5 | 6;
+  cardStyle: 'clean' | 'classic';
+  sections: HomeSectionConfig[];
+}
+
 export interface SiteSettings {
   siteName: string;
   tagline: string;
@@ -147,6 +190,7 @@ export interface SiteSettings {
   maintenanceMode: boolean;
   maintenanceMessage: string;
   playerTheme?: PlayerThemeConfig;
+  homeConfig?: HomeLayoutConfig;
 }
 
 export interface UserProfileRecord {

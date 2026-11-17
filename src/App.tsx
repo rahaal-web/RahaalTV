@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { CheckCircle2, Wrench } from 'lucide-react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, doc, onSnapshot, orderBy, query, where } from 'firebase/firestore';
-import { AdminDashboardView } from './components/AdminDashboardView';
+import { AdminDashboardView, AdminTab } from './components/AdminDashboardView';
 import { CatalogArchiveView } from './components/CatalogArchiveView';
 import { Footer, FooterTopic } from './components/Footer';
 import { Header } from './components/Header';
@@ -18,6 +18,7 @@ import {
 import { SearchDrawer } from './components/SearchDrawer';
 import { SingleDetailView } from './components/SingleDetailView';
 import { CATALOG_ITEMS } from './data/catalog';
+import { loadStoredHomeConfig, saveStoredHomeConfig } from './lib/homeConfig';
 import { FALLBACK_BACKDROP, FALLBACK_POSTER, resolveMediaAssetUrl } from './lib/mediaFilters';
 import { loadStoredPlayerTheme, saveStoredPlayerTheme } from './lib/playerTheme';
 import {
@@ -62,12 +63,13 @@ const DEFAULT_SETTINGS: SiteSettings = {
   tagline:
     'افلام ومسلسلات بجودة عالية بدون تقطيع ، تحميل ومشاهدة افلام اجنبية بروابط مباشرة ، مسلسلات اجنبية ، مسلسلات رمضان 2026 وعروض المصارعة الحرة المترجمة.',
   announcementText: '',
-  tickerEnabled: true,
+  tickerEnabled: false,
   featuredLimit: 5,
   maintenanceMode: false,
   maintenanceMessage:
     'نقوم حاليًا بإجراء أعمال صيانة وتحديثات تقنية لتحسين جودة السيرفرات وتجربة المشاهدة. سنعود للعمل قريبًا، شكرًا لتفهمكم.',
   playerTheme: loadStoredPlayerTheme(),
+  homeConfig: loadStoredHomeConfig(),
 };
 
 const STORAGE_WATCHLIST = 'moov_watchlist_ids';
@@ -115,10 +117,15 @@ export default function App() {
 
   // Live Firestore Data State
   const [firestoreCatalog, setFirestoreCatalog] = useState<MediaItem[]>([]);
+  const [initialMediaLoaded, setInitialMediaLoaded] = useState(false);
   const [siteSettings, setSiteSettings] = useState<SiteSettings>(DEFAULT_SETTINGS);
   const [visitorRequests, setVisitorRequests] = useState<VisitorRequest[]>([]);
   const [usersList, setUsersList] = useState<UserProfileRecord[]>([]);
   const [adminsList, setAdminsList] = useState<AdminRoleRecord[]>([]);
+  const [adminRequestedTab, setAdminRequestedTab] = useState<{ tab: AdminTab; nonce: number }>({
+    tab: 'overview',
+    nonce: 0,
+  });
 
   const [watchlistIds, setWatchlistIds] = useState<string[]>(() => {
     try {
@@ -262,12 +269,14 @@ export default function App() {
           return (parseInt(b.year || '0', 10) || 0) - (parseInt(a.year || '0', 10) || 0);
         });
         setFirestoreCatalog(docs);
+        setInitialMediaLoaded(true);
         if (docs.length > 0) {
           // Once Firestore holds live items, prevent initial fallback items from popping back if DB is cleared later
           setStarterCleared(true);
         }
       },
       (error) => {
+        setInitialMediaLoaded(true);
         try {
           handleFirestoreError(error, OperationType.LIST, mediaPath);
         } catch {
@@ -285,11 +294,14 @@ export default function App() {
           const syncedTheme = data.playerTheme
             ? saveStoredPlayerTheme(data.playerTheme)
             : loadStoredPlayerTheme();
+          const syncedHome = data.homeConfig
+            ? saveStoredHomeConfig(data.homeConfig)
+            : loadStoredHomeConfig();
           setSiteSettings({
             siteName: data.siteName || DEFAULT_SETTINGS.siteName,
             tagline: data.tagline || DEFAULT_SETTINGS.tagline,
             announcementText: data.announcementText || '',
-            tickerEnabled: data.tickerEnabled ?? true,
+            tickerEnabled: data.tickerEnabled ?? false,
             featuredLimit: data.featuredLimit || 5,
             maintenanceMode: Boolean(data.maintenanceMode),
             maintenanceMessage:
@@ -297,6 +309,7 @@ export default function App() {
                 ? data.maintenanceMessage
                 : DEFAULT_SETTINGS.maintenanceMessage,
             playerTheme: syncedTheme,
+            homeConfig: syncedHome,
           });
         }
       },
@@ -454,7 +467,8 @@ export default function App() {
     }
   };
 
-  const openAdminPage = () => {
+  const openAdminPage = (tab: AdminTab = 'overview') => {
+    setAdminRequestedTab((prev) => ({ tab, nonce: prev.nonce + 1 }));
     pushPathIfNeeded('/admin');
     setView('admin');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -557,6 +571,7 @@ export default function App() {
           usersList={usersList}
           adminsList={adminsList}
           siteSettings={siteSettings}
+          requestedTab={adminRequestedTab}
           onExitDashboard={navigateHome}
           onPreviewMedia={(item) => handleSelectMedia(item, false)}
           onDeleteStarterItems={handleDeleteStarterItems}
@@ -582,8 +597,8 @@ export default function App() {
   if (siteSettings.maintenanceMode && !isAdmin) {
     if (authLoading) {
       return (
-        <div className="min-h-screen bg-[#06131c] flex items-center justify-center text-white">
-          <div className="h-9 w-9 animate-spin rounded-full border-4 border-[#D92321] border-t-transparent" />
+        <div className="min-h-screen bg-[#0f0f0f] flex items-center justify-center text-white">
+          <div className="h-9 w-9 animate-spin rounded-full border-4 border-[#E50914] border-t-transparent" />
         </div>
       );
     }
@@ -601,7 +616,7 @@ export default function App() {
           firebaseUser={firebaseUser}
           isAdmin={isAdmin}
           onLogout={handleLogout}
-          onOpenAdmin={openAdminPage}
+          onOpenAdmin={() => openAdminPage()}
           onNotify={showToast}
         />
       </>
@@ -609,17 +624,17 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#06131c] text-white">
+    <div className="min-h-screen flex flex-col bg-[#0f0f0f] text-white">
       {siteSettings.maintenanceMode && isAdmin && (
-        <div className="bg-[#f9c400] text-[#06131c] px-4 py-2 text-xs font-black flex flex-wrap items-center justify-center gap-3 z-50">
+        <div className="bg-[#f9c400] text-[#0f0f0f] px-4 py-2 text-xs font-black flex flex-wrap items-center justify-center gap-3 z-50">
           <span className="inline-flex items-center gap-1.5">
             <Wrench className="w-3.5 h-3.5" />
             <span>وضع الصيانة مُفعّل حاليًا للزوار — الموقع متاح لك بصلاحية الأدمن</span>
           </span>
           <button
             type="button"
-            onClick={openAdminPage}
-            className="rounded-lg bg-[#06131c] text-white px-3 py-1 text-[11px] font-extrabold hover:bg-[#D92321] transition-colors cursor-pointer"
+            onClick={() => openAdminPage('settings')}
+            className="rounded-lg bg-[#0f0f0f] text-white px-3 py-1 text-[11px] font-extrabold hover:bg-[#E50914] transition-colors cursor-pointer"
           >
             إدارة الإعدادات
           </button>
@@ -631,8 +646,9 @@ export default function App() {
         onSelectCategory={(category) => handleApplyFilter({ category })}
         onOpenSearch={() => setSearchOpen(true)}
         onOpenWatchlist={() => setWatchlistOpen(true)}
+        onOpenContact={() => setFooterTopic('requests')}
         onOpenLogin={() => setLoginOpen(true)}
-        onOpenAdmin={openAdminPage}
+        onOpenAdmin={() => openAdminPage()}
         onSelectMedia={handleSelectMedia}
         watchlistCount={watchlistItems.length}
         username={firebaseUser?.displayName || null}
@@ -647,9 +663,13 @@ export default function App() {
           <HomeView
             catalog={activeCatalog}
             siteSettings={siteSettings}
+            isAdmin={isAdmin}
+            loading={!initialMediaLoaded && activeCatalog.length === 0}
             onSelectMedia={handleSelectMedia}
             onApplyFilter={handleApplyFilter}
             onPlayNow={(item) => setPlayerState({ item, episode: 1 })}
+            onOpenContact={() => setFooterTopic('requests')}
+            onOpenHomeBuilder={() => openAdminPage('home_builder')}
             watchlistIds={watchlistIds}
             onToggleWatchlist={handleToggleWatchlist}
           />
@@ -734,7 +754,7 @@ export default function App() {
         firebaseUser={firebaseUser}
         isAdmin={isAdmin}
         onLogout={handleLogout}
-        onOpenAdmin={openAdminPage}
+        onOpenAdmin={() => openAdminPage()}
         onNotify={showToast}
       />
 

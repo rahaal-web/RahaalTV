@@ -1,32 +1,40 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-sans: "Cairo", system-ui, sans-serif;
-  --font-display: "Cairo", system-ui, sans-serif;
+  --font-sans: "Tajawal", "Cairo", system-ui, sans-serif;
+  --font-display: "Cairo", "Tajawal", system-ui, sans-serif;
   --font-latin: "Cairo", system-ui, sans-serif;
-  --color-canvas: #06131c;
-  --color-card: #0c1821;
-  --color-surface: #1a242e;
-  --color-surface-alt: #1b252f;
-  --color-ticker: #19262f;
-  --color-crimson: #d92321;
-  --color-crimson-hover: #dc0e30;
+  --color-canvas: #0f0f0f;
+  --color-card: #181818;
+  --color-surface: #202020;
+  --color-surface-alt: #262626;
+  --color-ticker: #161616;
+  --color-crimson: #e50914;
+  --color-crimson-hover: #f40612;
   --color-imdb: #f9c400;
   --color-success: #4caf50;
-  --color-muted: #b7c9ef;
+  --color-muted: #a3a3a3;
 }
 
 @layer base {
   html {
     scroll-behavior: smooth;
     font-family: var(--font-sans);
-    background-color: #06131c;
+    background-color: #0f0f0f;
     color: #ffffff;
   }
 
   body {
-    background-color: #06131c;
+    background-color: #0f0f0f;
+    color: #ffffff;
     overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    text-wrap: balance;
   }
 
   ::-webkit-scrollbar {
@@ -35,16 +43,16 @@
   }
 
   ::-webkit-scrollbar-track {
-    background: #06131c;
+    background: #0f0f0f;
   }
 
   ::-webkit-scrollbar-thumb {
-    background: #1a242e;
+    background: #2a2a2a;
     border-radius: 999px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: #d92321;
+    background: #e50914;
   }
 }
 
@@ -57,7 +65,71 @@
   font-family: var(--font-display);
 }
 
-/* Reverse-engineered Egy Club v2.0.0 3D Card Flip */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Smooth Fade-in-up Section Reveal */
+@keyframes rtv-fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rtv-fade-in {
+  animation: rtv-fade-in-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Skeleton Loader Shimmer */
+@keyframes rtv-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.rtv-skeleton {
+  background: linear-gradient(
+    90deg,
+    #181818 25%,
+    #242424 50%,
+    #181818 75%
+  );
+  background-size: 200% 100%;
+  animation: rtv-shimmer 1.5s infinite linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .rtv-fade-in {
+    animation: none;
+  }
+  .rtv-skeleton {
+    animation: none;
+  }
+  .moov-ticker-track {
+    animation: none !important;
+  }
+}
+
+/* Classic Optional 3D Card Flip */
 .moov-card-perspective {
   perspective: 650px;
 }
@@ -110,16 +182,16 @@
   animation-play-state: paused;
 }
 
-/* Single Head Hex Texture & Radial Spotlight */
+/* Single Head Pattern & Radial Spotlight */
 .moov-hex-pattern {
-  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
-    radial-gradient(rgba(217, 35, 33, 0.06) 1px, transparent 1px);
+  background-image: radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    radial-gradient(rgba(229, 9, 20, 0.05) 1px, transparent 1px);
   background-size: 28px 28px;
   background-position: 0 0, 14px 14px;
 }
 
 .moov-spotlight {
-  background: radial-gradient(ellipse 65% 55% at 50% 0%, rgba(217, 35, 33, 0.22), transparent 72%);
+  background: radial-gradient(ellipse 65% 55% at 50% 0%, rgba(229, 9, 20, 0.18), transparent 72%);
 }
 
 /* Diagonal Corner Quality Ribbon */
@@ -198,5 +270,5 @@
 }
 
 .moov-server-enter {
-  animation: moov-server-enter 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: moov-server-enter 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
 }

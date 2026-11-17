@@ -85,6 +85,9 @@ export default {
         headers: {
           ...CORS_HEADERS,
           'Content-Type': contentType,
+          'X-Content-Type-Options': 'nosniff',
+          'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+          'Cache-Control': 'public, max-age=120, stale-while-revalidate=300',
           'X-Final-Url': upstream.url || parsedTarget.toString(),
           ...(xFrame ? { 'X-Upstream-X-Frame-Options': xFrame } : {}),
           ...(csp ? { 'X-Upstream-CSP': csp } : {}),
