@@ -18,6 +18,7 @@ import {
 import { SearchDrawer } from './components/SearchDrawer';
 import { SingleDetailView } from './components/SingleDetailView';
 import { CATALOG_ITEMS } from './data/catalog';
+import { FALLBACK_BACKDROP, FALLBACK_POSTER, resolveMediaAssetUrl } from './lib/mediaFilters';
 import {
   auth,
   checkIsAdminUser,
@@ -67,8 +68,19 @@ const STORAGE_WATCHLIST = 'moov_watchlist_ids';
 const STORAGE_DISMISSED_STARTERS = 'rahaltv_dismissed_starters';
 const STORAGE_STARTER_CLEARED = 'rahaltv_starter_cleared';
 
-const isAdminPath = () =>
-  typeof window !== 'undefined' && window.location.pathname.startsWith('/admin');
+const getBasePrefix = () => {
+  const base = import.meta.env.BASE_URL || '/';
+  return base === '/' ? '' : base.replace(/\/+$/, '');
+};
+
+const isAdminPath = () => {
+  if (typeof window === 'undefined') return false;
+  const { pathname, hash } = window.location;
+  if (hash.startsWith('#/admin')) return true;
+  const basePrefix = getBasePrefix();
+  const normalizedPath = pathname.replace(/\/+$/, '');
+  return normalizedPath === '/admin' || normalizedPath === `${basePrefix}/admin`;
+};
 
 export default function App() {
   const [view, setView] = useState<'home' | 'archive' | 'single' | 'admin'>(() =>
@@ -136,17 +148,21 @@ export default function App() {
     activeCatalog.find((item) => item.id === selectedMediaId) || activeCatalog[0] || null;
   const hasDismissedStarters = starterCleared || dismissedStarterIds.length > 0;
 
-  // Sync browser Back/Forward with /admin standalone route
+  // Sync browser Back/Forward & hash navigation with /admin standalone route
   useEffect(() => {
-    const handlePopState = () => {
+    const handleRouteChange = () => {
       if (isAdminPath()) {
         setView('admin');
       } else {
         setView((curr) => (curr === 'admin' ? 'home' : curr));
       }
     };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
+    window.addEventListener('popstate', handleRouteChange);
+    window.addEventListener('hashchange', handleRouteChange);
+    return () => {
+      window.removeEventListener('popstate', handleRouteChange);
+      window.removeEventListener('hashchange', handleRouteChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -196,8 +212,12 @@ export default function App() {
             raw.updatedAt && typeof raw.updatedAt.toMillis === 'function'
               ? raw.updatedAt.toMillis()
               : createdAtMs;
+          const poster = resolveMediaAssetUrl(raw.poster, FALLBACK_POSTER);
+          const backdrop = resolveMediaAssetUrl(raw.backdrop, poster || FALLBACK_BACKDROP);
           return {
             ...raw,
+            poster,
+            backdrop,
             createdAtMs,
             updatedAtMs,
           } as MediaItem;
@@ -214,7 +234,11 @@ export default function App() {
         }
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, mediaPath);
+        try {
+          handleFirestoreError(error, OperationType.LIST, mediaPath);
+        } catch {
+          // Keep fallback catalog visible instead of crashing on network/permission errors
+        }
       }
     );
 
@@ -239,7 +263,11 @@ export default function App() {
         }
       },
       (error) => {
-        handleFirestoreError(error, OperationType.GET, settingsPath);
+        try {
+          handleFirestoreError(error, OperationType.GET, settingsPath);
+        } catch {
+          // Fallback to default settings if settings doc cannot be fetched
+        }
       }
     );
 
@@ -354,7 +382,18 @@ export default function App() {
   };
 
   const pushPathIfNeeded = (targetPath: '/' | '/admin') => {
-    if (typeof window !== 'undefined' && window.location.pathname !== targetPath) {
+    if (typeof window === 'undefined') return;
+    const basePrefix = getBasePrefix();
+    if (basePrefix) {
+      // Under subpath hosting (e.g. GitHub Pages /RahaalTV-v1/), use hash route for /admin so reloads never 404
+      const desiredUrl = targetPath === '/admin' ? `${basePrefix}/#/admin` : `${basePrefix}/`;
+      const currentUrl = `${window.location.pathname}${window.location.hash}`;
+      if (currentUrl !== desiredUrl) {
+        window.history.pushState({}, '', desiredUrl);
+      }
+      return;
+    }
+    if (window.location.pathname !== targetPath || window.location.hash) {
       window.history.pushState({}, '', targetPath);
     }
   };

@@ -19,6 +19,8 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+import fallbackBackdropImg from '../assets/images/hero_scifi_backdrop_1794813333496.jpg';
+import fallbackPosterImg from '../assets/images/poster_running_man_1794813333683.jpg';
 import {
   MediaItem,
   RequestStatus,
@@ -121,8 +123,8 @@ export async function checkIsAdminUser(user: User | null): Promise<boolean> {
   }
 }
 
-const FALLBACK_POSTER_URL = '/src/assets/images/poster_running_man_1794813333683.jpg';
-const FALLBACK_BACKDROP_URL = '/src/assets/images/hero_scifi_backdrop_1794813333496.jpg';
+const FALLBACK_POSTER_URL = fallbackPosterImg;
+const FALLBACK_BACKDROP_URL = fallbackBackdropImg;
 
 function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
   const cleanId =

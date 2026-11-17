@@ -1,16 +1,26 @@
+import heroBackdrop from '../assets/images/hero_scifi_backdrop_1794813333496.jpg';
+import animatedAdventure from '../assets/images/poster_animated_adventure_1794813337177.jpg';
+import arabianDrama from '../assets/images/poster_arabian_drama_1794813336412.jpg';
+import horrorMansion from '../assets/images/poster_horror_mansion_1794813336557.jpg';
+import oceanFantasy from '../assets/images/poster_ocean_fantasy_1794813333825.jpg';
+import ramadanEpic from '../assets/images/poster_ramadan_epic_1794813353979.jpg';
+import runningMan from '../assets/images/poster_running_man_1794813333683.jpg';
+import samuraiAction from '../assets/images/poster_samurai_action_1794813336699.jpg';
+import spaceOdyssey from '../assets/images/poster_space_odyssey_1794813335354.jpg';
+import wrestlingArena from '../assets/images/poster_wrestling_arena_1794813353471.jpg';
 import { MediaItem, NavMenuItem } from '../types/media';
 
 export const ASSETS = {
-  heroBackdrop: '/src/assets/images/hero_scifi_backdrop_1794813333496.jpg',
-  runningMan: '/src/assets/images/poster_running_man_1794813333683.jpg',
-  oceanFantasy: '/src/assets/images/poster_ocean_fantasy_1794813333825.jpg',
-  arabianDrama: '/src/assets/images/poster_arabian_drama_1794813336412.jpg',
-  samuraiAction: '/src/assets/images/poster_samurai_action_1794813336699.jpg',
-  spaceOdyssey: '/src/assets/images/poster_space_odyssey_1794813335354.jpg',
-  animatedAdventure: '/src/assets/images/poster_animated_adventure_1794813337177.jpg',
-  horrorMansion: '/src/assets/images/poster_horror_mansion_1794813336557.jpg',
-  wrestlingArena: '/src/assets/images/poster_wrestling_arena_1794813353471.jpg',
-  ramadanEpic: '/src/assets/images/poster_ramadan_epic_1794813353979.jpg',
+  heroBackdrop,
+  runningMan,
+  oceanFantasy,
+  arabianDrama,
+  samuraiAction,
+  spaceOdyssey,
+  animatedAdventure,
+  horrorMansion,
+  wrestlingArena,
+  ramadanEpic,
 };
 
 const DEFAULT_SERVERS = [

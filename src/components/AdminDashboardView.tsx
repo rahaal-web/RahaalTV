@@ -417,17 +417,24 @@ export function AdminDashboardView({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ urls: chunk }),
         });
-        const data = (await response.json()) as {
-          ok?: boolean;
-          results?: Record<string, ServerStatusEntry>;
-        };
-        if (response.ok && data.ok && data.results) {
+        const contentType = response.headers.get('content-type') || '';
+        const data = contentType.includes('application/json')
+          ? ((await response.json()) as {
+              ok?: boolean;
+              results?: Record<string, ServerStatusEntry>;
+            })
+          : null;
+        if (response.ok && data?.ok && data.results) {
           serverStatusesRef.current = { ...serverStatusesRef.current, ...data.results };
           setServerStatuses(serverStatusesRef.current);
         } else {
           const failPatch: Record<string, ServerStatusEntry> = {};
           for (const u of chunk) {
-            failPatch[u] = { status: 'broken', label: 'تعذر الفحص', detail: 'استجابة غير صالحة من الخادم' };
+            failPatch[u] = {
+              status: 'broken',
+              label: 'يتطلب خادم Node',
+              detail: 'فحص الروابط غير متاح على الاستضافة الثابتة (GitHub Pages)',
+            };
           }
           serverStatusesRef.current = { ...serverStatusesRef.current, ...failPatch };
           setServerStatuses(serverStatusesRef.current);
@@ -731,6 +738,14 @@ export function AdminDashboardView({
         ),
       });
 
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        setScrapeError(
+          'أداة الجلب التلقائي (/api/scrape) تتطلب تشغيل خادم Node.js ولا تعمل على الاستضافة الثابتة (GitHub Pages).'
+        );
+        return;
+      }
+
       const data = (await response.json()) as {
         ok?: boolean;
         error?: string;
@@ -802,6 +817,14 @@ export function AdminDashboardView({
           deepScrape: siteDeepScrape,
         }),
       });
+
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        setSiteCrawlError(
+          'أداة سحب المواقع (/api/scrape-site) تتطلب تشغيل خادم Node.js ولا تعمل على الاستضافة الثابتة (GitHub Pages).'
+        );
+        return;
+      }
 
       const data = (await response.json()) as {
         ok?: boolean;

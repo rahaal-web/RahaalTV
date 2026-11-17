@@ -7,6 +7,17 @@ import { CatalogFilterState, MediaItem } from '../types/media';
 export const FALLBACK_POSTER = fallbackPosterImg;
 export const FALLBACK_BACKDROP = fallbackBackdropImg;
 
+export function resolveMediaAssetUrl(url: string | undefined | null, fallback = ''): string {
+  const clean = String(url || '').trim();
+  if (!clean) return fallback;
+  if (clean.startsWith('/src/assets/')) {
+    const base = import.meta.env.BASE_URL || '/';
+    const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+    return `${normalizedBase}${clean.slice(1)}`;
+  }
+  return clean;
+}
+
 export function handlePosterError(e: SyntheticEvent<HTMLImageElement>) {
   const img = e.currentTarget;
   if (img.dataset.fallbackApplied === '1') return;
