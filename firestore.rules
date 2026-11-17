@@ -144,12 +144,34 @@ service cloud.firestore {
       && data.createdAt is timestamp;
     }
 
+    function isValidPlayerTheme(theme) {
+      return theme is map
+        && theme.keys().hasAll([
+          'presetId', 'brandLabel', 'accentColor', 'frameBgColor', 'modalBgColor',
+          'borderRadius', 'glowIntensity', 'showHeaderBar', 'showFooterBar', 'showBrandBadge'
+        ])
+        && theme.keys().hasOnly([
+          'presetId', 'brandLabel', 'accentColor', 'frameBgColor', 'modalBgColor',
+          'borderRadius', 'glowIntensity', 'showHeaderBar', 'showFooterBar', 'showBrandBadge'
+        ])
+        && theme.presetId in ['rahaltv-crimson', 'cinema-gold', 'midnight-blue', 'emerald-neon', 'custom']
+        && theme.brandLabel is string && theme.brandLabel.size() >= 1 && theme.brandLabel.size() <= 40
+        && theme.accentColor is string && theme.accentColor.size() == 7 && theme.accentColor.matches('^#[0-9a-fA-F]{6}$')
+        && theme.frameBgColor is string && theme.frameBgColor.size() == 7 && theme.frameBgColor.matches('^#[0-9a-fA-F]{6}$')
+        && theme.modalBgColor is string && theme.modalBgColor.size() == 7 && theme.modalBgColor.matches('^#[0-9a-fA-F]{6}$')
+        && theme.borderRadius in ['sharp', 'rounded', 'cinema']
+        && theme.glowIntensity in ['none', 'soft', 'strong']
+        && theme.showHeaderBar is bool
+        && theme.showFooterBar is bool
+        && theme.showBrandBadge is bool;
+    }
+
     function isValidSiteSettings(data) {
       return data.keys().hasAll([
         'siteName', 'tagline', 'announcementText', 'tickerEnabled', 'featuredLimit', 'maintenanceMode', 'maintenanceMessage', 'updatedBy', 'updatedAt'
       ])
       && data.keys().hasOnly([
-        'siteName', 'tagline', 'announcementText', 'tickerEnabled', 'featuredLimit', 'maintenanceMode', 'maintenanceMessage', 'updatedBy', 'updatedAt'
+        'siteName', 'tagline', 'announcementText', 'tickerEnabled', 'featuredLimit', 'maintenanceMode', 'maintenanceMessage', 'updatedBy', 'updatedAt', 'playerTheme'
       ])
       && data.siteName is string && data.siteName.size() >= 1 && data.siteName.size() <= 80
       && data.tagline is string && data.tagline.size() >= 1 && data.tagline.size() <= 300
@@ -158,6 +180,7 @@ service cloud.firestore {
       && (data.featuredLimit is int || data.featuredLimit is float) && data.featuredLimit >= 1 && data.featuredLimit <= 20
       && data.maintenanceMode is bool
       && data.maintenanceMessage is string && data.maintenanceMessage.size() <= 500
+      && (!('playerTheme' in data) || isValidPlayerTheme(data.playerTheme))
       && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
       && data.updatedAt is timestamp;
     }

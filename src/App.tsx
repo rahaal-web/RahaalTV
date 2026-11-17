@@ -19,6 +19,7 @@ import { SearchDrawer } from './components/SearchDrawer';
 import { SingleDetailView } from './components/SingleDetailView';
 import { CATALOG_ITEMS } from './data/catalog';
 import { FALLBACK_BACKDROP, FALLBACK_POSTER, resolveMediaAssetUrl } from './lib/mediaFilters';
+import { loadStoredPlayerTheme, saveStoredPlayerTheme } from './lib/playerTheme';
 import {
   auth,
   checkIsAdminUser,
@@ -61,6 +62,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   maintenanceMode: false,
   maintenanceMessage:
     'نقوم حاليًا بإجراء أعمال صيانة وتحديثات تقنية لتحسين جودة السيرفرات وتجربة المشاهدة. سنعود للعمل قريبًا، شكرًا لتفهمكم.',
+  playerTheme: loadStoredPlayerTheme(),
 };
 
 const STORAGE_WATCHLIST = 'moov_watchlist_ids';
@@ -247,6 +249,9 @@ export default function App() {
       (snap) => {
         if (snap.exists()) {
           const data = snap.data() as Partial<SiteSettings>;
+          const syncedTheme = data.playerTheme
+            ? saveStoredPlayerTheme(data.playerTheme)
+            : loadStoredPlayerTheme();
           setSiteSettings({
             siteName: data.siteName || DEFAULT_SETTINGS.siteName,
             tagline: data.tagline || DEFAULT_SETTINGS.tagline,
@@ -258,6 +263,7 @@ export default function App() {
               typeof data.maintenanceMessage === 'string' && data.maintenanceMessage.trim()
                 ? data.maintenanceMessage
                 : DEFAULT_SETTINGS.maintenanceMessage,
+            playerTheme: syncedTheme,
           });
         }
       },
@@ -660,6 +666,7 @@ export default function App() {
 
       <TrailerModal
         item={trailerItem}
+        playerTheme={siteSettings.playerTheme}
         onClose={() => setTrailerItem(null)}
         onWatchFull={(item) => setPlayerState({ item, episode: 1 })}
       />
@@ -668,6 +675,7 @@ export default function App() {
         item={playerState?.item || null}
         initialEpisode={playerState?.episode || 1}
         initialServerIndex={playerState?.serverIndex || 0}
+        playerTheme={siteSettings.playerTheme}
         onClose={() => setPlayerState(null)}
       />
 

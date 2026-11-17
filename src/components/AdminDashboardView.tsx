@@ -21,10 +21,12 @@ import {
   Lock,
   LogOut,
   MessageSquarePlus,
+  Palette,
   Pin,
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Server,
   Settings,
@@ -70,12 +72,21 @@ import {
   setCustomApiBaseUrl,
 } from '../lib/clientScraper';
 import {
+  DEFAULT_PLAYER_THEME,
+  PLAYER_THEME_PRESETS,
+  buildPlayerThemeVars,
+  loadStoredPlayerTheme,
+  normalizePlayerTheme,
+  saveStoredPlayerTheme,
+} from '../lib/playerTheme';
+import {
   AdminRoleRecord,
   CastMember,
   DownloadMirror,
   EpisodeItem,
   MediaItem,
   MediaKind,
+  PlayerThemeConfig,
   RequestStatus,
   SeasonItem,
   SiteSettings,
@@ -379,11 +390,31 @@ export function AdminDashboardView({
   const [creatingAdmin, setCreatingAdmin] = useState(false);
 
   // Settings tab state
-  const [settingsForm, setSettingsForm] = useState<SiteSettings>(siteSettings);
+  const [settingsForm, setSettingsForm] = useState<SiteSettings>(() => ({
+    ...siteSettings,
+    playerTheme: normalizePlayerTheme(siteSettings.playerTheme || loadStoredPlayerTheme()),
+  }));
   const [customApiUrl, setCustomApiUrl] = useState<string>(() => getCustomApiBaseUrl());
   useEffect(() => {
-    setSettingsForm(siteSettings);
+    setSettingsForm({
+      ...siteSettings,
+      playerTheme: normalizePlayerTheme(siteSettings.playerTheme || loadStoredPlayerTheme()),
+    });
   }, [siteSettings]);
+
+  const activePlayerTheme = normalizePlayerTheme(
+    settingsForm.playerTheme || siteSettings.playerTheme || loadStoredPlayerTheme()
+  );
+
+  const updatePlayerTheme = (patch: Partial<PlayerThemeConfig>, keepPreset = false) => {
+    const next = normalizePlayerTheme({
+      ...activePlayerTheme,
+      ...patch,
+      presetId: keepPreset ? (patch.presetId ?? activePlayerTheme.presetId) : 'custom',
+    });
+    saveStoredPlayerTheme(next);
+    setSettingsForm((prev) => ({ ...prev, playerTheme: next }));
+  };
 
   // Pre-Publish Preview Modal state
   const [previewModalState, setPreviewModalState] = useState<{
@@ -1127,10 +1158,32 @@ export function AdminDashboardView({
     if (!user) return;
     setBusyAction(true);
     try {
-      await saveSiteSettingsToFirestore(settingsForm, user.uid);
-      onNotify('تم حفظ إعدادات RahaL TV في قاعدة البيانات بنجاح');
+      const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
+      await saveSiteSettingsToFirestore(
+        { ...settingsForm, playerTheme: normalizedTheme },
+        user.uid
+      );
+      onNotify('تم حفظ الإعدادات وثيم المشغل الداخلي وتطبيقهما تلقائياً بنجاح');
     } catch {
       onNotify('تعذر حفظ الإعدادات');
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleSavePlayerThemeOnly = async (themeToSave: PlayerThemeConfig) => {
+    const clean = saveStoredPlayerTheme(themeToSave);
+    setSettingsForm((prev) => ({ ...prev, playerTheme: clean }));
+    if (!user) {
+      onNotify('تم تطبيق الثيم محلياً — سجّل الدخول كمشرف لحفظه لكل الزوار');
+      return;
+    }
+    setBusyAction(true);
+    try {
+      await saveSiteSettingsToFirestore({ ...settingsForm, playerTheme: clean }, user.uid);
+      onNotify('تم حفظ وتطبيق ثيم المشغّل الداخلي تلقائياً على جميع مشغّلات الموقع!');
+    } catch {
+      onNotify('تعذر حفظ الثيم في قاعدة البيانات');
     } finally {
       setBusyAction(false);
     }
@@ -3705,6 +3758,401 @@ export function AdminDashboardView({
                   </div>
                 </div>
 
+                {/* Internal Video Player Theme Customizer */}
+                <div className="rounded-2xl bg-[#1a242e]/65 border border-white/10 p-5 space-y-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-4">
+                    <div className="flex items-center gap-3">
+                      <div
+                        style={{
+                          backgroundColor: `${activePlayerTheme.accentColor}22`,
+                          borderColor: `${activePlayerTheme.accentColor}55`,
+                          color: activePlayerTheme.accentColor,
+                        }}
+                        className="flex h-10 w-10 items-center justify-center rounded-xl border"
+                      >
+                        <Palette className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-extrabold text-white">
+                          تخصيص ثيم المشغّل الداخلي (يُطبّق تلقائياً)
+                        </h3>
+                        <p className="text-[11px] text-[#b7c9ef] mt-0.5">
+                          تحكّم في ألوان الإطار، شكل الحواف، اسم المشغّل، وأشرطة التحكم — بمجرد الحفظ يتغير المشغّل تلقائياً في كل الموقع.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const resetTheme = { ...DEFAULT_PLAYER_THEME };
+                          saveStoredPlayerTheme(resetTheme);
+                          setSettingsForm((prev) => ({ ...prev, playerTheme: resetTheme }));
+                          onNotify('تمت استعادة الثيم الافتراضي للمشغّل — اضغط حفظ لتعميمه');
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-[#0c1821] hover:bg-white/10 border border-white/10 px-3 py-2 text-[11px] font-bold text-[#b7c9ef] hover:text-white cursor-pointer"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>استعادة الافتراضي</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={busyAction}
+                        onClick={() => void handleSavePlayerThemeOnly(activePlayerTheme)}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] px-4 py-2 text-[11px] font-black text-[#06131c] shadow cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>{busyAction ? 'جاري التعميم...' : 'تطبيق وحفظ الثيم تلقائياً'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Quick Presets */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-bold text-[#b7c9ef]">
+                      ثيمات جاهزة سريعة
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                      {PLAYER_THEME_PRESETS.map((preset) => {
+                        const isSelected = activePlayerTheme.presetId === preset.id;
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => updatePlayerTheme(preset.theme, true)}
+                            className={`text-right rounded-xl border p-3 transition-all cursor-pointer ${
+                              isSelected
+                                ? 'bg-[#0c1821] border-white/40 shadow-lg'
+                                : 'bg-[#0c1821]/60 border-white/10 hover:border-white/25'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2 mb-1.5">
+                              <span className="text-xs font-extrabold text-white truncate">
+                                {preset.name}
+                              </span>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <span
+                                  className="h-3.5 w-3.5 rounded-full border border-white/25"
+                                  style={{ backgroundColor: preset.theme.accentColor }}
+                                />
+                                <span
+                                  className="h-3.5 w-3.5 rounded-full border border-white/25"
+                                  style={{ backgroundColor: preset.theme.frameBgColor }}
+                                />
+                              </div>
+                            </div>
+                            <p className="text-[10px] text-[#b7c9ef]/80 leading-snug">
+                              {preset.subtitle}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Theme Controls + Live Mini Preview Grid */}
+                  <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
+                    {/* Controls Column */}
+                    <div className="xl:col-span-6 space-y-4">
+                      <div>
+                        <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
+                          اسم المشغّل الظاهر داخل الإطار
+                        </label>
+                        <input
+                          type="text"
+                          maxLength={40}
+                          value={activePlayerTheme.brandLabel}
+                          onChange={(e) =>
+                            updatePlayerTheme({ brandLabel: e.target.value })
+                          }
+                          placeholder="RahaL TV"
+                          className="w-full rounded-xl bg-[#0c1821] border border-white/10 px-3.5 py-2 text-xs font-bold text-white focus:border-[#f9c400] focus:outline-none"
+                        />
+                      </div>
+
+                      {/* Color Pickers */}
+                      <div className="grid grid-cols-3 gap-2.5">
+                        <label className="block rounded-xl bg-[#0c1821] border border-white/10 p-2.5 cursor-pointer hover:border-white/25">
+                          <span className="block text-[10px] font-bold text-[#b7c9ef] mb-1.5">
+                            اللون المميز
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="color"
+                              value={activePlayerTheme.accentColor}
+                              onChange={(e) =>
+                                updatePlayerTheme({ accentColor: e.target.value })
+                              }
+                              className="h-7 w-9 rounded border-0 bg-transparent cursor-pointer"
+                            />
+                            <span className="font-latin text-[11px] font-bold text-white uppercase">
+                              {activePlayerTheme.accentColor}
+                            </span>
+                          </div>
+                        </label>
+
+                        <label className="block rounded-xl bg-[#0c1821] border border-white/10 p-2.5 cursor-pointer hover:border-white/25">
+                          <span className="block text-[10px] font-bold text-[#b7c9ef] mb-1.5">
+                            خلفية الإطار
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="color"
+                              value={activePlayerTheme.frameBgColor}
+                              onChange={(e) =>
+                                updatePlayerTheme({ frameBgColor: e.target.value })
+                              }
+                              className="h-7 w-9 rounded border-0 bg-transparent cursor-pointer"
+                            />
+                            <span className="font-latin text-[11px] font-bold text-white uppercase">
+                              {activePlayerTheme.frameBgColor}
+                            </span>
+                          </div>
+                        </label>
+
+                        <label className="block rounded-xl bg-[#0c1821] border border-white/10 p-2.5 cursor-pointer hover:border-white/25">
+                          <span className="block text-[10px] font-bold text-[#b7c9ef] mb-1.5">
+                            خلفية النافذة
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="color"
+                              value={activePlayerTheme.modalBgColor}
+                              onChange={(e) =>
+                                updatePlayerTheme({ modalBgColor: e.target.value })
+                              }
+                              className="h-7 w-9 rounded border-0 bg-transparent cursor-pointer"
+                            />
+                            <span className="font-latin text-[11px] font-bold text-white uppercase">
+                              {activePlayerTheme.modalBgColor}
+                            </span>
+                          </div>
+                        </label>
+                      </div>
+
+                      {/* Radius & Glow Controls */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <span className="block text-[11px] font-bold text-[#b7c9ef] mb-1.5">
+                            استدارة الحواف
+                          </span>
+                          <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-[#0c1821] p-1 border border-white/10">
+                            {(
+                              [
+                                { id: 'sharp', label: 'حاد' },
+                                { id: 'rounded', label: 'ناعم' },
+                                { id: 'cinema', label: 'سينمائي' },
+                              ] as const
+                            ).map((opt) => (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                onClick={() => updatePlayerTheme({ borderRadius: opt.id })}
+                                className={`rounded-lg py-1.5 text-[11px] font-extrabold cursor-pointer transition-colors ${
+                                  activePlayerTheme.borderRadius === opt.id
+                                    ? 'bg-white/15 text-white'
+                                    : 'text-[#b7c9ef] hover:text-white'
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <span className="block text-[11px] font-bold text-[#b7c9ef] mb-1.5">
+                            شدة التوهج حول المربع
+                          </span>
+                          <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-[#0c1821] p-1 border border-white/10">
+                            {(
+                              [
+                                { id: 'none', label: 'بدون' },
+                                { id: 'soft', label: 'خفيف' },
+                                { id: 'strong', label: 'قوي' },
+                              ] as const
+                            ).map((opt) => (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                onClick={() => updatePlayerTheme({ glowIntensity: opt.id })}
+                                className={`rounded-lg py-1.5 text-[11px] font-extrabold cursor-pointer transition-colors ${
+                                  activePlayerTheme.glowIntensity === opt.id
+                                    ? 'bg-white/15 text-white'
+                                    : 'text-[#b7c9ef] hover:text-white'
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Visibility Toggles */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <label className="flex items-center gap-2 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-[11px] font-bold text-white cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={activePlayerTheme.showHeaderBar}
+                            onChange={(e) =>
+                              updatePlayerTheme({ showHeaderBar: e.target.checked })
+                            }
+                            className="h-3.5 w-3.5 accent-[#f9c400]"
+                          />
+                          <span>الشريط العلوي</span>
+                        </label>
+                        <label className="flex items-center gap-2 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-[11px] font-bold text-white cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={activePlayerTheme.showFooterBar}
+                            onChange={(e) =>
+                              updatePlayerTheme({ showFooterBar: e.target.checked })
+                            }
+                            className="h-3.5 w-3.5 accent-[#f9c400]"
+                          />
+                          <span>الشريط السفلي</span>
+                        </label>
+                        <label className="flex items-center gap-2 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-[11px] font-bold text-white cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={activePlayerTheme.showBrandBadge}
+                            onChange={(e) =>
+                              updatePlayerTheme({ showBrandBadge: e.target.checked })
+                            }
+                            className="h-3.5 w-3.5 accent-[#f9c400]"
+                          />
+                          <span>شعار المشغّل</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Live Mini-Player Preview Column */}
+                    <div className="xl:col-span-6 space-y-2">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-[#b7c9ef]">
+                        <span>معاينة حية لمربع المشغّل الداخلي</span>
+                        <span className="font-latin text-[10px] text-white/60">Live Preview</span>
+                      </div>
+
+                      <div
+                        style={{
+                          ...buildPlayerThemeVars(activePlayerTheme),
+                          backgroundColor: 'var(--pt-modal)',
+                          borderColor: 'var(--pt-accent-20)',
+                          borderRadius: 'var(--pt-radius)',
+                        }}
+                        className="border p-3 shadow-2xl"
+                      >
+                        <div className="grid grid-cols-12 gap-2.5 items-stretch">
+                          {/* Mini Server Sidebar */}
+                          <div className="col-span-4 rounded-xl bg-black/25 border border-white/[0.07] p-2 space-y-1.5">
+                            <div className="flex items-center justify-between px-1 pb-1 border-b border-white/[0.06] text-[10px] font-bold text-white/80">
+                              <span>السيرفرات</span>
+                              <span
+                                style={{
+                                  backgroundColor: 'var(--pt-accent-12)',
+                                  color: 'var(--pt-accent)',
+                                }}
+                                className="font-latin rounded px-1.5 py-0.5 text-[9px] font-black tabular-nums"
+                              >
+                                2
+                              </span>
+                            </div>
+                            <div
+                              style={{
+                                backgroundColor: 'var(--pt-accent)',
+                                color: 'var(--pt-accent-contrast)',
+                                borderColor: 'var(--pt-accent-55)',
+                              }}
+                              className="flex items-center justify-between rounded-lg border px-2 py-1.5 text-[10px] font-extrabold"
+                            >
+                              <span>سيرفر 1</span>
+                              <span className="font-latin text-[9px] opacity-85">HD</span>
+                            </div>
+                            <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-white/[0.04] px-2 py-1.5 text-[10px] font-bold text-white/75">
+                              <span>سيرفر 2</span>
+                              <span className="font-latin text-[9px] text-white/50">HD</span>
+                            </div>
+                          </div>
+
+                          {/* Mini Player Cinema Box */}
+                          <div
+                            style={{
+                              backgroundColor: 'var(--pt-frame)',
+                              borderColor: 'var(--pt-accent-35)',
+                              borderRadius: 'var(--pt-radius)',
+                              boxShadow: 'var(--pt-shadow)',
+                            }}
+                            className="col-span-8 flex flex-col border overflow-hidden"
+                          >
+                            {activePlayerTheme.showHeaderBar && (
+                              <div
+                                style={{ backgroundColor: 'var(--pt-frame)' }}
+                                className="flex items-center justify-between gap-2 px-2.5 py-1.5 border-b border-white/[0.08]"
+                              >
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  {activePlayerTheme.showBrandBadge && (
+                                    <span
+                                      style={{
+                                        backgroundColor: 'var(--pt-accent)',
+                                        color: 'var(--pt-accent-contrast)',
+                                      }}
+                                      className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded"
+                                    >
+                                      <Play className="w-2.5 h-2.5 fill-current" />
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] font-extrabold text-white truncate">
+                                    {activePlayerTheme.brandLabel || 'RahaL TV'}
+                                  </span>
+                                </div>
+                                <span className="rounded bg-white/[0.08] px-1.5 py-0.5 text-[9px] font-bold text-white/75">
+                                  تكبير
+                                </span>
+                              </div>
+                            )}
+
+                            <div className="aspect-video w-full bg-[#03060a] flex items-center justify-center">
+                              <div
+                                style={{
+                                  backgroundColor: 'var(--pt-accent-20)',
+                                  borderColor: 'var(--pt-accent-55)',
+                                  color: 'var(--pt-accent)',
+                                }}
+                                className="flex h-9 w-9 items-center justify-center rounded-full border"
+                              >
+                                <Play className="w-4 h-4 fill-current" />
+                              </div>
+                            </div>
+
+                            {activePlayerTheme.showFooterBar && (
+                              <div
+                                style={{ backgroundColor: 'var(--pt-frame)' }}
+                                className="flex items-center justify-between gap-2 px-2.5 py-1.5 border-t border-white/[0.08]"
+                              >
+                                <span className="text-[9px] font-bold text-white/60 truncate">
+                                  مشغل {activePlayerTheme.brandLabel || 'RahaL TV'} المحمي
+                                </span>
+                                <span
+                                  style={{
+                                    backgroundColor: 'var(--pt-accent)',
+                                    color: 'var(--pt-accent-contrast)',
+                                  }}
+                                  className="rounded px-2 py-0.5 text-[9px] font-extrabold shrink-0"
+                                >
+                                  السيرفر التالي
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <button
                   type="submit"
                   disabled={busyAction}
@@ -4747,6 +5195,7 @@ export function AdminDashboardView({
         item={previewModalState?.item || null}
         onClose={() => setPreviewModalState(null)}
         busy={busyAction}
+        playerTheme={activePlayerTheme}
         publishLabel={
           previewModalState?.source === 'editor' && !isCreatingNew
             ? 'حفظ التعديلات في قاعدة البيانات'

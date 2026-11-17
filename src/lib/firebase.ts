@@ -31,6 +31,7 @@ import {
   SiteSettings,
   VisitorRequest,
 } from '../types/media';
+import { DEFAULT_PLAYER_THEME, saveStoredPlayerTheme } from './playerTheme';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -518,6 +519,7 @@ export async function saveWatchlistToFirestore(uid: string, watchlistIds: string
 
 export async function saveSiteSettingsToFirestore(settings: SiteSettings, uid: string) {
   const path = 'settings/general';
+  const normalizedTheme = saveStoredPlayerTheme(settings.playerTheme || DEFAULT_PLAYER_THEME);
   try {
     await setDoc(doc(db, 'settings', 'general'), {
       siteName: settings.siteName.trim().slice(0, 80) || 'RahaL TV',
@@ -527,6 +529,7 @@ export async function saveSiteSettingsToFirestore(settings: SiteSettings, uid: s
       featuredLimit: Math.min(20, Math.max(1, Number(settings.featuredLimit) || 5)),
       maintenanceMode: Boolean(settings.maintenanceMode),
       maintenanceMessage: (settings.maintenanceMessage || '').trim().slice(0, 500),
+      playerTheme: normalizedTheme,
       updatedBy: uid,
       updatedAt: serverTimestamp(),
     });

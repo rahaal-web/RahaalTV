@@ -117,6 +117,26 @@ export interface VisitorRequest {
   createdAt: string;
 }
 
+export type PlayerThemePresetId =
+  | 'rahaltv-crimson'
+  | 'cinema-gold'
+  | 'midnight-blue'
+  | 'emerald-neon'
+  | 'custom';
+
+export interface PlayerThemeConfig {
+  presetId: PlayerThemePresetId;
+  brandLabel: string;
+  accentColor: string;
+  frameBgColor: string;
+  modalBgColor: string;
+  borderRadius: 'sharp' | 'rounded' | 'cinema';
+  glowIntensity: 'none' | 'soft' | 'strong';
+  showHeaderBar: boolean;
+  showFooterBar: boolean;
+  showBrandBadge: boolean;
+}
+
 export interface SiteSettings {
   siteName: string;
   tagline: string;
@@ -125,6 +145,7 @@ export interface SiteSettings {
   featuredLimit: number;
   maintenanceMode: boolean;
   maintenanceMessage: string;
+  playerTheme?: PlayerThemeConfig;
 }
 
 export interface UserProfileRecord {

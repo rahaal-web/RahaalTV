@@ -37,7 +37,12 @@ import {
   registerMemberWithEmailPassword,
   signInWithEmailPassword,
 } from '../lib/firebase';
-import { MediaItem, VisitorRequest } from '../types/media';
+import {
+  buildPlayerThemeVars,
+  loadStoredPlayerTheme,
+  normalizePlayerTheme,
+} from '../lib/playerTheme';
+import { MediaItem, PlayerThemeConfig, VisitorRequest } from '../types/media';
 import { FooterTopic } from './Footer';
 
 /* ---------------- Watchlist Modal ---------------- */
@@ -138,6 +143,7 @@ export function WatchlistModal({
 /* ---------------- Trailer Modal ---------------- */
 interface TrailerModalProps {
   item: MediaItem | null;
+  playerTheme?: PlayerThemeConfig;
   onClose: () => void;
   onWatchFull: (item: MediaItem) => void;
 }
@@ -158,24 +164,46 @@ function normalizeTrailerUrl(url?: string): { kind: 'video' | 'iframe'; src: str
   return { kind: 'iframe', src: trimmed };
 }
 
-export function TrailerModal({ item, onClose, onWatchFull }: TrailerModalProps) {
+export function TrailerModal({ item, playerTheme, onClose, onWatchFull }: TrailerModalProps) {
   const [playing, setPlaying] = useState(true);
   if (!item) return null;
 
+  const theme = normalizePlayerTheme(playerTheme || loadStoredPlayerTheme());
+  const themeVars = buildPlayerThemeVars(theme);
   const parsedTrailer = normalizeTrailerUrl(item.trailerUrl);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5" style={themeVars}>
       <div className="fixed inset-0 bg-black/85 backdrop-blur-md" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-4xl rounded-3xl bg-[#0c1821] border-2 border-[#D92321]/75 shadow-[0_0_40px_-10px_rgba(217,35,33,0.45)] overflow-hidden">
-        <div className="flex items-center justify-between bg-gradient-to-l from-[#220a0e] via-[#131d27] to-[#220a0e] px-5 py-3.5 border-b border-[#D92321]/35">
+      <div
+        className="relative z-10 w-full max-w-4xl border overflow-hidden"
+        style={{
+          backgroundColor: 'var(--pt-frame)',
+          borderColor: 'var(--pt-accent-35)',
+          borderRadius: 'var(--pt-radius)',
+          boxShadow: 'var(--pt-shadow)',
+        }}
+      >
+        <div
+          className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-white/[0.08]"
+          style={{ backgroundColor: 'var(--pt-modal)' }}
+        >
           <div className="flex items-center gap-2.5 min-w-0">
-            <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-[#D92321] text-white shrink-0">
+            <span
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg shrink-0"
+              style={{
+                backgroundColor: 'var(--pt-accent)',
+                color: 'var(--pt-accent-contrast)',
+              }}
+            >
               <Film className="w-4 h-4" />
             </span>
             <div className="min-w-0">
-              <span className="text-[10px] font-black tracking-wide text-[#ff7371] block">
-                RAHAL TV TRAILER
+              <span
+                className="text-[10px] font-black tracking-wide block uppercase"
+                style={{ color: 'var(--pt-accent)' }}
+              >
+                {theme.brandLabel} · TRAILER
               </span>
               <h3 className="font-display text-sm sm:text-base font-bold text-white truncate">
                 {item.trailerLabel}
@@ -189,7 +217,11 @@ export function TrailerModal({ item, onClose, onWatchFull }: TrailerModalProps) 
                 onClose();
                 onWatchFull(item);
               }}
-              className="hidden sm:inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-3.5 py-2 text-xs font-extrabold text-white cursor-pointer"
+              className="hidden sm:inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-extrabold transition-opacity hover:opacity-90 cursor-pointer"
+              style={{
+                backgroundColor: 'var(--pt-accent)',
+                color: 'var(--pt-accent-contrast)',
+              }}
             >
               <Play className="w-3.5 h-3.5 fill-current" />
               <span>مشاهدة العمل كامل</span>
@@ -197,7 +229,7 @@ export function TrailerModal({ item, onClose, onWatchFull }: TrailerModalProps) 
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white hover:bg-[#D92321] cursor-pointer"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/[0.06] border border-white/10 text-white/85 hover:bg-white/15 hover:text-white transition-colors cursor-pointer"
               aria-label="إغلاق الإعلان"
             >
               <X className="w-4 h-4" />
@@ -205,13 +237,8 @@ export function TrailerModal({ item, onClose, onWatchFull }: TrailerModalProps) 
           </div>
         </div>
 
-        {/* Trailer Viewport Inside Crimson Frame */}
+        {/* Clean Cinema 16:9 Trailer Stage */}
         <div className="relative aspect-video w-full bg-black overflow-hidden">
-          <span className="pointer-events-none absolute top-2 right-2 z-10 h-3 w-3 border-t-2 border-r-2 border-[#D92321]" />
-          <span className="pointer-events-none absolute top-2 left-2 z-10 h-3 w-3 border-t-2 border-l-2 border-[#D92321]" />
-          <span className="pointer-events-none absolute bottom-2 right-2 z-10 h-3 w-3 border-b-2 border-r-2 border-[#D92321]" />
-          <span className="pointer-events-none absolute bottom-2 left-2 z-10 h-3 w-3 border-b-2 border-l-2 border-[#D92321]" />
-
           {parsedTrailer ? (
             parsedTrailer.kind === 'video' ? (
               <video
@@ -239,13 +266,17 @@ export function TrailerModal({ item, onClose, onWatchFull }: TrailerModalProps) 
                   playing ? 'scale-110' : 'scale-100'
                 }`}
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-black via-black/30 to-transparent" />
+              <div className="absolute inset-0 bg-gradient-to-t from-black via-black/35 to-transparent" />
 
               <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
                 <button
                   type="button"
                   onClick={() => setPlaying((p) => !p)}
-                  className="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-[#D92321]/90 text-white shadow-[0_0_30px_rgba(217,35,33,0.65)] hover:scale-105 transition-transform cursor-pointer"
+                  className="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full shadow-2xl hover:scale-105 transition-transform cursor-pointer"
+                  style={{
+                    backgroundColor: 'var(--pt-accent)',
+                    color: 'var(--pt-accent-contrast)',
+                  }}
                   aria-label={playing ? 'إيقاف مؤقت' : 'تشغيل'}
                 >
                   {playing ? <Pause className="w-7 h-7" /> : <Play className="w-7 h-7 fill-current" />}
@@ -256,17 +287,18 @@ export function TrailerModal({ item, onClose, onWatchFull }: TrailerModalProps) 
                 <p className="mt-1 max-w-xl text-xs sm:text-sm text-[#b7c9ef]">{item.tagline}</p>
               </div>
 
-              <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-4 bg-black/70 px-5 py-3 backdrop-blur-sm">
+              <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-4 bg-black/75 px-5 py-3 backdrop-blur-sm border-t border-white/10">
                 <div className="flex items-center gap-3 text-xs font-bold text-white">
-                  <Volume2 className="w-4 h-4 text-[#D92321]" />
+                  <Volume2 className="w-4 h-4" style={{ color: 'var(--pt-accent)' }} />
                   <span className="font-latin tabular-nums">
                     {playing ? '00:48' : '00:00'} / {item.trailerDuration}
                   </span>
                   <div className="hidden sm:block h-1.5 w-44 rounded-full bg-white/20 overflow-hidden">
                     <div
-                      className={`h-full bg-[#D92321] transition-all duration-700 ${
+                      className={`h-full transition-all duration-700 ${
                         playing ? 'w-2/5' : 'w-0'
                       }`}
+                      style={{ backgroundColor: 'var(--pt-accent)' }}
                     />
                   </div>
                 </div>
@@ -277,7 +309,11 @@ export function TrailerModal({ item, onClose, onWatchFull }: TrailerModalProps) 
                     onClose();
                     onWatchFull(item);
                   }}
-                  className="inline-flex items-center gap-2 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-4 py-2 text-xs font-extrabold text-white cursor-pointer"
+                  className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-extrabold transition-opacity hover:opacity-90 cursor-pointer"
+                  style={{
+                    backgroundColor: 'var(--pt-accent)',
+                    color: 'var(--pt-accent-contrast)',
+                  }}
                 >
                   <Play className="w-3.5 h-3.5 fill-current" />
                   <span>مشاهدة العمل كامل</span>
@@ -296,6 +332,7 @@ interface PlayerModalProps {
   item: MediaItem | null;
   initialEpisode?: number;
   initialServerIndex?: number;
+  playerTheme?: PlayerThemeConfig;
   onClose: () => void;
 }
 
@@ -335,6 +372,7 @@ export function PlayerModal({
   item,
   initialEpisode = 1,
   initialServerIndex = 0,
+  playerTheme,
   onClose,
 }: PlayerModalProps) {
   const [selectedServer, setSelectedServer] = useState(initialServerIndex);
@@ -610,18 +648,36 @@ export function PlayerModal({
     setSelectedServer(idx);
   };
 
+  const theme = normalizePlayerTheme(playerTheme || loadStoredPlayerTheme());
+  const themeVars = buildPlayerThemeVars(theme);
+
   const healthyNextIdx = serversList.findIndex(
     (_, idx) => idx !== selectedServer && filterMap[idx]?.ok !== false
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4" style={themeVars}>
       <div className="fixed inset-0 bg-black/90 backdrop-blur-md" onClick={onClose} />
-      <div className="relative z-10 w-[96vw] max-w-[1340px] rounded-2xl sm:rounded-3xl bg-[#0c1821] border border-[#D92321]/35 shadow-2xl overflow-hidden max-h-[95vh] flex flex-col">
-        {/* Compact Crimson Branded Top Bar */}
-        <div className="flex items-center justify-between gap-3 bg-[#151e27] px-4 py-2.5 border-b border-[#D92321]/30">
+      <div
+        className="relative z-10 w-[96vw] max-w-[1340px] border border-white/[0.09] shadow-2xl overflow-hidden max-h-[95vh] flex flex-col"
+        style={{
+          backgroundColor: 'var(--pt-modal)',
+          borderRadius: 'var(--pt-radius)',
+        }}
+      >
+        {/* Clean Unified Modal Top Bar */}
+        <div
+          className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-white/[0.08]"
+          style={{ backgroundColor: 'var(--pt-frame)' }}
+        >
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#D92321] text-white shrink-0 shadow-[0_4px_14px_rgba(217,35,33,0.45)]">
+            <div
+              className="flex h-8 w-8 items-center justify-center rounded-lg shrink-0 shadow-md"
+              style={{
+                backgroundColor: 'var(--pt-accent)',
+                color: 'var(--pt-accent-contrast)',
+              }}
+            >
               <Tv className="w-4 h-4" />
             </div>
             <div className="min-w-0">
@@ -629,14 +685,14 @@ export function PlayerModal({
                 {item.title}
                 {item.kind === 'series' ? ` — الحلقة ${String(episodeNum).padStart(2, '0')}` : ''}
               </h3>
-              <p className="text-[11px] text-[#b7c9ef] flex items-center gap-1.5 tabular-nums">
-                <span className="font-bold text-[#ff7674]">سيرفر {selectedServer + 1}</span>
+              <p className="text-[11px] text-[#9fb2d4] flex items-center gap-1.5 tabular-nums">
+                <span className="font-extrabold text-white">سيرفر {selectedServer + 1}</span>
                 <span>·</span>
                 <span className="font-latin font-black text-[#f9c400]">{activeQuality}</span>
                 {isFiltering && (
                   <>
                     <span>·</span>
-                    <span className="inline-flex items-center gap-1 text-[10px] text-[#ff8a88] font-bold">
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold" style={{ color: 'var(--pt-accent)' }}>
                       <Loader2 className="w-3 h-3 animate-spin" />
                       <span>فحص السيرفرات...</span>
                     </span>
@@ -649,7 +705,7 @@ export function PlayerModal({
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#D92321]/15 border border-[#D92321]/40 text-white hover:bg-[#D92321] transition-colors cursor-pointer shrink-0"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/[0.06] border border-white/10 text-white/85 hover:bg-white/15 hover:text-white transition-colors cursor-pointer shrink-0"
             aria-label="إغلاق المشغل"
           >
             <X className="w-4 h-4" />
@@ -661,8 +717,8 @@ export function PlayerModal({
           <div
             className={`flex items-center justify-between gap-3 px-4 py-2 text-xs font-bold border-b ${
               filterAlert.kind === 'switched'
-                ? 'bg-[#f9c400]/12 border-[#f9c400]/30 text-[#f9c400]'
-                : 'bg-[#D92321]/15 border-[#D92321]/35 text-[#ff8a88]'
+                ? 'bg-[#f9c400]/10 border-[#f9c400]/25 text-[#f9c400]'
+                : 'bg-[#D92321]/12 border-[#D92321]/25 text-[#ff9b99]'
             }`}
           >
             <div className="flex items-center gap-2 min-w-0">
@@ -680,22 +736,31 @@ export function PlayerModal({
           </div>
         )}
 
-        {/* Main Body: Right Server Rail + Custom Red RahaL TV Video Box */}
-        <div className="flex-1 min-h-0 overflow-y-auto p-2.5 sm:p-3.5">
+        {/* Main Body: Server Rail + Sleek Custom-Themed Video Stage */}
+        <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4">
           <div
-            className={`grid grid-cols-1 gap-3 items-start ${
-              isTheaterMode ? 'lg:grid-cols-1' : 'lg:grid-cols-[192px_minmax(0,1fr)]'
+            className={`grid grid-cols-1 gap-3.5 items-start ${
+              isTheaterMode ? 'lg:grid-cols-1' : 'lg:grid-cols-[200px_minmax(0,1fr)]'
             }`}
           >
             {/* Right Sidebar: Strict سيرفر 1, سيرفر 2 ... */}
             {!isTheaterMode && (
-              <aside className="rounded-2xl bg-[#101923] border border-[#D92321]/25 p-2.5 space-y-2">
-                <div className="flex items-center justify-between px-1">
+              <aside
+                className="rounded-xl border border-white/[0.08] p-2.5 space-y-2"
+                style={{ backgroundColor: 'var(--pt-frame)' }}
+              >
+                <div className="flex items-center justify-between px-1 pb-1 border-b border-white/[0.06]">
                   <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold text-white">
-                    <Server className="w-3.5 h-3.5 text-[#D92321]" />
+                    <Server className="w-3.5 h-3.5" style={{ color: 'var(--pt-accent)' }} />
                     <span>سيرفرات المشاهدة</span>
                   </span>
-                  <span className="font-latin tabular-nums rounded bg-[#D92321]/20 border border-[#D92321]/40 px-1.5 py-0.5 text-[10px] font-black text-[#ff8a88]">
+                  <span
+                    className="font-latin tabular-nums rounded px-1.5 py-0.5 text-[10px] font-black"
+                    style={{
+                      backgroundColor: 'var(--pt-accent-20)',
+                      color: 'var(--pt-accent)',
+                    }}
+                  >
                     {serversList.length}
                   </span>
                 </div>
@@ -718,23 +783,32 @@ export function PlayerModal({
                             ? `عطل في سيرفر ${idx + 1}: ${srvFilter?.reason}`
                             : `سيرفر ${idx + 1} (${qualityLabel})`
                         }
-                        style={{ animationDelay: `${idx * 35}ms` }}
-                        className={`moov-server-card moov-server-enter group flex items-center justify-between gap-1.5 rounded-xl border px-2.5 py-2 transition-all duration-300 cursor-pointer ${
+                        style={{
+                          animationDelay: `${idx * 35}ms`,
+                          ...(isActive
+                            ? {
+                                backgroundColor: 'var(--pt-accent)',
+                                color: 'var(--pt-accent-contrast)',
+                                borderColor: 'transparent',
+                              }
+                            : {}),
+                        }}
+                        className={`moov-server-enter group flex items-center justify-between gap-1.5 rounded-lg border px-2.5 py-2 transition-all duration-200 cursor-pointer ${
                           isActive
-                            ? 'moov-server-card-active bg-gradient-to-l from-[#D92321] via-[#b81b1a] to-[#7c1318] border-[#ff5a58]/80 text-white shadow-[0_8px_20px_-6px_rgba(217,35,33,0.65)]'
+                            ? 'shadow-lg font-black'
                             : isBroken
-                              ? 'bg-[#D92321]/10 border-[#D92321]/35 text-[#ff9d9b] opacity-75 hover:opacity-100'
-                              : 'bg-[#17212c] border-white/[0.08] text-white hover:border-[#D92321]/70 hover:bg-[#1d2734]'
+                              ? 'bg-[#D92321]/10 border-[#D92321]/25 text-[#ff9d9b] opacity-70 hover:opacity-100'
+                              : 'bg-white/[0.04] border-white/[0.07] text-white/90 hover:bg-white/[0.09] hover:border-white/20'
                         }`}
                       >
                         <div className="flex items-center gap-1.5 min-w-0">
                           <span
-                            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${
+                            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md transition-colors ${
                               isActive
-                                ? 'bg-black/35 text-[#f9c400]'
+                                ? 'bg-black/20 text-current'
                                 : isBroken
-                                  ? 'bg-[#D92321]/25 text-[#ff8a88]'
-                                  : 'bg-[#D92321]/15 text-[#D92321] group-hover:bg-[#D92321] group-hover:text-white'
+                                  ? 'bg-[#D92321]/20 text-[#ff8a88]'
+                                  : 'bg-white/[0.07] text-white/80'
                             }`}
                           >
                             <Play className="w-2.5 h-2.5 fill-current" />
@@ -754,8 +828,8 @@ export function PlayerModal({
                         <span
                           className={`font-latin shrink-0 rounded px-1.5 py-0.5 text-[10px] font-black ${
                             isActive
-                              ? 'bg-black/35 text-[#f9c400]'
-                              : 'bg-[#0c1821] text-[#b7c9ef] border border-white/10'
+                              ? 'bg-black/20 text-current'
+                              : 'bg-black/35 text-[#b7c9ef] border border-white/[0.06]'
                           }`}
                         >
                           {qualityLabel}
@@ -767,111 +841,140 @@ export function PlayerModal({
               </aside>
             )}
 
-            {/* Main Area: Custom Red RahaL TV Video Box + Series Episodes */}
+            {/* Main Area: Sleek Custom-Themed Video Box + Series Episodes */}
             <div className="min-w-0 space-y-3">
-              {/* Custom Branded Crimson Video Frame */}
               <div
                 ref={playerBoxRef}
-                className="rounded-2xl bg-[#070d14] border-2 border-[#D92321]/80 shadow-[0_0_40px_-10px_rgba(217,35,33,0.45)] overflow-hidden"
+                className="border overflow-hidden transition-all"
+                style={{
+                  backgroundColor: '#000000',
+                  borderColor: 'var(--pt-accent-35)',
+                  borderRadius: 'var(--pt-radius)',
+                  boxShadow: 'var(--pt-shadow)',
+                }}
               >
-                {/* Crimson Video Box Top Header */}
-                <div className="flex flex-wrap items-center justify-between gap-2 bg-gradient-to-l from-[#240a0e] via-[#131b24] to-[#240a0e] px-3.5 py-2 border-b border-[#D92321]/40">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#D92321] text-white shadow-[0_2px_10px_rgba(217,35,33,0.55)] shrink-0">
-                      <Play className="w-3.5 h-3.5 fill-current" />
-                    </span>
-                    <div className="flex items-center gap-2 text-xs min-w-0">
-                      <span className="font-latin font-black tracking-wide text-white">
-                        RahaL <span className="text-[#D92321]">TV</span>
-                      </span>
-                      <span className="text-white/25">·</span>
-                      <span className="font-extrabold text-[#ff8a88] tabular-nums">
-                        سيرفر {selectedServer + 1}
-                      </span>
-                      <span className="hidden sm:inline text-white/25">·</span>
-                      <span className="hidden sm:inline font-latin font-black text-[#f9c400]">
-                        {activeQuality}
-                      </span>
+                {/* Harmonious Obsidian Video Box Header Bar */}
+                {theme.showHeaderBar && (
+                  <div
+                    className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 border-b border-white/[0.08]"
+                    style={{ backgroundColor: 'var(--pt-frame)' }}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      {theme.showBrandBadge && (
+                        <span
+                          className="inline-flex h-6 px-2 items-center gap-1.5 rounded-md text-[11px] font-black tracking-wide shrink-0 shadow-sm"
+                          style={{
+                            backgroundColor: 'var(--pt-accent)',
+                            color: 'var(--pt-accent-contrast)',
+                          }}
+                        >
+                          <Play className="w-3 h-3 fill-current" />
+                          <span className="font-latin">{theme.brandLabel}</span>
+                        </span>
+                      )}
+                      <div className="flex items-center gap-1.5 text-xs min-w-0">
+                        <span className="font-extrabold text-white/95 tabular-nums">
+                          سيرفر {selectedServer + 1}
+                        </span>
+                        <span className="text-white/25">·</span>
+                        <span className="font-latin font-bold text-[#f9c400] text-[11px]">
+                          {activeQuality}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Sleek Unified Controls */}
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        disabled={selectedServer <= 0}
+                        onClick={() => handleManualServerSelect(Math.max(0, selectedServer - 1))}
+                        title="السيرفر السابق"
+                        aria-label="السيرفر السابق"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-white/[0.06] border border-white/[0.08] text-white/85 hover:bg-white/[0.14] hover:text-white disabled:opacity-30 transition-colors cursor-pointer"
+                      >
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={selectedServer >= serversList.length - 1}
+                        onClick={() =>
+                          handleManualServerSelect(Math.min(serversList.length - 1, selectedServer + 1))
+                        }
+                        title="السيرفر التالي"
+                        aria-label="السيرفر التالي"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-white/[0.06] border border-white/[0.08] text-white/85 hover:bg-white/[0.14] hover:text-white disabled:opacity-30 transition-colors cursor-pointer"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setPlayerReloadKey((k) => k + 1)}
+                        title="إعادة تحميل المشغل"
+                        aria-label="إعادة تحميل المشغل"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-white/[0.06] border border-white/[0.08] text-white/85 hover:bg-white/[0.14] hover:text-white transition-colors cursor-pointer"
+                      >
+                        <RotateCw className="w-3.5 h-3.5" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setIsTheaterMode((t) => !t)}
+                        title={isTheaterMode ? 'إظهار قائمة السيرفرات' : 'توسيع العرض'}
+                        aria-label={isTheaterMode ? 'إظهار قائمة السيرفرات' : 'توسيع العرض'}
+                        className={`hidden lg:inline-flex h-7 items-center gap-1 rounded-md border px-2.5 text-[11px] font-bold transition-colors cursor-pointer ${
+                          isTheaterMode
+                            ? 'border-transparent'
+                            : 'bg-white/[0.06] border-white/[0.08] text-white/85 hover:bg-white/[0.14] hover:text-white'
+                        }`}
+                        style={
+                          isTheaterMode
+                            ? {
+                                backgroundColor: 'var(--pt-accent)',
+                                color: 'var(--pt-accent-contrast)',
+                              }
+                            : undefined
+                        }
+                      >
+                        <MonitorPlay className="w-3.5 h-3.5" />
+                        <span>{isTheaterMode ? 'السيرفرات' : 'تكبير'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => void handleToggleFullscreen()}
+                        title="ملء الشاشة"
+                        aria-label="ملء الشاشة"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-opacity hover:opacity-90 cursor-pointer"
+                        style={{
+                          backgroundColor: 'var(--pt-accent)',
+                          color: 'var(--pt-accent-contrast)',
+                        }}
+                      >
+                        {isFullscreen ? (
+                          <Minimize2 className="w-3.5 h-3.5" />
+                        ) : (
+                          <Maximize2 className="w-3.5 h-3.5" />
+                        )}
+                      </button>
                     </div>
                   </div>
+                )}
 
-                  {/* Red-Accented Interactive Box Controls */}
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      disabled={selectedServer <= 0}
-                      onClick={() => handleManualServerSelect(Math.max(0, selectedServer - 1))}
-                      title="السيرفر السابق"
-                      aria-label="السيرفر السابق"
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#D92321]/15 border border-[#D92321]/35 text-[#ff8a88] hover:bg-[#D92321] hover:text-white disabled:opacity-35 transition-colors cursor-pointer"
-                    >
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={selectedServer >= serversList.length - 1}
-                      onClick={() =>
-                        handleManualServerSelect(Math.min(serversList.length - 1, selectedServer + 1))
-                      }
-                      title="السيرفر التالي"
-                      aria-label="السيرفر التالي"
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#D92321]/15 border border-[#D92321]/35 text-[#ff8a88] hover:bg-[#D92321] hover:text-white disabled:opacity-35 transition-colors cursor-pointer"
-                    >
-                      <ChevronLeft className="w-3.5 h-3.5" />
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setPlayerReloadKey((k) => k + 1)}
-                      title="إعادة تحميل المشغل"
-                      aria-label="إعادة تحميل المشغل"
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#D92321]/15 border border-[#D92321]/35 text-[#ff8a88] hover:bg-[#D92321] hover:text-white transition-colors cursor-pointer"
-                    >
-                      <RotateCw className="w-3.5 h-3.5" />
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setIsTheaterMode((t) => !t)}
-                      title={isTheaterMode ? 'إظهار قائمة السيرفرات' : 'وضع العرض الكامل (السينمائي)'}
-                      aria-label={isTheaterMode ? 'إظهار قائمة السيرفرات' : 'وضع السينما'}
-                      className={`hidden lg:inline-flex h-7 items-center gap-1 rounded-lg border px-2 text-[11px] font-bold transition-colors cursor-pointer ${
-                        isTheaterMode
-                          ? 'bg-[#D92321] border-[#D92321] text-white'
-                          : 'bg-[#D92321]/15 border-[#D92321]/35 text-[#ff8a88] hover:bg-[#D92321] hover:text-white'
-                      }`}
-                    >
-                      <MonitorPlay className="w-3.5 h-3.5" />
-                      <span>{isTheaterMode ? 'السيرفرات' : 'تكبير'}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => void handleToggleFullscreen()}
-                      title="ملء الشاشة"
-                      aria-label="ملء الشاشة"
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#D92321] text-white hover:bg-[#dc0e30] transition-colors cursor-pointer"
-                    >
-                      {isFullscreen ? (
-                        <Minimize2 className="w-3.5 h-3.5" />
-                      ) : (
-                        <Maximize2 className="w-3.5 h-3.5" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Inner Video Stage with Crisp Crimson Corner Framing */}
+                {/* Pure Edge-to-Edge 16:9 Video Stage */}
                 <div className="relative aspect-video w-full bg-black overflow-hidden">
-                  <span className="pointer-events-none absolute top-2 right-2 z-10 h-3.5 w-3.5 border-t-2 border-r-2 border-[#D92321]" />
-                  <span className="pointer-events-none absolute top-2 left-2 z-10 h-3.5 w-3.5 border-t-2 border-l-2 border-[#D92321]" />
-                  <span className="pointer-events-none absolute bottom-2 right-2 z-10 h-3.5 w-3.5 border-b-2 border-r-2 border-[#D92321]" />
-                  <span className="pointer-events-none absolute bottom-2 left-2 z-10 h-3.5 w-3.5 border-b-2 border-l-2 border-[#D92321]" />
-
                   {isBlockedHomepageUrl ? (
                     <div className="h-full w-full flex flex-col items-center justify-center p-6 text-center bg-[#090d14] space-y-3">
-                      <div className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-[#D92321]/20 border border-[#D92321]/50 text-[#D92321]">
+                      <div
+                        className="inline-flex h-14 w-14 items-center justify-center rounded-2xl border"
+                        style={{
+                          backgroundColor: 'var(--pt-accent-12)',
+                          borderColor: 'var(--pt-accent-35)',
+                          color: 'var(--pt-accent)',
+                        }}
+                      >
                         <AlertTriangle className="w-7 h-7" />
                       </div>
                       <h4 className="font-display text-base font-extrabold text-white">
@@ -884,7 +987,11 @@ export function PlayerModal({
                         <button
                           type="button"
                           onClick={() => handleManualServerSelect(healthyNextIdx)}
-                          className="inline-flex items-center gap-2 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-5 py-2.5 text-xs font-extrabold text-white cursor-pointer"
+                          className="inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-xs font-extrabold cursor-pointer"
+                          style={{
+                            backgroundColor: 'var(--pt-accent)',
+                            color: 'var(--pt-accent-contrast)',
+                          }}
                         >
                           <RefreshCw className="w-3.5 h-3.5" />
                           <span>الانتقال إلى سيرفر {healthyNextIdx + 1}</span>
@@ -926,7 +1033,13 @@ export function PlayerModal({
                       <div className="absolute inset-0 bg-gradient-to-t from-black via-black/25 to-black/40" />
 
                       <div className="absolute top-4 left-4 flex items-center gap-2">
-                        <span className="font-latin rounded-lg bg-[#D92321] px-2.5 py-1 text-[11px] font-black text-white">
+                        <span
+                          className="font-latin rounded-lg px-2.5 py-1 text-[11px] font-black"
+                          style={{
+                            backgroundColor: 'var(--pt-accent)',
+                            color: 'var(--pt-accent-contrast)',
+                          }}
+                        >
                           {activeQuality}
                         </span>
                       </div>
@@ -935,17 +1048,21 @@ export function PlayerModal({
                         <button
                           type="button"
                           onClick={() => setIsPlaying((p) => !p)}
-                          className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-[#D92321] text-white shadow-[0_0_32px_rgba(217,35,33,0.7)] hover:scale-105 transition-transform cursor-pointer"
+                          className="inline-flex h-16 w-16 items-center justify-center rounded-full shadow-2xl hover:scale-105 transition-transform cursor-pointer"
+                          style={{
+                            backgroundColor: 'var(--pt-accent)',
+                            color: 'var(--pt-accent-contrast)',
+                          }}
                           aria-label={isPlaying ? 'إيقاف التشغيل' : 'استئناف التشغيل'}
                         >
                           {isPlaying ? <Pause className="w-7 h-7" /> : <Play className="w-7 h-7 fill-current" />}
                         </button>
 
                         {subtitleLang !== 'off' && (
-                          <div className="mt-8 rounded-lg bg-black/75 px-4 py-1.5 text-sm font-bold text-white border border-[#D92321]/30">
+                          <div className="mt-8 rounded-lg bg-black/75 px-4 py-1.5 text-sm font-bold text-white border border-white/15">
                             {subtitleLang === 'ar'
-                              ? 'ترجمة عربية احترافية متزامنة — جاري البث على سيرفر RahaL TV'
-                              : 'English Subtitles Active — Streaming via RahaL TV CDN'}
+                              ? `ترجمة عربية احترافية متزامنة — ${theme.brandLabel}`
+                              : `English Subtitles Active — ${theme.brandLabel}`}
                           </div>
                         )}
                       </div>
@@ -955,7 +1072,7 @@ export function PlayerModal({
                           <button
                             type="button"
                             onClick={() => setIsPlaying((p) => !p)}
-                            className="hover:text-[#D92321] cursor-pointer"
+                            className="hover:opacity-80 cursor-pointer"
                           >
                             {isPlaying ? 'إيقاف' : 'تشغيل'}
                           </button>
@@ -979,9 +1096,17 @@ export function PlayerModal({
                               onClick={() => setSubtitleLang(sub.id)}
                               className={`rounded-lg px-2.5 py-1 font-bold cursor-pointer ${
                                 subtitleLang === sub.id
-                                  ? 'bg-[#D92321] text-white'
+                                  ? ''
                                   : 'bg-white/10 text-[#b7c9ef] hover:text-white'
                               }`}
+                              style={
+                                subtitleLang === sub.id
+                                  ? {
+                                      backgroundColor: 'var(--pt-accent)',
+                                      color: 'var(--pt-accent-contrast)',
+                                    }
+                                  : undefined
+                              }
                             >
                               {sub.label}
                             </button>
@@ -992,30 +1117,44 @@ export function PlayerModal({
                   )}
                 </div>
 
-                {/* Crimson Video Box Footer Bar */}
-                <div className="flex flex-wrap items-center justify-between gap-2 bg-[#0c121a] px-3.5 py-2 border-t border-[#D92321]/30 text-[11px]">
-                  <div className="flex items-center gap-2 text-[#b7c9ef]">
-                    <ShieldCheck className="w-3.5 h-3.5 text-[#D92321] shrink-0" />
-                    <span>مشغل RahaL TV المحمي — إذا لم يعمل الفيديو اضغط على السيرفر التالي</span>
+                {/* Clean Footer Bar */}
+                {theme.showFooterBar && (
+                  <div
+                    className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 border-t border-white/[0.08] text-[11px]"
+                    style={{ backgroundColor: 'var(--pt-frame)' }}
+                  >
+                    <div className="flex items-center gap-2 text-[#9fb2d4]">
+                      <ShieldCheck className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--pt-accent)' }} />
+                      <span>
+                        مشغّل <strong className="text-white">{theme.brandLabel}</strong> المحمي — إذا تعذر التحميل بدّل للسيرفر التالي
+                      </span>
+                    </div>
+                    {serversList.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleManualServerSelect((selectedServer + 1) % serversList.length)
+                        }
+                        className="inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-[11px] font-extrabold transition-opacity hover:opacity-90 cursor-pointer"
+                        style={{
+                          backgroundColor: 'var(--pt-accent)',
+                          color: 'var(--pt-accent-contrast)',
+                        }}
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>السيرفر التالي</span>
+                      </button>
+                    )}
                   </div>
-                  {serversList.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleManualServerSelect((selectedServer + 1) % serversList.length)
-                      }
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-[#D92321] hover:bg-[#dc0e30] px-3 py-1 text-[11px] font-extrabold text-white cursor-pointer"
-                    >
-                      <RefreshCw className="w-3 h-3" />
-                      <span>السيرفر التالي</span>
-                    </button>
-                  )}
-                </div>
+                )}
               </div>
 
               {/* Series Episodes Switcher */}
               {episodes.length > 0 && (
-                <div className="rounded-2xl bg-[#1a242e]/60 border border-white/[0.08] p-3">
+                <div
+                  className="rounded-xl border border-white/[0.08] p-3"
+                  style={{ backgroundColor: 'var(--pt-frame)' }}
+                >
                   <p className="text-xs font-extrabold text-white mb-2">التنقل السريع بين الحلقات:</p>
                   <div className="flex flex-wrap gap-1.5">
                     {episodes.map((ep) => (
@@ -1025,9 +1164,17 @@ export function PlayerModal({
                         onClick={() => setEpisodeNum(ep.number)}
                         className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors cursor-pointer ${
                           episodeNum === ep.number
-                            ? 'bg-[#D92321] text-white'
-                            : 'bg-[#0c1821] text-[#b7c9ef] border border-white/10 hover:text-white'
+                            ? ''
+                            : 'bg-white/[0.05] text-[#b7c9ef] border border-white/10 hover:text-white'
                         }`}
+                        style={
+                          episodeNum === ep.number
+                            ? {
+                                backgroundColor: 'var(--pt-accent)',
+                                color: 'var(--pt-accent-contrast)',
+                              }
+                            : undefined
+                        }
                       >
                         الحلقة {String(ep.number).padStart(2, '0')}
                       </button>

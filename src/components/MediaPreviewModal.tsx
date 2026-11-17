@@ -26,7 +26,12 @@ import {
   handleBackdropError,
   handlePosterError,
 } from '../lib/mediaFilters';
-import { MediaItem } from '../types/media';
+import {
+  buildPlayerThemeVars,
+  loadStoredPlayerTheme,
+  normalizePlayerTheme,
+} from '../lib/playerTheme';
+import { MediaItem, PlayerThemeConfig } from '../types/media';
 import { MovieCard } from './MovieCard';
 
 interface MediaPreviewModalProps {
@@ -35,6 +40,7 @@ interface MediaPreviewModalProps {
   onConfirmPublish?: () => void;
   publishLabel?: string;
   busy?: boolean;
+  playerTheme?: PlayerThemeConfig;
 }
 
 function extractSafePreviewSrc(embedCode?: string, url?: string): string | null {
@@ -59,11 +65,15 @@ export function MediaPreviewModal({
   onConfirmPublish,
   publishLabel = 'تأكيد النشر في قاعدة البيانات',
   busy = false,
+  playerTheme,
 }: MediaPreviewModalProps) {
   const [previewMode, setPreviewMode] = useState<'page' | 'card'>('page');
   const [testServerIdx, setTestServerIdx] = useState<number | null>(null);
 
   if (!item) return null;
+
+  const activeTheme = normalizePlayerTheme(playerTheme || loadStoredPlayerTheme());
+  const themeVars = buildPlayerThemeVars(activeTheme);
 
   const activeTestServer = testServerIdx !== null ? item.servers[testServerIdx] : null;
   const activeTestSrc = activeTestServer
@@ -330,28 +340,50 @@ export function MediaPreviewModal({
                       </div>
                     )}
 
-                    {/* Inline Test Player inside Preview (RahaL TV Crimson Box) */}
+                    {/* Inline Test Player inside Preview (Themed Cinema Frame) */}
                     {testServerIdx !== null && (
-                      <div className="mt-3 rounded-2xl border-2 border-[#D92321]/80 bg-[#050b11] shadow-[0_12px_32px_rgba(217,35,33,0.22)] overflow-hidden">
-                        <div className="flex items-center justify-between gap-2 px-3.5 py-2 bg-gradient-to-l from-[#1a0a0d] via-[#120d14] to-[#0b131d] border-b border-[#D92321]/35 text-xs">
-                          <span className="font-extrabold text-white flex items-center gap-2">
-                            <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-[#D92321] text-white">
-                              <Play className="w-3 h-3 fill-current" />
-                            </span>
-                            <span>سيرفر {testServerIdx + 1} — مشغل RahaL TV</span>
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setTestServerIdx(null)}
-                            className="inline-flex items-center gap-1 rounded-lg bg-[#D92321]/15 hover:bg-[#D92321] px-2.5 py-1 text-[11px] font-bold text-[#ff8a88] hover:text-white transition-colors cursor-pointer"
+                      <div
+                        style={{
+                          ...themeVars,
+                          backgroundColor: 'var(--pt-frame)',
+                          borderColor: 'var(--pt-accent-35)',
+                          borderRadius: 'var(--pt-radius)',
+                          boxShadow: 'var(--pt-shadow)',
+                        }}
+                        className="mt-3 border overflow-hidden"
+                      >
+                        {activeTheme.showHeaderBar && (
+                          <div
+                            style={{ backgroundColor: 'var(--pt-frame)' }}
+                            className="flex items-center justify-between gap-2 px-3.5 py-2.5 border-b border-white/[0.08] text-xs"
                           >
-                            <X className="w-3 h-3" />
-                            <span>إغلاق</span>
-                          </button>
-                        </div>
+                            <span className="font-extrabold text-white flex items-center gap-2 min-w-0">
+                              {activeTheme.showBrandBadge && (
+                                <span
+                                  style={{
+                                    backgroundColor: 'var(--pt-accent)',
+                                    color: 'var(--pt-accent-contrast)',
+                                  }}
+                                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md"
+                                >
+                                  <Play className="w-3 h-3 fill-current" />
+                                </span>
+                              )}
+                              <span className="truncate">
+                                سيرفر {testServerIdx + 1} — {activeTheme.brandLabel}
+                              </span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setTestServerIdx(null)}
+                              className="inline-flex items-center gap-1 rounded-lg bg-white/[0.07] hover:bg-white/[0.14] border border-white/[0.08] px-2.5 py-1 text-[11px] font-bold text-white/85 hover:text-white transition-colors cursor-pointer shrink-0"
+                            >
+                              <X className="w-3 h-3" />
+                              <span>إغلاق</span>
+                            </button>
+                          </div>
+                        )}
                         <div className="relative aspect-video w-full bg-black overflow-hidden">
-                          <span className="pointer-events-none absolute top-2 right-2 z-10 h-3 w-3 border-t-2 border-r-2 border-[#D92321]/85 rounded-tr" />
-                          <span className="pointer-events-none absolute top-2 left-2 z-10 h-3 w-3 border-t-2 border-l-2 border-[#D92321]/85 rounded-tl" />
                           {activeTestSrc && !activeTestIsPortal ? (
                             isDirectVideo ? (
                               <video src={activeTestSrc} controls autoPlay playsInline className="w-full h-full" />
@@ -366,7 +398,7 @@ export function MediaPreviewModal({
                             )
                           ) : activeTestIsPortal ? (
                             <div className="h-full flex flex-col items-center justify-center gap-2 p-4 text-center">
-                              <AlertTriangle className="w-8 h-8 text-[#D92321]" />
+                              <AlertTriangle className="w-8 h-8" style={{ color: 'var(--pt-accent)' }} />
                               <p className="text-xs font-extrabold text-white">
                                 تم حجب هذا الرابط لأنه صفحة موقع رئيسية وليس مشغل فيديو
                               </p>
