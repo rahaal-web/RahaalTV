@@ -2437,14 +2437,14 @@ export function AdminDashboardView({
                   <div className="rounded-2xl bg-[#4CAF50]/10 border border-[#4CAF50]/30 px-4 py-3 text-xs text-[#b7c9ef] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <span>
                       <strong className="text-[#4CAF50]">وضع التشغيل المدمج (متوافق مع GitHub Pages):</strong>{' '}
-                      يعمل السحب مباشرة من المتصفح لمواقع Blogger/WordPress/HTML ووضع لصق HTML دون الحاجة لخادم Node.js، ويمكنك اختياريًا ربط رابط خادم خارجي من تبويب الإعدادات.
+                      لجلب أقسام المواقع المحمية مع جميع سيرفرات المشاهدة (<span className="font-latin text-white">/watch</span>) مثل <span className="font-latin text-white">akwams.org/movies/</span> على GitHub Pages، فعّل رابط <strong className="text-white">Cloudflare Worker المجاني</strong> من الإعدادات.
                     </span>
                     <button
                       type="button"
                       onClick={() => setActiveTab('settings')}
                       className="shrink-0 rounded-lg bg-[#1a242e] hover:bg-white/10 border border-white/10 px-3 py-1.5 text-[11px] font-bold text-white cursor-pointer"
                     >
-                      ربط خادم Node.js (اختياري)
+                      إعداد بروكسي Cloudflare المجاني
                     </button>
                   </div>
 
@@ -2608,6 +2608,24 @@ export function AdminDashboardView({
                         </span>
                       </button>
                     </div>
+
+                    {!customApiUrl &&
+                      siteDeepScrape &&
+                      siteScrapedItems.every((item) => item.servers.length === 0) && (
+                        <div className="rounded-2xl bg-[#f9c400]/10 border border-[#f9c400]/35 px-4 py-3 text-xs text-[#fde68a] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <span>
+                            تم جلب بيانات الأعمال، لكن المتصفح مُنع من فتح صفحات السيرفرات الداخلية (<span className="font-latin">/watch</span>) لهذا الموقع على الاستضافة الثابتة. لإحضار جميع سيرفرات المشاهدة تلقائياً، أضف رابط <strong>Cloudflare Worker المجاني</strong> من الإعدادات.
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('settings')}
+                            className="shrink-0 inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] px-3.5 py-2 text-[11px] font-black text-[#06131c] cursor-pointer"
+                          >
+                            <Settings className="w-3.5 h-3.5" />
+                            <span>تفعيل Cloudflare Worker الآن</span>
+                          </button>
+                        </div>
+                      )}
 
                     {/* Selection & Filter Controls */}
                     <div className="flex flex-wrap items-center justify-between gap-3">

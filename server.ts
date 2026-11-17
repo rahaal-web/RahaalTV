@@ -710,7 +710,7 @@ function isLikelyContentUrl(candidateUrl: string, allowedOrigins: string | strin
       p === '/' ||
       p === '' ||
       /\.(jpg|jpeg|png|gif|webp|svg|css|js|ico|xml|pdf|zip|mp4|mkv)$/i.test(p) ||
-      /^\/(movies|series|recent|trends|discovery|actors|tv-channels|collections|requests|modal)\/?$/i.test(
+      /^\/(movies|series|shows|mix|one|recent|trends|discovery|actors|tv-channels|collections|requests|modal)\/?$/i.test(
         p
       ) ||
       /\/(index|rss|feed|tag|tags|label|category|categories|genre|search|author|page|login|register|admin|wp-admin|wp-content|comments|contact|about|privacy|terms|play|download|actor|collection|modal)(\.php)?(\/|$)/i.test(
@@ -746,6 +746,7 @@ function extractListingLinksAndPagination(html: string, pageUrl: string) {
 
   const cards = new Map<string, { url: string; title: string; poster: string }>();
   const cardSelectors = [
+    '.entry-box a[href]',
     '.cinema-poster-slide a[href]',
     '.cinema-card a[href]',
     '.pm-video-thumb a[href]',
@@ -770,7 +771,7 @@ function extractListingLinksAndPagination(html: string, pageUrl: string) {
       const cleanHref = href.split('#')[0];
       if (cards.has(cleanHref)) return;
 
-      const parentCard = $(el).closest('.cinema-poster-slide, .cinema-card, .pm-li-video, .pm-video-thumb, article, .post, .movie, .card, .item, .block');
+      const parentCard = $(el).closest('.entry-box, .cinema-poster-slide, .cinema-card, .pm-li-video, .pm-video-thumb, article, .post, .movie, .card, .item, .block');
       const imgEl = $(el).find('img').first().length
         ? $(el).find('img').first()
         : parentCard.find('img').first();
@@ -806,18 +807,24 @@ function extractListingLinksAndPagination(html: string, pageUrl: string) {
     }
   }
 
-  // Next pagination links
-  const nextUrls: string[] = [];
+  // Next pagination links (prefer rel="next" / "التالي" / lower sequential page numbers)
+  const prioritizedNext: string[] = [];
+  const otherNext: string[] = [];
   $('a[rel="next"], .next a, a.next, .pagination a, a.blog-pager-older-link, .nav-previous a').each(
     (_, el) => {
       const nextHref = resolveUrl(pageUrl, $(el).attr('href'));
-      if (nextHref && nextHref.startsWith(baseOrigin) && !nextUrls.includes(nextHref)) {
-        nextUrls.push(nextHref);
+      if (!nextHref || !nextHref.startsWith(baseOrigin) || nextHref === pageUrl) return;
+      const label = cleanText($(el).text());
+      const isExplicitNext =
+        $(el).attr('rel') === 'next' || /التالي|next|›|»/i.test(label) || /\/page\/[2-9]\//.test(nextHref);
+      const targetList = isExplicitNext ? prioritizedNext : otherNext;
+      if (!prioritizedNext.includes(nextHref) && !otherNext.includes(nextHref)) {
+        targetList.push(nextHref);
       }
     }
   );
 
-  return { siteTitle, cards: Array.from(cards.values()), nextUrls };
+  return { siteTitle, cards: Array.from(cards.values()), nextUrls: [...prioritizedNext, ...otherNext] };
 }
 
 async function resolveAjaxEmbedsFromOrigins(
@@ -1305,7 +1312,7 @@ async function startServer() {
         });
       }
 
-      // If URL mode (no rawHtml override): try Blogger JSON Feed and WP REST API first
+      // If URL mode (no rawHtml override): try Blogger JSON Feed first (Blogger embeds live in feed)
       if (parsedSiteUrl && (!rawHtml || rawHtml.trim().length < 50)) {
         const origin = parsedSiteUrl.origin;
 
@@ -1319,20 +1326,9 @@ async function startServer() {
             items: bloggerRes.items,
           });
         }
-
-        const wpRes = await tryWordPressApiScrape(origin, itemLimit);
-        if (wpRes && wpRes.items.length > 0) {
-          return res.json({
-            ok: true,
-            strategy: 'WordPress REST API',
-            siteTitle: wpRes.siteTitle,
-            totalDiscovered: wpRes.items.length,
-            items: wpRes.items,
-          });
-        }
       }
 
-      // General HTML Crawler (with multi-page pagination or rawHtml)
+      // General HTML Crawler (with multi-page pagination or rawHtml) — preserves section paths like /movies/ and enables full //watch subpage scraping
       const discoveredMap = new Map<string, { url: string; title: string; poster: string }>();
       let siteTitle = parsedSiteUrl ? parsedSiteUrl.hostname : 'موقع مستورد';
       let strategy = rawHtml ? 'HTML Source Crawler' : 'HTML Multi-Page Crawler';
@@ -1356,7 +1352,46 @@ async function startServer() {
           const pageRes = await fetchRemoteText(currentUrl, 12000).catch(() => null);
           if (!pageRes || !pageRes.ok || pageRes.text.length < 100) {
             if (visitedPages.size === 1) {
-              // First page blocked: try sitemap fallback before failing
+              // First page blocked: try WordPress API + Sitemap fallbacks before failing
+              const wpFallback = await tryWordPressApiScrape(parsedSiteUrl.origin, itemLimit);
+              if (wpFallback && wpFallback.items.length > 0) {
+                if (deepScrape) {
+                  const enrichedItems: ScrapedMediaItem[] = [];
+                  for (let i = 0; i < wpFallback.items.length; i += 4) {
+                    const chunk = wpFallback.items.slice(i, i + 4);
+                    const updated = await Promise.all(
+                      chunk.map(async (item) => {
+                        if (item.servers.length === 0 && item.shortUrl) {
+                          try {
+                            const detailRes = await fetchRemoteText(item.shortUrl, 9000);
+                            if (detailRes.ok && detailRes.text.length > 150) {
+                              const full = await scrapeFullItemWithSubpages(item.shortUrl, detailRes.text);
+                              if (!full.poster && item.poster) {
+                                full.poster = item.poster;
+                                full.backdrop = item.poster;
+                              }
+                              return full;
+                            }
+                          } catch {
+                            // Keep WP API item if detail page fails
+                          }
+                        }
+                        return item;
+                      })
+                    );
+                    enrichedItems.push(...updated);
+                  }
+                  wpFallback.items = enrichedItems;
+                }
+                return res.json({
+                  ok: true,
+                  strategy: 'WordPress REST API + Deep Scrape',
+                  siteTitle: wpFallback.siteTitle,
+                  totalDiscovered: wpFallback.items.length,
+                  items: wpFallback.items,
+                });
+              }
+
               const smUrls = await trySitemapDiscovery(parsedSiteUrl.origin, itemLimit);
               if (smUrls.length > 0) {
                 strategy = 'XML Sitemap Crawler';
@@ -1390,6 +1425,17 @@ async function startServer() {
         }
 
         if (discoveredMap.size === 0) {
+          const wpFallback = await tryWordPressApiScrape(parsedSiteUrl.origin, itemLimit);
+          if (wpFallback && wpFallback.items.length > 0) {
+            return res.json({
+              ok: true,
+              strategy: 'WordPress REST API',
+              siteTitle: wpFallback.siteTitle,
+              totalDiscovered: wpFallback.items.length,
+              items: wpFallback.items,
+            });
+          }
+
           const smUrls = await trySitemapDiscovery(parsedSiteUrl.origin, itemLimit);
           if (smUrls.length > 0) {
             strategy = 'XML Sitemap Crawler';

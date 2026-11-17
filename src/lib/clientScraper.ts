@@ -795,7 +795,7 @@ function isLikelyContentUrl(candidateUrl: string, allowedOrigins: string[]): boo
       p === '/' ||
       p === '' ||
       /\.(jpg|jpeg|png|gif|webp|svg|css|js|ico|xml|pdf|zip|mp4|mkv)$/i.test(p) ||
-      /^\/(movies|series|recent|trends|discovery|actors|tv-channels|collections|requests|modal)\/?$/i.test(
+      /^\/(movies|series|shows|mix|one|recent|trends|discovery|actors|tv-channels|collections|requests|modal)\/?$/i.test(
         p
       ) ||
       /\/(index|rss|feed|tag|tags|label|category|categories|genre|search|author|page|login|register|admin|wp-admin|wp-content|comments|contact|about|privacy|terms|play|download|actor|collection|modal)(\.php)?(\/|$)/i.test(
@@ -834,6 +834,7 @@ function extractListingLinksAndPaginationBrowser(html: string, pageUrl: string) 
 
   const cards = new Map<string, { url: string; title: string; poster: string }>();
   const cardSelectors = [
+    '.entry-box a[href]',
     '.cinema-poster-slide a[href]',
     '.cinema-card a[href]',
     '.pm-video-thumb a[href]',
@@ -859,7 +860,7 @@ function extractListingLinksAndPaginationBrowser(html: string, pageUrl: string) 
       if (cards.has(cleanHref)) return;
 
       const parentCard = el.closest(
-        '.cinema-poster-slide, .cinema-card, .pm-li-video, .pm-video-thumb, article, .post, .movie, .card, .item, .block'
+        '.entry-box, .cinema-poster-slide, .cinema-card, .pm-li-video, .pm-video-thumb, article, .post, .movie, .card, .item, .block'
       );
       const imgEl = el.querySelector('img') || parentCard?.querySelector('img') || null;
       const rawPoster =
@@ -893,19 +894,25 @@ function extractListingLinksAndPaginationBrowser(html: string, pageUrl: string) 
     }
   }
 
-  const nextUrls: string[] = [];
+  const prioritizedNext: string[] = [];
+  const otherNext: string[] = [];
   doc
     .querySelectorAll(
       'a[rel="next"], .next a, a.next, .pagination a, a.blog-pager-older-link, .nav-previous a'
     )
     .forEach((el) => {
       const nextHref = resolveUrl(pageUrl, el.getAttribute('href'));
-      if (nextHref && nextHref.startsWith(baseOrigin) && !nextUrls.includes(nextHref)) {
-        nextUrls.push(nextHref);
+      if (!nextHref || !nextHref.startsWith(baseOrigin) || nextHref === pageUrl) return;
+      const label = cleanText(el.textContent);
+      const isExplicitNext =
+        el.getAttribute('rel') === 'next' || /التالي|next|›|»/i.test(label) || /\/page\/[2-9]\//.test(nextHref);
+      const targetList = isExplicitNext ? prioritizedNext : otherNext;
+      if (!prioritizedNext.includes(nextHref) && !otherNext.includes(nextHref)) {
+        targetList.push(nextHref);
       }
     });
 
-  return { siteTitle, cards: Array.from(cards.values()), nextUrls };
+  return { siteTitle, cards: Array.from(cards.values()), nextUrls: [...prioritizedNext, ...otherNext] };
 }
 
 async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<Response> {
@@ -1483,22 +1490,11 @@ export async function scrapeSiteInBrowser(params: {
         items: bloggerRes.items,
       };
     }
-
-    const wpRes = await tryWordPressApiBrowser(origin, itemLimit);
-    if (wpRes && wpRes.items.length > 0) {
-      return {
-        ok: true,
-        strategy: 'WordPress REST API (بدون خادم)',
-        siteTitle: wpRes.siteTitle,
-        totalDiscovered: wpRes.items.length,
-        items: wpRes.items,
-      };
-    }
   }
 
   const discoveredMap = new Map<string, { url: string; title: string; poster: string }>();
   let siteTitle = parsedSiteUrl ? parsedSiteUrl.hostname : 'موقع مستورد';
-  let strategy = rawHtml ? 'HTML Source Crawler (بدون خادم)' : 'Browser CORS Crawler';
+  let strategy = rawHtml ? 'HTML Source Crawler (بدون خادم)' : 'Browser Crawler + Subpages';
 
   if (rawHtml && rawHtml.trim().length >= 50) {
     const baseForHtml = parsedSiteUrl ? parsedSiteUrl.toString() : 'https://example.com';
@@ -1519,6 +1515,19 @@ export async function scrapeSiteInBrowser(params: {
       const pageRes = await fetchViaBrowserOrCorsRelay(currentUrl, 12000).catch(() => null);
       if (!pageRes || !pageRes.ok || pageRes.text.length < 100) {
         if (visitedPages.size === 1) {
+          const wpFallback = await tryWordPressApiBrowser(parsedSiteUrl.origin, itemLimit);
+          if (wpFallback && wpFallback.items.length > 0) {
+            return {
+              ok: true,
+              strategy: getCustomApiBaseUrl()
+                ? 'WordPress REST API'
+                : 'WordPress REST API (فعّل Cloudflare Worker لجلب السيرفرات)',
+              siteTitle: wpFallback.siteTitle,
+              totalDiscovered: wpFallback.items.length,
+              items: wpFallback.items,
+            };
+          }
+
           const smUrls = await trySitemapDiscoveryBrowser(parsedSiteUrl.origin, itemLimit);
           if (smUrls.length > 0) {
             strategy = 'XML Sitemap Crawler (بدون خادم)';
@@ -1534,7 +1543,7 @@ export async function scrapeSiteInBrowser(params: {
           return {
             ok: false,
             error:
-              'رفض الموقع الوصول التلقائي عبر المتصفح (حماية Cloudflare أو CORS). افتح الموقع في متصفحك واضغط Ctrl+U لنسخ السورس ثم الصقه في وضع "لصق HTML الموقع"، أو أضف رابط خادم Node.js خارجي في الإعدادات.',
+              'رفض الموقع الوصول التلقائي عبر المتصفح (حماية Cloudflare أو CORS). افتح تبويب الإعدادات لإضافة Cloudflare Worker المجاني، أو استخدم وضع "لصق HTML الموقع".',
           };
         }
         continue;
@@ -1557,6 +1566,17 @@ export async function scrapeSiteInBrowser(params: {
     }
 
     if (discoveredMap.size === 0) {
+      const wpFallback = await tryWordPressApiBrowser(parsedSiteUrl.origin, itemLimit);
+      if (wpFallback && wpFallback.items.length > 0) {
+        return {
+          ok: true,
+          strategy: 'WordPress REST API',
+          siteTitle: wpFallback.siteTitle,
+          totalDiscovered: wpFallback.items.length,
+          items: wpFallback.items,
+        };
+      }
+
       const smUrls = await trySitemapDiscoveryBrowser(parsedSiteUrl.origin, itemLimit);
       if (smUrls.length > 0) {
         strategy = 'XML Sitemap Crawler (بدون خادم)';
@@ -1582,7 +1602,7 @@ export async function scrapeSiteInBrowser(params: {
 
   const finalItems: ScrapedPayload[] = [];
   if (deepScrape) {
-    const CONCURRENCY = 3;
+    const CONCURRENCY = getCustomApiBaseUrl() ? 4 : 3;
     for (let i = 0; i < candidates.length; i += CONCURRENCY) {
       const chunk = candidates.slice(i, i + CONCURRENCY);
       const results = await Promise.all(
