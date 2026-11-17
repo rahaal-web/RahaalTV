@@ -141,10 +141,10 @@ export function SingleDetailView({
         <div className="moov-hex-pattern absolute inset-0" />
         <div className="moov-spotlight absolute inset-0" />
 
-        <div className="relative z-10 mx-auto flex max-w-[1440px] flex-col justify-end px-4 sm:px-6 lg:px-8 pt-28 pb-12 min-h-[340px] sm:min-h-[390px]">
+        <div className="relative z-10 mx-auto flex max-w-[1440px] flex-col justify-end px-4 sm:px-6 lg:px-8 pt-28 pb-10 md:pb-14 min-h-[340px] sm:min-h-[380px]">
           <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
             {/* Breadcrumb & Page Title */}
-            <div className="md:pr-64 lg:pr-72">
+            <div className="md:pr-[35%] lg:pr-[27%] min-w-0 flex-1">
               <nav className="mb-3 flex flex-wrap items-center gap-1.5 text-xs font-bold text-[#b7c9ef]">
                 <button
                   type="button"
@@ -180,11 +180,15 @@ export function SingleDetailView({
               <h1 className="font-display text-2xl sm:text-4xl font-extrabold text-white leading-tight">
                 {item.title} بجودة عالية
               </h1>
-              <p className="mt-2 max-w-2xl text-sm font-medium text-[#b7c9ef]">{item.tagline}</p>
+              {item.tagline && (
+                <p className="mt-2 max-w-2xl text-sm font-medium text-[#b7c9ef] line-clamp-2 leading-relaxed">
+                  {item.tagline}
+                </p>
+              )}
             </div>
 
             {/* Overlapping IMDb Card (.single-imdb) */}
-            <div className="inline-flex items-center gap-3.5 self-start md:self-end rounded-2xl bg-[#1a242e]/95 border border-[#f9c400]/35 px-4 py-3 shadow-xl backdrop-blur-md">
+            <div className="inline-flex shrink-0 items-center gap-3.5 self-start md:self-end rounded-2xl bg-[#1a242e]/95 border border-[#f9c400]/35 px-4 py-3 shadow-xl backdrop-blur-md">
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#f9c400] text-[#06131c]">
                 <Star className="w-6 h-6 fill-current" />
               </div>
@@ -205,11 +209,11 @@ export function SingleDetailView({
       </section>
 
       {/* 2. Single Inner Split (.single-inner: Poster Column + Info Column) */}
-      <section className="relative z-20 mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 -mt-10 md:-mt-24">
+      <section className="relative z-20 mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 -mt-8 md:-mt-20">
         <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
           {/* Poster Column (.single-right overlapping header) */}
           <div className="md:col-span-4 lg:col-span-3 space-y-3.5">
-            <div className="relative aspect-[3/4] w-full max-w-[290px] mx-auto md:max-w-none overflow-hidden rounded-3xl border-4 border-[#1a242e] bg-[#0c1821] shadow-2xl">
+            <div className="relative aspect-[2/3] w-full max-w-[270px] mx-auto md:max-w-none overflow-hidden rounded-3xl border-[3px] border-[#1a242e] ring-1 ring-white/10 bg-[#0c1821] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
               {/* Diagonal Quality Ribbon */}
               <div className="moov-ribbon bg-[#D92321] py-1 text-[11px] font-black tracking-wider text-white font-latin uppercase">
                 {item.quality}
@@ -220,9 +224,9 @@ export function SingleDetailView({
                 alt={item.title}
                 referrerPolicy="no-referrer"
                 onError={handlePosterError}
-                className="h-full w-full object-cover"
+                className="h-full w-full object-cover object-center"
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-[#06131c]/80 via-transparent to-transparent" />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#06131c]/85 via-transparent to-black/15" />
 
               {/* Centered Frosted Trailer Button (.single-trailer-button) */}
               <button
@@ -234,16 +238,21 @@ export function SingleDetailView({
                 <Play className="w-7 h-7 fill-current translate-x-0.5" />
               </button>
 
-              <span className="absolute bottom-3 inset-x-0 text-center text-xs font-bold text-white/90 pointer-events-none">
-                تشغيل الإعلان ({item.trailerDuration})
-              </span>
+              <button
+                type="button"
+                onClick={() => onOpenTrailer(item)}
+                className="absolute bottom-3.5 left-1/2 -translate-x-1/2 inline-flex items-center gap-1.5 rounded-full bg-black/70 backdrop-blur-md border border-white/15 px-3.5 py-1.5 text-xs font-bold text-white/95 hover:bg-[#D92321] hover:border-[#D92321] transition-colors whitespace-nowrap cursor-pointer"
+              >
+                <Play className="w-3 h-3 fill-current" />
+                <span>تشغيل الإعلان</span>
+              </button>
             </div>
 
             {/* Watchlist Toggle Button (.single-playlist-button) */}
             <button
               type="button"
               onClick={() => onToggleWatchlist(item)}
-              className={`w-full max-w-[290px] mx-auto md:max-w-none flex items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-sm font-extrabold border transition-all cursor-pointer ${
+              className={`w-full max-w-[270px] mx-auto md:max-w-none flex items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-sm font-extrabold border transition-all cursor-pointer ${
                 isInWatchlist
                   ? 'bg-[#4CAF50] border-[#4CAF50] text-white shadow-[0_8px_22px_rgba(76,175,80,0.35)]'
                   : 'bg-[#1a242e] border-white/10 text-white hover:border-[#4CAF50] hover:text-[#4CAF50]'
@@ -255,7 +264,7 @@ export function SingleDetailView({
           </div>
 
           {/* Info Column (.single-left) */}
-          <div className="md:col-span-8 lg:col-span-9 md:pt-28 space-y-6">
+          <div className="md:col-span-8 lg:col-span-9 md:pt-24 space-y-6">
             {/* Story Block (.single-story) */}
             <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6">
               <h2 className="font-display text-lg font-extrabold text-white mb-2.5 flex items-center gap-2">

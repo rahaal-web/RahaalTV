@@ -16,6 +16,7 @@ import {
   WatchlistModal,
 } from './components/Modals';
 import { SearchDrawer } from './components/SearchDrawer';
+import { OfflineIndicator } from './components/PWAControls';
 import { SingleDetailView } from './components/SingleDetailView';
 import { CATALOG_ITEMS } from './data/catalog';
 import { loadStoredHomeConfig, saveStoredHomeConfig } from './lib/homeConfig';
@@ -777,6 +778,8 @@ export default function App() {
           <span>{toastMessage}</span>
         </div>
       )}
+      {/* Offline Connectivity Indicator */}
+      <OfflineIndicator />
     </div>
   );
 }

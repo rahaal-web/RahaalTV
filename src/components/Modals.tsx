@@ -290,9 +290,7 @@ export function TrailerModal({ item, playerTheme, onClose, onWatchFull }: Traile
               <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-4 bg-black/75 px-5 py-3 backdrop-blur-sm border-t border-white/10">
                 <div className="flex items-center gap-3 text-xs font-bold text-white">
                   <Volume2 className="w-4 h-4" style={{ color: 'var(--pt-accent)' }} />
-                  <span className="font-latin tabular-nums">
-                    {playing ? '00:48' : '00:00'} / {item.trailerDuration}
-                  </span>
+                  <span>معاينة الإعلان الرسمي</span>
                   <div className="hidden sm:block h-1.5 w-44 rounded-full bg-white/20 overflow-hidden">
                     <div
                       className={`h-full transition-all duration-700 ${

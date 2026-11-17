@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import fs from 'fs';
 import path from 'path';
 import {defineConfig} from 'vite';
+import {VitePWA} from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
   const repoName = process.env.GITHUB_REPOSITORY?.split('/')[1] || 'RahaalTV-v1';
@@ -15,6 +16,98 @@ export default defineConfig(() => {
     plugins: [
       react(),
       tailwindcss(),
+      VitePWA({
+        registerType: 'autoUpdate',
+        includeAssets: ['icon.svg', 'apple-touch-icon.png', 'og-cover.jpg'],
+        manifest: {
+          id: base,
+          name: 'RahaL TV — مشاهدة وتحميل أحدث الأفلام والمسلسلات',
+          short_name: 'RahaL TV',
+          description:
+            'منصة RahaL TV لمشاهدة وتحميل أحدث الأفلام والمسلسلات العربية والأجنبية والتركية والآسيوية وبرامج رمضان والمصارعة الحرة بجودة عالية بدون تقطيع.',
+          theme_color: '#0f0f0f',
+          background_color: '#0f0f0f',
+          display: 'standalone',
+          dir: 'rtl',
+          lang: 'ar',
+          start_url: base,
+          scope: base,
+          icons: [
+            {
+              src: `${base}pwa-192x192.png`,
+              sizes: '192x192',
+              type: 'image/png',
+              purpose: 'any',
+            },
+            {
+              src: `${base}pwa-512x512.png`,
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'any',
+            },
+            {
+              src: `${base}pwa-maskable-512x512.png`,
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'maskable',
+            },
+          ],
+        },
+        workbox: {
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,webp,woff,woff2}'],
+          maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+          navigateFallback: 'index.html',
+          navigateFallbackDenylist: [/^\/api\//],
+          runtimeCaching: [
+            {
+              urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'google-fonts-cache',
+                expiration: {
+                  maxEntries: 10,
+                  maxAgeSeconds: 60 * 60 * 24 * 365,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            {
+              urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'gstatic-fonts-cache',
+                expiration: {
+                  maxEntries: 15,
+                  maxAgeSeconds: 60 * 60 * 24 * 365,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            {
+              urlPattern: /\.(?:png|jpg|jpeg|webp|svg|gif)$/i,
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'media-images-cache',
+                expiration: {
+                  maxEntries: 120,
+                  maxAgeSeconds: 60 * 60 * 24 * 30,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+          ],
+        },
+        devOptions: {
+          enabled: true,
+          type: 'module',
+        },
+      }),
       // Copies src/assets into dist/ so root-relative URLs like
       // "/src/assets/images/..." (e.g. generate_image output) still resolve
       // in production builds, and creates 404.html for GitHub Pages SPA fallback.
@@ -65,6 +158,9 @@ export default defineConfig(() => {
       },
     },
     server: {
+      host: '0.0.0.0',
+      port: 3000,
+      allowedHosts: true as const,
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',

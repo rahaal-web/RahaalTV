@@ -18,6 +18,7 @@ import { NAV_ITEMS } from '../data/catalog';
 import { matchesCategoryFilter, normalizeArabicText } from '../lib/mediaFilters';
 import { MediaItem } from '../types/media';
 import { Logo } from './Logo';
+import { PWAInstallButton } from './PWAControls';
 
 interface HeaderProps {
   catalog: MediaItem[];
@@ -215,6 +216,7 @@ export function Header({
 
           {/* Zone 3: Quick Search + Primary Controls */}
           <div className="flex items-center gap-2 shrink-0">
+            <PWAInstallButton variant="header" />
             <button
               type="button"
               onClick={onOpenSearch}
@@ -416,6 +418,11 @@ export function Header({
                 </div>
               ))}
             </div>
+
+            <PWAInstallButton
+              variant="drawer"
+              onAfterClick={() => setMobileMenuOpen(false)}
+            />
 
             <button
               type="button"
