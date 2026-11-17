@@ -313,6 +313,8 @@ export function AdminDashboardView({
 }: AdminDashboardViewProps) {
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [busyAction, setBusyAction] = useState(false);
+  const [adminSigningIn, setAdminSigningIn] = useState(false);
+  const [adminAuthError, setAdminAuthError] = useState<string | null>(null);
 
   // Catalog tab states
   const [searchQuery, setSearchQuery] = useState('');
@@ -1259,14 +1261,57 @@ export function AdminDashboardView({
           </div>
 
           {!user ? (
-            <button
-              type="button"
-              onClick={() => void signInWithGoogle()}
-              className="w-full inline-flex items-center justify-center gap-2.5 rounded-2xl bg-[#D92321] hover:bg-[#dc0e30] py-3.5 px-6 text-sm font-extrabold text-white shadow-lg transition-colors cursor-pointer"
-            >
-              <ShieldCheck className="w-5 h-5" />
-              <span>تسجيل الدخول بحساب Google</span>
-            </button>
+            <div className="space-y-3">
+              <button
+                type="button"
+                disabled={adminSigningIn}
+                onClick={async () => {
+                  setAdminAuthError(null);
+                  setAdminSigningIn(true);
+                  try {
+                    await signInWithGoogle();
+                  } catch (err: unknown) {
+                    const code =
+                      typeof err === 'object' && err !== null && 'code' in err
+                        ? String((err as { code?: unknown }).code || '')
+                        : '';
+                    const host =
+                      typeof window !== 'undefined' ? window.location.hostname : '';
+                    if (code === 'auth/unauthorized-domain') {
+                      setAdminAuthError(
+                        `هذا الدومين (${host}) غير مضاف في Firebase Authorized Domains. أضف "${host}" في Firebase Console → Authentication → Settings → Authorized domains ثم أعد المحاولة.`
+                      );
+                    } else if (code === 'auth/popup-blocked') {
+                      setAdminAuthError(
+                        'المتصفح منع نافذة تسجيل الدخول المنبثقة. اسمح بالنوافذ المنبثقة (Popups) ثم أعد المحاولة.'
+                      );
+                    } else if (code === 'auth/popup-closed-by-user') {
+                      setAdminAuthError('تم إغلاق نافذة تسجيل الدخول قبل إتمام العملية.');
+                    } else {
+                      setAdminAuthError(
+                        `تعذر تسجيل الدخول عبر Google (${code || 'خطأ غير معروف'}).`
+                      );
+                    }
+                  } finally {
+                    setAdminSigningIn(false);
+                  }
+                }}
+                className="w-full inline-flex items-center justify-center gap-2.5 rounded-2xl bg-[#D92321] hover:bg-[#dc0e30] disabled:opacity-60 py-3.5 px-6 text-sm font-extrabold text-white shadow-lg transition-colors cursor-pointer"
+              >
+                {adminSigningIn ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <ShieldCheck className="w-5 h-5" />
+                )}
+                <span>{adminSigningIn ? 'جاري فتح نافذة Google...' : 'تسجيل الدخول بحساب Google'}</span>
+              </button>
+
+              {adminAuthError && (
+                <div className="rounded-xl bg-[#D92321]/15 border border-[#D92321]/40 p-3 text-xs text-right leading-relaxed text-red-200">
+                  {adminAuthError}
+                </div>
+              )}
+            </div>
           ) : (
             <div className="space-y-3">
               <div className="rounded-xl bg-[#1a242e] p-3 text-xs text-[#b7c9ef]">

@@ -5,7 +5,7 @@
 2. **Media Integrity**: Only verified administrators (`isAdmin()`) may create, update, or delete `/media/{mediaId}` entries. Public visitors have read-only access.
 3. **RBAC Anti-Escalation**: A regular signed-in user registering `/users/{userId}` MUST set `role == 'member'` and cannot elevate their own role or write to `/admins/{adminUid}`.
 4. **PII Isolation**: User email is isolated in `/users/{userId}/private/info` and readable only by `isOwner(userId)` or `isAdmin()`.
-5. **Email Verification Guard**: Any admin check on runtime email (`mfeshmeny2@gmail.com`) strictly requires `request.auth.token.email_verified == true`.
+5. **Email Verification Guard**: Any admin check on runtime email (`rahalahmed348@gmail.com`) strictly requires `request.auth.token.email_verified == true`.
 6. **Temporal Integrity**: All `createdAt` and `updatedAt` timestamps on creates and updates must equal `request.time`, and `createdAt` is immutable on update.
 
 ## 2. The "Dirty Dozen" Attack Payloads

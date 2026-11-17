@@ -448,8 +448,19 @@ export default function App() {
     try {
       const res = await signInWithGoogle();
       showToast(`مرحبًا بك يا ${res.user.displayName || 'مستخدم'} في RahaL TV`);
-    } catch {
-      showToast('تم إلغاء تسجيل الدخول');
+    } catch (err: unknown) {
+      const code =
+        typeof err === 'object' && err !== null && 'code' in err
+          ? String((err as { code?: unknown }).code || '')
+          : '';
+      if (code === 'auth/unauthorized-domain') {
+        const host = typeof window !== 'undefined' ? window.location.hostname : '';
+        showToast(`الدومين (${host}) غير مصرح به في Firebase Authorized Domains`);
+      } else if (code === 'auth/popup-blocked') {
+        showToast('المتصفح منع نافذة تسجيل الدخول المنبثقة — اسمح بالـ Popups');
+      } else {
+        showToast('تم إلغاء تسجيل الدخول');
+      }
     }
   };
 

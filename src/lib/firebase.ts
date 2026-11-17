@@ -35,6 +35,7 @@ export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 export const PRIMARY_ADMIN_EMAILS = [
+  'rahalahmed348@gmail.com',
   'mfeshmeny2@gmail.com',
   'ccicada6@gmail.com',
 ];
