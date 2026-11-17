@@ -1,0 +1,8 @@
+{
+  "name": "Moov — مشاهدة وتحميل أحدث الأفلام والمسلسلات",
+  "description": "منصة Moov لمشاهدة وتحميل أحدث الأفلام والمسلسلات العربية والأجنبية والتركية والآسيوية وبرامج رمضان والمصارعة الحرة بجودة عالية بدون تقطيع.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

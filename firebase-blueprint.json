@@ -1,0 +1,192 @@
+{
+  "entities": {
+    "Media": {
+      "title": "Media",
+      "description": "Movie, series, TV show, or wrestling catalog document stored in RahaL TV.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "slug": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "englishTitle": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "kind": { "type": "string", "enum": ["movie", "series", "tv", "wrestling"] },
+        "categories": { "type": "array", "description": "Taxonomy categories (1 to 10 items)" },
+        "genres": { "type": "array", "description": "Media genres (1 to 10 items)" },
+        "year": { "type": "string", "minLength": 4, "maxLength": 10 },
+        "country": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "language": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "quality": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "duration": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "imdb": { "type": "number" },
+        "votes": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "views": { "type": "number" },
+        "likes": { "type": "number" },
+        "pinned": { "type": "boolean" },
+        "isNew": { "type": "boolean" },
+        "comingSoon": { "type": "boolean" },
+        "poster": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "backdrop": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "tagline": { "type": "string", "maxLength": 400 },
+        "story": { "type": "string", "minLength": 1, "maxLength": 3000 },
+        "shortUrl": { "type": "string", "maxLength": 300 },
+        "trailerUrl": { "type": "string", "maxLength": 500 },
+        "trailerLabel": { "type": "string", "maxLength": 200 },
+        "trailerDuration": { "type": "string", "maxLength": 30 },
+        "cast": { "type": "array" },
+        "seasons": { "type": "array" },
+        "franchiseIds": { "type": "array" },
+        "servers": { "type": "array" },
+        "downloads": { "type": "array" },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "slug",
+        "title",
+        "englishTitle",
+        "kind",
+        "categories",
+        "genres",
+        "year",
+        "country",
+        "language",
+        "quality",
+        "duration",
+        "imdb",
+        "votes",
+        "views",
+        "likes",
+        "pinned",
+        "isNew",
+        "comingSoon",
+        "poster",
+        "backdrop",
+        "tagline",
+        "story",
+        "shortUrl",
+        "trailerUrl",
+        "trailerLabel",
+        "trailerDuration",
+        "cast",
+        "seasons",
+        "franchiseIds",
+        "servers",
+        "downloads",
+        "updatedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VisitorRequest": {
+      "title": "VisitorRequest",
+      "description": "User-submitted media request reviewed and fulfilled by administrators.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "requesterName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "type": { "type": "string", "enum": ["فيلم", "مسلسل", "عرض مصارعة", "مسرحية"] },
+        "notes": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["pending", "approved", "completed", "rejected"] },
+        "adminNote": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "userId",
+        "requesterName",
+        "title",
+        "type",
+        "notes",
+        "status",
+        "adminNote",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Publicly non-PII user profile storing display name and personal watchlist IDs.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "photoURL": { "type": "string", "maxLength": 500 },
+        "watchlistIds": { "type": "array" },
+        "role": { "type": "string", "enum": ["member", "admin"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "photoURL", "watchlistIds", "role", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII storage for authenticated user email.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "updatedAt"]
+    },
+    "AdminRole": {
+      "title": "AdminRole",
+      "description": "Trusted administrator RBAC registry document.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "addedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "addedBy", "createdAt"]
+    },
+    "SiteSettings": {
+      "title": "SiteSettings",
+      "description": "Global RahaL TV configuration managed by administrators.",
+      "type": "object",
+      "properties": {
+        "siteName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "tagline": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "announcementText": { "type": "string", "maxLength": 300 },
+        "tickerEnabled": { "type": "boolean" },
+        "featuredLimit": { "type": "number" },
+        "maintenanceMode": { "type": "boolean" },
+        "maintenanceMessage": { "type": "string", "maxLength": 500 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["siteName", "tagline", "announcementText", "tickerEnabled", "featuredLimit", "maintenanceMode", "maintenanceMessage", "updatedBy", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/media/{mediaId}": {
+      "schema": { "$ref": "#/entities/Media" },
+      "description": "Catalog collection of movies, series, TV programs, and wrestling events."
+    },
+    "/requests/{requestId}": {
+      "schema": { "$ref": "#/entities/VisitorRequest" },
+      "description": "Visitor and user requests for upcoming movies or series."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile and saved watchlist IDs (isolated from PII)."
+    },
+    "/users/{userId}/private/info": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Isolated private PII document storing user email."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminRole" },
+      "description": "Trusted administrator registry for dashboard RBAC."
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/SiteSettings" },
+      "description": "Global platform configuration controlled by admins."
+    }
+  }
+}

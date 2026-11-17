@@ -1,0 +1,1162 @@
+import { FormEvent, useCallback, useEffect, useState } from 'react';
+import {
+  AlertTriangle,
+  Bookmark,
+  CheckCircle2,
+  Film,
+  LayoutDashboard,
+  Loader2,
+  LogOut,
+  Pause,
+  Play,
+  Send,
+  Server,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  Tv,
+  Users,
+  Volume2,
+  X,
+} from 'lucide-react';
+import { User } from 'firebase/auth';
+import { MediaItem, VisitorRequest } from '../types/media';
+import { FooterTopic } from './Footer';
+
+/* ---------------- Watchlist Modal ---------------- */
+interface WatchlistModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  items: MediaItem[];
+  onSelectMedia: (item: MediaItem) => void;
+  onRemove: (item: MediaItem) => void;
+}
+
+export function WatchlistModal({
+  isOpen,
+  onClose,
+  items,
+  onSelectMedia,
+  onRemove,
+}: WatchlistModalProps) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="fixed inset-0 bg-black/75 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-2xl rounded-3xl bg-[#0c1821] border border-white/10 shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between bg-[#1a242e] px-6 py-4 border-b border-white/10">
+          <div className="flex items-center gap-2.5">
+            <Bookmark className="w-5 h-5 text-[#4CAF50]" />
+            <h2 className="font-display text-lg font-extrabold text-white">
+              قائمتي للمشاهدة لاحقًا ({items.length})
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 text-white hover:bg-[#D92321] cursor-pointer"
+            aria-label="إغلاق قائمتي"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="max-h-[65vh] overflow-y-auto p-5">
+          {items.length === 0 ? (
+            <div className="py-12 text-center">
+              <Film className="w-12 h-12 mx-auto text-[#b7c9ef]/30 mb-3" />
+              <p className="text-sm font-bold text-white mb-1">قائمتك فارغة حاليًا</p>
+              <p className="text-xs text-[#b7c9ef]">
+                اضغط على زر "أضافة الي قائمتي" داخل أي فيلم أو مسلسل لحفظه هنا.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {items.map((item) => (
+                <div
+                  key={item.id}
+                  className="flex items-center justify-between gap-4 rounded-2xl bg-[#1a242e]/80 border border-white/[0.07] p-3"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSelectMedia(item);
+                      onClose();
+                    }}
+                    className="flex items-center gap-3.5 text-right flex-1 min-w-0 cursor-pointer group"
+                  >
+                    <img
+                      src={item.poster}
+                      alt={item.title}
+                      className="h-18 w-14 rounded-xl object-cover shrink-0"
+                    />
+                    <div className="min-w-0">
+                      <h3 className="font-display text-sm font-bold text-white group-hover:text-[#D92321] truncate">
+                        {item.title}
+                      </h3>
+                      <p className="text-xs text-[#b7c9ef] mt-1">
+                        {item.year} • {item.quality} • {item.duration}
+                      </p>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onRemove(item)}
+                    aria-label="إزالة من قائمتي"
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 text-[#b7c9ef] hover:bg-[#D92321] hover:text-white transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Trailer Modal ---------------- */
+interface TrailerModalProps {
+  item: MediaItem | null;
+  onClose: () => void;
+  onWatchFull: (item: MediaItem) => void;
+}
+
+function normalizeTrailerUrl(url?: string): { kind: 'video' | 'iframe'; src: string } | null {
+  if (!url) return null;
+  const trimmed = url.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return null;
+  if (/\.(mp4|webm|ogg)(\?|$)/i.test(trimmed)) {
+    return { kind: 'video', src: trimmed };
+  }
+  const ytMatch = trimmed.match(
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{6,})/i
+  );
+  if (ytMatch) {
+    return { kind: 'iframe', src: `https://www.youtube.com/embed/${ytMatch[1]}?autoplay=1` };
+  }
+  return { kind: 'iframe', src: trimmed };
+}
+
+export function TrailerModal({ item, onClose, onWatchFull }: TrailerModalProps) {
+  const [playing, setPlaying] = useState(true);
+  if (!item) return null;
+
+  const parsedTrailer = normalizeTrailerUrl(item.trailerUrl);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="fixed inset-0 bg-black/85 backdrop-blur-md" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-4xl rounded-3xl bg-[#0c1821] border border-white/15 shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between bg-[#1a242e] px-5 py-3.5 border-b border-white/10">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="rounded-lg bg-[#D92321] px-2.5 py-1 text-[11px] font-extrabold text-white">
+              إعلان رسمي
+            </span>
+            <h3 className="font-display text-sm sm:text-base font-bold text-white truncate">
+              {item.trailerLabel}
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white hover:bg-[#D92321] cursor-pointer"
+            aria-label="إغلاق الإعلان"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Trailer Viewport (Real YouTube/Video or Preview Stage) */}
+        <div className="relative aspect-video w-full bg-black overflow-hidden">
+          {parsedTrailer ? (
+            parsedTrailer.kind === 'video' ? (
+              <video
+                src={parsedTrailer.src}
+                controls
+                autoPlay
+                playsInline
+                className="h-full w-full bg-black"
+              />
+            ) : (
+              <iframe
+                src={parsedTrailer.src}
+                title={item.trailerLabel}
+                allowFullScreen
+                allow="autoplay; fullscreen; picture-in-picture"
+                className="h-full w-full border-0 bg-black"
+              />
+            )
+          ) : (
+            <>
+              <img
+                src={item.backdrop || item.poster}
+                alt={item.title}
+                className={`h-full w-full object-cover transition-transform duration-[6000ms] ${
+                  playing ? 'scale-110' : 'scale-100'
+                }`}
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black via-black/30 to-transparent" />
+
+              <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
+                <button
+                  type="button"
+                  onClick={() => setPlaying((p) => !p)}
+                  className="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-[#D92321]/90 text-white shadow-[0_0_30px_rgba(217,35,33,0.65)] hover:scale-105 transition-transform cursor-pointer"
+                  aria-label={playing ? 'إيقاف مؤقت' : 'تشغيل'}
+                >
+                  {playing ? <Pause className="w-7 h-7" /> : <Play className="w-7 h-7 fill-current" />}
+                </button>
+                <p className="font-display text-xl sm:text-2xl font-extrabold text-white drop-shadow">
+                  {item.title}
+                </p>
+                <p className="mt-1 max-w-xl text-xs sm:text-sm text-[#b7c9ef]">{item.tagline}</p>
+              </div>
+
+              <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-4 bg-black/70 px-5 py-3 backdrop-blur-sm">
+                <div className="flex items-center gap-3 text-xs font-bold text-white">
+                  <Volume2 className="w-4 h-4 text-[#D92321]" />
+                  <span className="font-latin">
+                    {playing ? '00:48' : '00:00'} / {item.trailerDuration}
+                  </span>
+                  <div className="hidden sm:block h-1.5 w-44 rounded-full bg-white/20 overflow-hidden">
+                    <div
+                      className={`h-full bg-[#D92321] transition-all duration-700 ${
+                        playing ? 'w-2/5' : 'w-0'
+                      }`}
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onWatchFull(item);
+                  }}
+                  className="inline-flex items-center gap-2 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-4 py-2 text-xs font-extrabold text-white cursor-pointer"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>مشاهدة العمل كامل</span>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Interactive Multi-Server Stream Player Modal ---------------- */
+interface PlayerModalProps {
+  item: MediaItem | null;
+  initialEpisode?: number;
+  initialServerIndex?: number;
+  onClose: () => void;
+}
+
+interface ServerFilterEntry {
+  url: string;
+  ok: boolean;
+  faultType: '403' | 'sandboxed_embed' | '404' | 'frame_blocked' | 'error' | null;
+  httpStatus: number;
+  reason: string;
+  directStreamUrl?: string | null;
+}
+
+function cleanQualityIdentifier(quality?: string, fallback?: string): string {
+  const cleaned = String(quality || fallback || 'HD')
+    .replace(/مستورد|embed/gi, '')
+    .trim();
+  return cleaned || String(fallback || 'HD').replace(/مستورد|embed/gi, '').trim() || 'HD';
+}
+
+function extractSafeStreamSrc(embedCode?: string, url?: string): string | null {
+  if (embedCode) {
+    const match = embedCode.match(/src\s*=\s*["']([^"']+)["']/i);
+    if (match && /^https?:\/\//i.test(match[1].trim())) {
+      return match[1].trim();
+    }
+    if (/^https?:\/\//i.test(embedCode.trim())) {
+      return embedCode.trim();
+    }
+  }
+  if (url && /^https?:\/\//i.test(url.trim())) {
+    return url.trim();
+  }
+  return null;
+}
+
+export function PlayerModal({
+  item,
+  initialEpisode = 1,
+  initialServerIndex = 0,
+  onClose,
+}: PlayerModalProps) {
+  const [selectedServer, setSelectedServer] = useState(initialServerIndex);
+  const [subtitleLang, setSubtitleLang] = useState<'ar' | 'en' | 'off'>('ar');
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [episodeNum, setEpisodeNum] = useState(initialEpisode);
+
+  // Server Filtering system states
+  const [filterMap, setFilterMap] = useState<Record<number, ServerFilterEntry>>({});
+  const [isFiltering, setIsFiltering] = useState(false);
+  const [filterAlert, setFilterAlert] = useState<{
+    kind: 'switched' | 'warning';
+    message: string;
+  } | null>(null);
+  const [bypassEpisodeSrc, setBypassEpisodeSrc] = useState(false);
+
+  // Reset selections when media item or initial props change
+  useEffect(() => {
+    setEpisodeNum(initialEpisode);
+    setSelectedServer(initialServerIndex);
+    setFilterMap({});
+    setFilterAlert(null);
+    setBypassEpisodeSrc(false);
+  }, [item?.id, initialEpisode, initialServerIndex]);
+
+  // Helper to mark a server faulty at runtime and auto-switch to next healthy server
+  const handleServerFaultFailover = useCallback(
+    (faultIdx: number, reason: string) => {
+      if (!item) return;
+      const total = item.servers.length;
+      setFilterMap((prev) => {
+        const next: Record<number, ServerFilterEntry> = {
+          ...prev,
+          [faultIdx]: {
+            url: prev[faultIdx]?.url || '',
+            ok: false,
+            faultType: reason.includes('403')
+              ? '403'
+              : /sandbox/i.test(reason)
+                ? 'sandboxed_embed'
+                : 'error',
+            httpStatus: reason.includes('403') ? 403 : 0,
+            reason,
+          },
+        };
+
+        // Find first non-faulty alternative server
+        let candidateIdx = -1;
+        for (let i = 0; i < total; i++) {
+          if (i !== faultIdx && next[i]?.ok !== false) {
+            candidateIdx = i;
+            break;
+          }
+        }
+
+        if (candidateIdx !== -1) {
+          setSelectedServer(candidateIdx);
+          setFilterAlert({
+            kind: 'switched',
+            message: `تنبيه: السيرفر ${faultIdx + 1} به عطل (${reason}) — تم التبديل تلقائياً إلى السيرفر ${candidateIdx + 1}.`,
+          });
+        } else {
+          setFilterAlert({
+            kind: 'warning',
+            message: `تنبيه: السيرفر ${faultIdx + 1} به عطل (${reason}).`,
+          });
+        }
+
+        return next;
+      });
+    },
+    [item]
+  );
+
+  // Proactive Server Filtering scan on open / episode change
+  useEffect(() => {
+    if (!item) return;
+
+    const episodesList = item.seasons?.[0]?.episodes || [];
+    const activeEp = episodesList.find((e) => e.number === episodeNum);
+    const epSrc = extractSafeStreamSrc(activeEp?.embedCode, activeEp?.watchUrl);
+
+    const serverUrls = item.servers.map((srv) => extractSafeStreamSrc(srv.embedCode, srv.url) || '');
+    const allUrls = epSrc ? [...serverUrls, epSrc] : serverUrls;
+
+    if (allUrls.every((u) => !u)) return;
+
+    let cancelled = false;
+    setIsFiltering(true);
+    setBypassEpisodeSrc(false);
+
+    (async () => {
+      try {
+        const res = await fetch('/api/filter-servers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls: allUrls }),
+        });
+        const data = (await res.json()) as { ok?: boolean; results?: ServerFilterEntry[] };
+        if (cancelled || !data.ok || !Array.isArray(data.results)) return;
+
+        const nextMap: Record<number, ServerFilterEntry> = {};
+        const faultySummaries: string[] = [];
+
+        item.servers.forEach((_, idx) => {
+          const entry = data.results?.[idx];
+          if (entry) {
+            nextMap[idx] = entry;
+            if (!entry.ok) {
+              faultySummaries.push(`السيرفر ${idx + 1} (${entry.reason})`);
+            }
+          }
+        });
+
+        setFilterMap(nextMap);
+
+        // If episode-specific URL failed (403 / Sandboxed embed / 404), bypass it if we have a working server
+        const epResult = epSrc ? data.results[item.servers.length] : null;
+        const firstHealthyIdx = item.servers.findIndex((_, idx) => nextMap[idx]?.ok === true);
+
+        if (epSrc && epResult && !epResult.ok && firstHealthyIdx !== -1) {
+          setBypassEpisodeSrc(true);
+          setSelectedServer(firstHealthyIdx);
+          setFilterAlert({
+            kind: 'switched',
+            message: `تنبيه: رابط الحلقة الأساسي به عطل (${epResult.reason}) — تم التبديل تلقائياً إلى السيرفر ${firstHealthyIdx + 1}.`,
+          });
+          return;
+        }
+
+        // Check active server health and auto-switch on 403 / Sandboxed embed / broken
+        const activeEntry = nextMap[initialServerIndex];
+        if (activeEntry && !activeEntry.ok) {
+          if (firstHealthyIdx !== -1 && firstHealthyIdx !== initialServerIndex) {
+            setSelectedServer(firstHealthyIdx);
+            setFilterAlert({
+              kind: 'switched',
+              message: `تنبيه: السيرفر ${initialServerIndex + 1} به عطل (${activeEntry.reason}) — تم التبديل تلقائياً إلى السيرفر ${firstHealthyIdx + 1}.`,
+            });
+          } else {
+            setFilterAlert({
+              kind: 'warning',
+              message: `تنبيه: السيرفر ${initialServerIndex + 1} به عطل (${activeEntry.reason}).`,
+            });
+          }
+        } else if (faultySummaries.length > 0) {
+          setFilterAlert({
+            kind: 'warning',
+            message: `تنبيه تصفية السيرفرات: تم رصد عطل في ${faultySummaries[0]} وتم تجنبه تلقائياً.`,
+          });
+        }
+      } catch {
+        // Silent fallback if filter request cannot complete
+      } finally {
+        if (!cancelled) setIsFiltering(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [item?.id, episodeNum, initialServerIndex]);
+
+  // Listen for postMessage cues from embedded players reporting sandboxed embed or 403 errors
+  useEffect(() => {
+    if (!item) return;
+    const onMessage = (event: MessageEvent) => {
+      const payload = typeof event.data === 'string' ? event.data : JSON.stringify(event.data || '');
+      if (/sandboxed\s*embed|error\s*403|403\s*forbidden/i.test(payload)) {
+        handleServerFaultFailover(
+          selectedServer,
+          /sandbox/i.test(payload) ? 'رسالة Sandboxed embed' : 'خطأ 403'
+        );
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [item?.id, selectedServer, handleServerFaultFailover]);
+
+  if (!item) return null;
+
+  const serversList =
+    item.servers.length > 0
+      ? item.servers
+      : [
+          {
+            id: 'default',
+            name: '1',
+            quality: item.quality,
+            speed: 'سريع',
+            tag: item.quality,
+          },
+        ];
+
+  const activeServer = serversList[selectedServer] || serversList[0];
+  const activeQuality = cleanQualityIdentifier(activeServer.quality, item.quality);
+  const episodes = item.seasons?.[0]?.episodes || [];
+  const activeEpisodeObj = episodes.find((e) => e.number === episodeNum);
+  const episodeSpecificSrc = bypassEpisodeSrc
+    ? null
+    : extractSafeStreamSrc(activeEpisodeObj?.embedCode, activeEpisodeObj?.watchUrl);
+  const activeFilterEntry = filterMap[selectedServer];
+  const serverSrc =
+    activeFilterEntry?.directStreamUrl || extractSafeStreamSrc(activeServer.embedCode, activeServer.url);
+  const finalStreamSrc = episodeSpecificSrc || serverSrc;
+  const isDirectVideoFile = Boolean(finalStreamSrc && /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(finalStreamSrc));
+
+  const handleManualServerSelect = (idx: number) => {
+    const entry = filterMap[idx];
+    if (entry && !entry.ok) {
+      const healthyAlt = serversList.findIndex((_, i) => i !== idx && filterMap[i]?.ok === true);
+      if (healthyAlt !== -1) {
+        setSelectedServer(healthyAlt);
+        setFilterAlert({
+          kind: 'switched',
+          message: `السيرفر ${idx + 1} معطل حالياً (${entry.reason}) — تم تحويلك تلقائياً إلى السيرفر ${healthyAlt + 1}.`,
+        });
+        return;
+      }
+      setFilterAlert({
+        kind: 'warning',
+        message: `تنبيه: السيرفر ${idx + 1} مسجل كمعطل (${entry.reason}).`,
+      });
+    }
+    setSelectedServer(idx);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4">
+      <div className="fixed inset-0 bg-black/90 backdrop-blur-md" onClick={onClose} />
+      <div className="relative z-10 w-[96vw] max-w-[1320px] rounded-2xl sm:rounded-3xl bg-[#0c1821] border border-white/15 shadow-2xl overflow-hidden max-h-[95vh] flex flex-col">
+        {/* Compact Top Bar */}
+        <div className="flex items-center justify-between gap-3 bg-[#1a242e] px-4 py-2.5 border-b border-white/10">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-[#D92321]/15 border border-[#D92321]/40 text-[#D92321] shrink-0">
+              <Tv className="w-4 h-4" />
+              <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#4CAF50] opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-[#4CAF50]" />
+              </span>
+            </div>
+            <div className="min-w-0">
+              <h3 className="font-display text-xs sm:text-sm font-extrabold text-white truncate">
+                {item.title}
+                {item.kind === 'series' ? ` — الحلقة ${String(episodeNum).padStart(2, '0')}` : ''}
+              </h3>
+              <p className="text-[11px] text-[#b7c9ef] flex items-center gap-1.5">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-[#4CAF50]" />
+                <span>سيرفر #{selectedServer + 1}</span>
+                <span className="font-latin rounded bg-white/10 px-1.5 py-0.2 text-[10px] font-black text-[#f9c400]">
+                  {activeQuality}
+                </span>
+                {isFiltering && (
+                  <span className="inline-flex items-center gap-1 text-[10px] text-[#4CAF50] font-bold mr-1">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span>تصفية السيرفرات...</span>
+                  </span>
+                )}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/10 text-white hover:bg-[#D92321] transition-colors cursor-pointer shrink-0"
+            aria-label="إغلاق المشغل"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Auto Server Filtering Alert Banner */}
+        {filterAlert && (
+          <div
+            className={`flex items-center justify-between gap-3 px-4 py-2 text-xs font-bold border-b ${
+              filterAlert.kind === 'switched'
+                ? 'bg-[#f9c400]/12 border-[#f9c400]/30 text-[#f9c400]'
+                : 'bg-[#D92321]/15 border-[#D92321]/35 text-[#ff8a88]'
+            }`}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span className="truncate sm:whitespace-normal">{filterAlert.message}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setFilterAlert(null)}
+              className="rounded p-0.5 hover:bg-white/10 cursor-pointer shrink-0"
+              aria-label="إخفاء التنبيه"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Main Body: Right Compact Server Rail (in RTL first column = right) + Large Video Viewport */}
+        <div className="flex-1 min-h-0 overflow-y-auto p-2.5 sm:p-3.5">
+          <div className="grid grid-cols-1 lg:grid-cols-[152px_minmax(0,1fr)] gap-3 items-start">
+            {/* Right Sidebar: Compact Animated Number + Quality Servers Only */}
+            <aside className="rounded-2xl bg-[#101e29] border border-white/[0.08] p-2.5 space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold text-white">
+                  <Server className="w-3.5 h-3.5 text-[#D92321]" />
+                  <span>السيرفرات</span>
+                </span>
+                <span className="font-latin rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-black text-[#f9c400]">
+                  {serversList.length}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-1 gap-1.5 lg:max-h-[580px] lg:overflow-y-auto">
+                {serversList.map((srv, idx) => {
+                  const isActive = selectedServer === idx;
+                  const srvFilter = filterMap[idx];
+                  const isBroken = Boolean(srvFilter && !srvFilter.ok);
+                  const isVerifiedOk = Boolean(srvFilter && srvFilter.ok);
+                  const qualityLabel = cleanQualityIdentifier(srv.quality, item.quality);
+
+                  return (
+                    <button
+                      key={srv.id || idx}
+                      type="button"
+                      onClick={() => handleManualServerSelect(idx)}
+                      title={
+                        isBroken
+                          ? `عطل في السيرفر ${idx + 1}: ${srvFilter?.reason}`
+                          : `سيرفر ${idx + 1} (${qualityLabel})`
+                      }
+                      style={{ animationDelay: `${idx * 35}ms` }}
+                      className={`moov-server-card moov-server-enter group flex items-center justify-between gap-1.5 rounded-xl border px-2.5 py-2 transition-all duration-300 cursor-pointer ${
+                        isActive
+                          ? 'moov-server-card-active bg-gradient-to-l from-[#D92321] via-[#b81b1a] to-[#7c1318] border-[#ff5a58]/70 text-white shadow-[0_8px_20px_-6px_rgba(217,35,33,0.65)]'
+                          : isBroken
+                            ? 'bg-[#D92321]/10 border-[#D92321]/35 text-[#ff9d9b] opacity-75 hover:opacity-100'
+                            : 'bg-[#1a242e]/90 border-white/[0.08] text-white hover:border-[#D92321]/60 hover:bg-[#1e2c38]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span
+                          className={`font-latin flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-xs font-black ${
+                            isActive
+                              ? 'bg-black/35 text-[#f9c400]'
+                              : isBroken
+                                ? 'bg-[#D92321]/25 text-[#ff8a88]'
+                                : 'bg-[#0c1821] text-white border border-white/10 group-hover:border-[#D92321]/50'
+                          }`}
+                        >
+                          {idx + 1}
+                        </span>
+
+                        {isActive ? (
+                          <span className="flex items-end gap-[2px] h-3" aria-hidden="true">
+                            <span className="moov-eq-bar-1 w-[2.5px] h-full rounded-full bg-[#f9c400]" />
+                            <span className="moov-eq-bar-2 w-[2.5px] h-full rounded-full bg-white" />
+                            <span className="moov-eq-bar-3 w-[2.5px] h-full rounded-full bg-[#4CAF50]" />
+                          </span>
+                        ) : isBroken ? (
+                          <AlertTriangle className="w-3 h-3 text-[#f9c400] shrink-0" />
+                        ) : isVerifiedOk ? (
+                          <span className="h-1.5 w-1.5 rounded-full bg-[#4CAF50] shrink-0" />
+                        ) : null}
+                      </div>
+
+                      <span
+                        className={`font-latin shrink-0 rounded px-1.5 py-0.5 text-[10px] font-black ${
+                          isActive
+                            ? 'bg-black/30 text-[#f9c400]'
+                            : 'bg-[#0c1821] text-[#b7c9ef] border border-white/10'
+                        }`}
+                      >
+                        {qualityLabel}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </aside>
+
+            {/* Main Left Area: Large Video Viewport + Series Episodes */}
+            <div className="min-w-0 space-y-3">
+              <div className="relative aspect-video w-full rounded-2xl bg-black border border-white/10 overflow-hidden shadow-2xl">
+                {finalStreamSrc ? (
+                  isDirectVideoFile ? (
+                    <video
+                      key={finalStreamSrc}
+                      src={finalStreamSrc}
+                      controls
+                      autoPlay
+                      playsInline
+                      onError={() => handleServerFaultFailover(selectedServer, 'تعذر تحميل ملف الفيديو')}
+                      className="h-full w-full bg-black"
+                    />
+                  ) : (
+                    <iframe
+                      key={finalStreamSrc}
+                      src={finalStreamSrc}
+                      title={`${item.title} - ${selectedServer + 1}`}
+                      allowFullScreen
+                      referrerPolicy="no-referrer"
+                      onError={() => handleServerFaultFailover(selectedServer, 'تعذر تحميل المشغل المدمج')}
+                      allow="autoplay; fullscreen; encrypted-media; picture-in-picture; accelerometer; gyroscope"
+                      className="h-full w-full border-0 bg-black"
+                    />
+                  )
+                ) : (
+                  <>
+                    <img
+                      src={item.backdrop || item.poster}
+                      alt={item.title}
+                      className={`h-full w-full object-cover opacity-80 transition-transform duration-[8000ms] ${
+                        isPlaying ? 'scale-105' : 'scale-100'
+                      }`}
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black via-black/25 to-black/40" />
+
+                    {/* Top Quality Watermark */}
+                    <div className="absolute top-4 left-4 flex items-center gap-2">
+                      <span className="font-latin rounded-lg bg-[#D92321] px-2.5 py-1 text-[11px] font-black text-white">
+                        {activeQuality}
+                      </span>
+                    </div>
+
+                    {/* Center Play Button */}
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4">
+                      <button
+                        type="button"
+                        onClick={() => setIsPlaying((p) => !p)}
+                        className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-[#D92321] text-white shadow-[0_0_32px_rgba(217,35,33,0.7)] hover:scale-105 transition-transform cursor-pointer"
+                        aria-label={isPlaying ? 'إيقاف التشغيل' : 'استئناف التشغيل'}
+                      >
+                        {isPlaying ? <Pause className="w-7 h-7" /> : <Play className="w-7 h-7 fill-current" />}
+                      </button>
+
+                      {subtitleLang !== 'off' && (
+                        <div className="mt-8 rounded-lg bg-black/75 px-4 py-1.5 text-sm font-bold text-white border border-white/10">
+                          {subtitleLang === 'ar'
+                            ? 'ترجمة عربية احترافية متزامنة — جاري البث على سيرفر RahaL TV'
+                            : 'English Subtitles Active — Streaming via RahaL TV CDN'}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Bottom Controls */}
+                    <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-center justify-between gap-3 bg-black/80 px-4 py-3 backdrop-blur-sm">
+                      <div className="flex items-center gap-3 text-xs font-bold text-white">
+                        <button
+                          type="button"
+                          onClick={() => setIsPlaying((p) => !p)}
+                          className="hover:text-[#D92321] cursor-pointer"
+                        >
+                          {isPlaying ? 'إيقاف' : 'تشغيل'}
+                        </button>
+                        <span className="font-latin text-[#b7c9ef]">
+                          {isPlaying ? '14:22' : '00:00'} / {item.duration}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="text-[#b7c9ef]">الترجمة:</span>
+                        {(
+                          [
+                            { id: 'ar', label: 'العربية' },
+                            { id: 'en', label: 'English' },
+                            { id: 'off', label: 'إيقاف' },
+                          ] as const
+                        ).map((sub) => (
+                          <button
+                            key={sub.id}
+                            type="button"
+                            onClick={() => setSubtitleLang(sub.id)}
+                            className={`rounded-lg px-2.5 py-1 font-bold cursor-pointer ${
+                              subtitleLang === sub.id
+                                ? 'bg-[#D92321] text-white'
+                                : 'bg-white/10 text-[#b7c9ef] hover:text-white'
+                            }`}
+                          >
+                            {sub.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Series Episodes Switcher */}
+              {episodes.length > 0 && (
+                <div className="rounded-2xl bg-[#1a242e]/60 border border-white/[0.08] p-3">
+                  <p className="text-xs font-extrabold text-white mb-2">التنقل السريع بين الحلقات:</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {episodes.map((ep) => (
+                      <button
+                        key={ep.number}
+                        type="button"
+                        onClick={() => setEpisodeNum(ep.number)}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors cursor-pointer ${
+                          episodeNum === ep.number
+                            ? 'bg-[#D92321] text-white'
+                            : 'bg-[#0c1821] text-[#b7c9ef] border border-white/10 hover:text-white'
+                        }`}
+                      >
+                        الحلقة {String(ep.number).padStart(2, '0')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Google Auth Login Modal ---------------- */
+interface LoginModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  firebaseUser: User | null;
+  isAdmin: boolean;
+  onGoogleLogin: () => Promise<void>;
+  onLogout: () => Promise<void>;
+  onOpenAdmin: () => void;
+}
+
+export function LoginModal({
+  isOpen,
+  onClose,
+  firebaseUser,
+  isAdmin,
+  onGoogleLogin,
+  onLogout,
+  onOpenAdmin,
+}: LoginModalProps) {
+  const [signingIn, setSigningIn] = useState(false);
+
+  if (!isOpen) return null;
+
+  const handleGoogleClick = async () => {
+    setSigningIn(true);
+    try {
+      await onGoogleLogin();
+      onClose();
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="fixed inset-0 bg-black/75 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-md rounded-3xl bg-[#0c1821] border border-white/10 p-6 shadow-2xl">
+        <div className="flex items-center justify-between mb-5">
+          <h2 className="font-display text-lg font-extrabold text-white">
+            {firebaseUser ? 'حسابي على RahaL TV' : 'تسجيل الدخول إلى RahaL TV'}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 text-white hover:bg-[#D92321] cursor-pointer"
+            aria-label="إغلاق نافذة الحساب"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {firebaseUser ? (
+          <div className="space-y-4 text-center">
+            {firebaseUser.photoURL ? (
+              <img
+                src={firebaseUser.photoURL}
+                alt={firebaseUser.displayName || 'User'}
+                referrerPolicy="no-referrer"
+                className="mx-auto h-16 w-16 rounded-2xl object-cover border-2 border-[#D92321]"
+              />
+            ) : (
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[#D92321]/20 border border-[#D92321] text-xl font-black text-white">
+                {(firebaseUser.displayName || 'RT').slice(0, 2).toUpperCase()}
+              </div>
+            )}
+
+            <div>
+              <p className="text-base font-extrabold text-white">
+                أهلاً بك، {firebaseUser.displayName || 'عضو RahaL TV'}
+              </p>
+              <p className="text-xs text-[#b7c9ef] mt-1">{firebaseUser.email}</p>
+              {isAdmin && (
+                <span className="mt-2 inline-flex items-center gap-1 rounded-lg bg-[#f9c400]/15 border border-[#f9c400]/40 px-2.5 py-1 text-[11px] font-black text-[#f9c400]">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  مشرف معتمد
+                </span>
+              )}
+            </div>
+
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenAdmin();
+                }}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] py-3 text-xs font-black text-[#06131c] transition-colors cursor-pointer"
+              >
+                <LayoutDashboard className="w-4 h-4" />
+                <span>فتح لوحة تحكم الإدارة</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                void onLogout();
+                onClose();
+              }}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-white/10 hover:bg-[#D92321] py-3 text-xs font-extrabold text-white transition-colors cursor-pointer"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>تسجيل الخروج</span>
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4 text-center">
+            <p className="text-xs text-[#b7c9ef] leading-relaxed">
+              سجّل الدخول بحساب Google لحفظ قائمتك سحابيًا، إرسال طلبات الأفلام والمسلسلات، أو
+              الدخول إلى لوحة تحكم الإدارة.
+            </p>
+            <button
+              type="button"
+              disabled={signingIn}
+              onClick={() => void handleGoogleClick()}
+              className="w-full inline-flex items-center justify-center gap-2.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] py-3.5 text-sm font-extrabold text-white shadow-lg transition-colors cursor-pointer"
+            >
+              <ShieldCheck className="w-5 h-5" />
+              <span>{signingIn ? 'جاري فتح نافذة Google...' : 'تسجيل الدخول بحساب Google'}</span>
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Footer Topics & Visitor Requests Modal ---------------- */
+interface FooterInfoModalProps {
+  topic: FooterTopic | null;
+  onClose: () => void;
+  firebaseUser: User | null;
+  onGoogleLogin: () => Promise<void>;
+  requests: VisitorRequest[];
+  onAddRequest: (req: { title: string; type: VisitorRequest['type']; notes: string }) => Promise<void>;
+}
+
+export function FooterInfoModal({
+  topic,
+  onClose,
+  firebaseUser,
+  onGoogleLogin,
+  requests,
+  onAddRequest,
+}: FooterInfoModalProps) {
+  const [reqTitle, setReqTitle] = useState('');
+  const [reqType, setReqType] = useState<VisitorRequest['type']>('فيلم');
+  const [reqNotes, setReqNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+
+  if (!topic) return null;
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!reqTitle.trim() || !firebaseUser) return;
+    setSubmitting(true);
+    try {
+      await onAddRequest({ title: reqTitle.trim(), type: reqType, notes: reqNotes.trim() });
+      setReqTitle('');
+      setReqNotes('');
+      setSubmitted(true);
+      setTimeout(() => setSubmitted(false), 3000);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="fixed inset-0 bg-black/75 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-xl rounded-3xl bg-[#0c1821] border border-white/10 shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between bg-[#1a242e] px-6 py-4 border-b border-white/10">
+          <div className="flex items-center gap-2.5">
+            {topic === 'requests' ? (
+              <Sparkles className="w-5 h-5 text-[#4CAF50]" />
+            ) : topic === 'community' ? (
+              <Users className="w-5 h-5 text-[#D92321]" />
+            ) : (
+              <ShieldCheck className="w-5 h-5 text-[#f9c400]" />
+            )}
+            <h2 className="font-display text-lg font-extrabold text-white">
+              {topic === 'terms' && 'سياسة الاستخدام'}
+              {topic === 'privacy' && 'سياسة الخصوصية'}
+              {topic === 'community' && 'مجتمع RahaL TV'}
+              {topic === 'requests' && 'طلبات الزوار — اطلب فيلمك أو مسلسلك'}
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 text-white hover:bg-[#D92321] cursor-pointer"
+            aria-label="إغلاق"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="p-6 max-h-[70vh] overflow-y-auto space-y-4 text-sm leading-relaxed text-[#b7c9ef]">
+          {topic === 'terms' && (
+            <>
+              <p className="text-white font-bold">مرحبًا بك في منصة RahaL TV الترفيهية.</p>
+              <p>
+                تتيح المنصة فهرسة واستعراض أحدث الأفلام والمسلسلات العربية والعالمية وعروض
+                المصارعة بجودات متعددة، مع مراعاة قواعد الاستخدام الآمن وعدم إعادة نشر المحتوى
+                لأغراض تجارية.
+              </p>
+              <p>
+                يتم تحديث السيرفرات يوميًا لضمان استقرار المشاهدة وتوفير روابط تحميل مباشرة خالية
+                من الأعطال.
+              </p>
+            </>
+          )}
+
+          {topic === 'privacy' && (
+            <>
+              <p className="text-white font-bold">حماية خصوصية الزوار أولوية أساسية لدينا.</p>
+              <p>
+                تُحفظ قائمة المشاهدة (قائمتي) وتفضيلات البحث محليًا على جهازك فقط دون تتبع بيانات
+                حساسة أو مشاركتها مع أي طرف خارجي.
+              </p>
+            </>
+          )}
+
+          {topic === 'community' && (
+            <>
+              <p className="text-white font-bold">انضم إلى مجتمع عشاق السينما والدراما على RahaL TV.</p>
+              <p>
+                يمكنك متابعة أحدث إصدارات رمضان 2026، وتقييمات IMDb المحدثة يوميًا، وترشيح الأعمال
+                المفضلة ليتم إضافتها في قائمة العروض المثبتة.
+              </p>
+            </>
+          )}
+
+          {topic === 'requests' && (
+            <div className="space-y-5">
+              {!firebaseUser ? (
+                <div className="rounded-2xl bg-[#1a242e] border border-white/10 p-5 text-center space-y-3">
+                  <p className="text-sm font-bold text-white">
+                    سجّل الدخول بحساب Google لإرسال طلبك ومتابعة حالة تنفيذه في قاعدة البيانات
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void onGoogleLogin()}
+                    className="inline-flex items-center gap-2 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-5 py-2.5 text-xs font-extrabold text-white cursor-pointer"
+                  >
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>تسجيل الدخول بحساب Google</span>
+                  </button>
+                </div>
+              ) : (
+                <form onSubmit={handleSubmit} className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs font-bold text-white mb-1">اسم العمل المطلوب</label>
+                      <input
+                        type="text"
+                        required
+                        value={reqTitle}
+                        onChange={(e) => setReqTitle(e.target.value)}
+                        placeholder="مثال: فيلم Dune Part Three"
+                        className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#4CAF50] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-white mb-1">النوع</label>
+                      <select
+                        value={reqType}
+                        onChange={(e) => setReqType(e.target.value as VisitorRequest['type'])}
+                        className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2.5 text-sm text-white focus:border-[#4CAF50] focus:outline-none"
+                      >
+                        <option value="فيلم">فيلم</option>
+                        <option value="مسلسل">مسلسل</option>
+                        <option value="عرض مصارعة">عرض مصارعة</option>
+                        <option value="مسرحية">مسرحية</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-white mb-1">
+                      ملاحظات أو سنة الإصدار (اختياري)
+                    </label>
+                    <input
+                      type="text"
+                      value={reqNotes}
+                      onChange={(e) => setReqNotes(e.target.value)}
+                      placeholder="يفضل جودة BluRay 1080p مترجم"
+                      className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#4CAF50] focus:outline-none"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="inline-flex items-center gap-2 rounded-xl bg-[#4CAF50] hover:bg-[#43a047] px-5 py-2.5 text-xs font-extrabold text-white transition-colors cursor-pointer"
+                  >
+                    <Send className="w-4 h-4" />
+                    <span>{submitting ? 'جاري الإرسال...' : 'إرسال الطلب لإدارة RahaL TV'}</span>
+                  </button>
+                  {submitted && (
+                    <p className="inline-flex items-center gap-1.5 mr-3 text-xs font-bold text-[#4CAF50]">
+                      <CheckCircle2 className="w-4 h-4" />
+                      تم حفظ طلبك في قاعدة البيانات!
+                    </p>
+                  )}
+                </form>
+              )}
+
+              {requests.length > 0 && (
+                <div className="border-t border-white/10 pt-4">
+                  <p className="text-xs font-extrabold text-white mb-2.5">
+                    طلباتك المسجلة ({requests.length}):
+                  </p>
+                  <div className="space-y-2">
+                    {requests.map((req) => (
+                      <div
+                        key={req.id}
+                        className="rounded-xl bg-[#1a242e] px-3.5 py-2.5 text-xs space-y-1"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <span className="font-bold text-white">{req.title}</span>
+                            {req.notes && <span className="text-[#b7c9ef] mr-2">— {req.notes}</span>}
+                          </div>
+                          <span className="rounded-md bg-[#4CAF50]/20 px-2 py-0.5 font-bold text-[#4CAF50] shrink-0">
+                            {req.status === 'completed'
+                              ? 'تمت الإضافة'
+                              : req.status === 'approved'
+                                ? 'موافق عليه'
+                                : req.status === 'rejected'
+                                  ? 'مرفوض'
+                                  : 'قيد المراجعة'}
+                          </span>
+                        </div>
+                        {req.adminNote && (
+                          <p className="text-[11px] text-[#f9c400]">رد الإدارة: {req.adminNote}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

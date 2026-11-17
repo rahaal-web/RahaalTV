@@ -1,0 +1,265 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Global Helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'mfeshmeny2@gmail.com' ||
+        request.auth.token.email == 'ccicada6@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidMedia(data) {
+      return data.keys().hasAll([
+        'id', 'slug', 'title', 'englishTitle', 'kind', 'categories', 'genres',
+        'year', 'country', 'language', 'quality', 'duration', 'imdb', 'votes',
+        'views', 'likes', 'pinned', 'isNew', 'comingSoon', 'poster', 'backdrop',
+        'tagline', 'story', 'shortUrl', 'trailerUrl', 'trailerLabel', 'trailerDuration',
+        'cast', 'seasons', 'franchiseIds', 'servers', 'downloads',
+        'updatedBy', 'createdAt', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'id', 'slug', 'title', 'englishTitle', 'kind', 'categories', 'genres',
+        'year', 'country', 'language', 'quality', 'duration', 'imdb', 'votes',
+        'views', 'likes', 'pinned', 'isNew', 'comingSoon', 'poster', 'backdrop',
+        'tagline', 'story', 'shortUrl', 'trailerUrl', 'trailerLabel', 'trailerDuration',
+        'cast', 'seasons', 'franchiseIds', 'servers', 'downloads',
+        'updatedBy', 'createdAt', 'updatedAt'
+      ])
+      && isValidId(data.id)
+      && data.slug is string && data.slug.size() >= 1 && data.slug.size() <= 128
+      && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+      && data.englishTitle is string && data.englishTitle.size() >= 1 && data.englishTitle.size() <= 200
+      && data.kind in ['movie', 'series', 'tv', 'wrestling']
+      && data.categories is list && data.categories.size() >= 1 && data.categories.size() <= 10 && data.categories[0] is string
+      && data.genres is list && data.genres.size() >= 1 && data.genres.size() <= 10 && data.genres[0] is string
+      && data.year is string && data.year.size() >= 4 && data.year.size() <= 10
+      && data.country is string && data.country.size() >= 1 && data.country.size() <= 80
+      && data.language is string && data.language.size() >= 1 && data.language.size() <= 80
+      && data.quality is string && data.quality.size() >= 1 && data.quality.size() <= 40
+      && data.duration is string && data.duration.size() >= 1 && data.duration.size() <= 40
+      && (data.imdb is int || data.imdb is float) && data.imdb >= 0 && data.imdb <= 10
+      && data.votes is string && data.votes.size() >= 1 && data.votes.size() <= 40
+      && (data.views is int || data.views is float) && data.views >= 0
+      && (data.likes is int || data.likes is float) && data.likes >= 0
+      && data.pinned is bool
+      && data.isNew is bool
+      && data.comingSoon is bool
+      && data.poster is string && data.poster.size() >= 1 && data.poster.size() <= 500
+      && data.backdrop is string && data.backdrop.size() >= 1 && data.backdrop.size() <= 500
+      && data.tagline is string && data.tagline.size() <= 400
+      && data.story is string && data.story.size() >= 1 && data.story.size() <= 3000
+      && data.shortUrl is string && data.shortUrl.size() <= 300
+      && data.trailerUrl is string && data.trailerUrl.size() <= 500
+      && data.trailerLabel is string && data.trailerLabel.size() <= 200
+      && data.trailerDuration is string && data.trailerDuration.size() <= 30
+      && data.cast is list && data.cast.size() <= 25
+      && data.seasons is list && data.seasons.size() <= 20
+      && data.franchiseIds is list && data.franchiseIds.size() <= 15
+      && data.servers is list && data.servers.size() <= 15
+      && data.downloads is list && data.downloads.size() <= 15
+      && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidVisitorRequest(data) {
+      return data.keys().hasAll([
+        'id', 'userId', 'requesterName', 'title', 'type', 'notes', 'status', 'adminNote', 'createdAt', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'id', 'userId', 'requesterName', 'title', 'type', 'notes', 'status', 'adminNote', 'createdAt', 'updatedAt'
+      ])
+      && isValidId(data.id)
+      && data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128
+      && data.requesterName is string && data.requesterName.size() >= 1 && data.requesterName.size() <= 120
+      && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+      && data.type in ['فيلم', 'مسلسل', 'عرض مصارعة', 'مسرحية']
+      && data.notes is string && data.notes.size() <= 500
+      && data.status in ['pending', 'approved', 'completed', 'rejected']
+      && data.adminNote is string && data.adminNote.size() <= 500
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'photoURL', 'watchlistIds', 'role', 'createdAt', 'updatedAt'])
+      && data.keys().hasOnly(['uid', 'displayName', 'photoURL', 'watchlistIds', 'role', 'createdAt', 'updatedAt'])
+      && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
+      && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+      && data.photoURL is string && data.photoURL.size() <= 500
+      && data.watchlistIds is list && data.watchlistIds.size() <= 100
+      && data.role in ['member', 'admin']
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivateInfo(data) {
+      return data.keys().hasAll(['email', 'updatedAt'])
+      && data.keys().hasOnly(['email', 'updatedAt'])
+      && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRole(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'addedBy', 'createdAt'])
+      && data.keys().hasOnly(['uid', 'displayName', 'addedBy', 'createdAt'])
+      && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
+      && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+      && data.addedBy is string && data.addedBy.size() >= 1 && data.addedBy.size() <= 128
+      && data.createdAt is timestamp;
+    }
+
+    function isValidSiteSettings(data) {
+      return data.keys().hasAll([
+        'siteName', 'tagline', 'announcementText', 'tickerEnabled', 'featuredLimit', 'maintenanceMode', 'maintenanceMessage', 'updatedBy', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'siteName', 'tagline', 'announcementText', 'tickerEnabled', 'featuredLimit', 'maintenanceMode', 'maintenanceMessage', 'updatedBy', 'updatedAt'
+      ])
+      && data.siteName is string && data.siteName.size() >= 1 && data.siteName.size() <= 80
+      && data.tagline is string && data.tagline.size() >= 1 && data.tagline.size() <= 300
+      && data.announcementText is string && data.announcementText.size() <= 300
+      && data.tickerEnabled is bool
+      && (data.featuredLimit is int || data.featuredLimit is float) && data.featuredLimit >= 1 && data.featuredLimit <= 20
+      && data.maintenanceMode is bool
+      && data.maintenanceMessage is string && data.maintenanceMessage.size() <= 500
+      && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
+      && data.updatedAt is timestamp;
+    }
+
+    // 4. Collection Rules
+    match /media/{mediaId} {
+      allow get: if isValidId(mediaId);
+      allow list: if true;
+      allow create: if isAdmin()
+        && isValidId(mediaId)
+        && isValidMedia(incoming())
+        && incoming().id == mediaId
+        && incoming().updatedBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(mediaId)
+        && isValidMedia(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(mediaId);
+    }
+
+    match /requests/{requestId} {
+      allow get: if isValidId(requestId) && ((isSignedIn() && existing().userId == request.auth.uid) || isAdmin());
+      allow list: if (isSignedIn() && existing().userId == request.auth.uid) || isAdmin();
+      allow create: if isVerifiedUser()
+        && isValidId(requestId)
+        && isValidVisitorRequest(incoming())
+        && incoming().id == requestId
+        && incoming().userId == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().adminNote == ''
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(requestId)
+        && isValidVisitorRequest(incoming())
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminNote', 'updatedAt']);
+      allow delete: if isValidId(requestId) && ((isVerifiedUser() && existing().userId == request.auth.uid) || isAdmin());
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == userId
+        && (incoming().role == 'member' || isAdmin())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (isOwner(userId) && incoming().role == existing().role && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'watchlistIds', 'updatedAt']))
+        );
+      allow delete: if isAdmin() && isValidId(userId);
+
+      match /private/info {
+        allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+        allow list: if false;
+        allow create, update: if isVerifiedUser()
+          && isValidId(userId)
+          && isOwner(userId)
+          && isValidUserPrivateInfo(incoming())
+          && incoming().updatedAt == request.time;
+        allow delete: if isAdmin() && isValidId(userId);
+      }
+    }
+
+    match /admins/{adminUid} {
+      allow get: if isValidId(adminUid) && (isOwner(adminUid) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isAdmin()
+        && isValidId(adminUid)
+        && isValidAdminRole(incoming())
+        && incoming().uid == adminUid
+        && incoming().addedBy == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(adminUid);
+    }
+
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if isAdmin();
+      allow create, update: if isAdmin()
+        && isValidId(settingId)
+        && isValidSiteSettings(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+  }
+}
