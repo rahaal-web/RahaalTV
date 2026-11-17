@@ -694,6 +694,8 @@ export default function App() {
             item={selectedMedia}
             initialEpisode={routeEpisode}
             initialOpenDownloads={openDownloadsOnSingle}
+            currentUser={firebaseUser}
+            onOpenLogin={() => setLoginOpen(true)}
             onSelectMedia={handleSelectMedia}
             onApplyFilter={handleApplyFilter}
             onNavigateHome={navigateHome}

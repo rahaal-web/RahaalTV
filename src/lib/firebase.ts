@@ -685,3 +685,61 @@ export async function revokeAdminRoleFromFirestore(targetUid: string) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
+
+export function sanitizeRatingMediaId(mediaId: string): string {
+  return (
+    String(mediaId || '')
+      .trim()
+      .replace(/[^a-zA-Z0-9_\-]/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 128) || 'media-item'
+  );
+}
+
+export async function submitMediaRatingToFirestore(
+  mediaId: string,
+  uid: string,
+  stars: number
+): Promise<number> {
+  const cleanMediaId = sanitizeRatingMediaId(mediaId);
+  const cleanUid = String(uid || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 128);
+  const ratingId = `${cleanMediaId}__${cleanUid}`;
+  const path = `ratings/${ratingId}`;
+  const safeStars = Math.min(5, Math.max(1, Math.round(Number(stars) || 5)));
+
+  try {
+    const ratingRef = doc(db, 'ratings', ratingId);
+    const snap = await getDoc(ratingRef);
+    if (snap.exists()) {
+      await updateDoc(ratingRef, {
+        stars: safeStars,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(ratingRef, {
+        id: ratingId,
+        mediaId: cleanMediaId,
+        userId: cleanUid,
+        stars: safeStars,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    return safeStars;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteMediaRatingFromFirestore(mediaId: string, uid: string) {
+  const cleanMediaId = sanitizeRatingMediaId(mediaId);
+  const cleanUid = String(uid || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 128);
+  const ratingId = `${cleanMediaId}__${cleanUid}`;
+  const path = `ratings/${ratingId}`;
+
+  try {
+    await deleteDoc(doc(db, 'ratings', ratingId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}

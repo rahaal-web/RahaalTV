@@ -11,6 +11,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidRatingId(id) {
+      return id is string && id.size() >= 3 && id.size() <= 260 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -218,6 +222,17 @@ service cloud.firestore {
       && data.updatedAt is timestamp;
     }
 
+    function isValidMediaRating(data) {
+      return data.keys().hasAll(['id', 'mediaId', 'userId', 'stars', 'createdAt', 'updatedAt'])
+      && data.keys().hasOnly(['id', 'mediaId', 'userId', 'stars', 'createdAt', 'updatedAt'])
+      && isValidRatingId(data.id)
+      && isValidId(data.mediaId)
+      && isValidId(data.userId)
+      && data.stars is int && data.stars >= 1 && data.stars <= 5
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
     // 4. Collection Rules
     match /media/{mediaId} {
       allow get: if isValidId(mediaId);
@@ -319,6 +334,31 @@ service cloud.firestore {
         && incoming().updatedBy == request.auth.uid
         && incoming().updatedAt == request.time;
       allow delete: if false;
+    }
+
+    match /ratings/{ratingId} {
+      allow get: if isValidRatingId(ratingId);
+      allow list: if true;
+      allow create: if isSignedIn()
+        && isValidRatingId(ratingId)
+        && isValidMediaRating(incoming())
+        && incoming().id == ratingId
+        && incoming().userId == request.auth.uid
+        && ratingId == incoming().mediaId + '__' + request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isSignedIn()
+        && isValidRatingId(ratingId)
+        && isValidMediaRating(incoming())
+        && existing().userId == request.auth.uid
+        && incoming().id == existing().id
+        && incoming().mediaId == existing().mediaId
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['stars', 'updatedAt']);
+      allow delete: if isValidRatingId(ratingId)
+        && ((isSignedIn() && existing().userId == request.auth.uid) || isAdmin());
     }
   }
 }

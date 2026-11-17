@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react';
+import type { User } from 'firebase/auth';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import {
   Bookmark,
   Calendar,
   Check,
+  ChevronDown,
   ChevronLeft,
+  ChevronUp,
   Clock,
   Copy,
   Download,
@@ -11,16 +15,26 @@ import {
   Globe,
   Languages,
   Layers,
+  LogIn,
   Play,
   Server,
   Share2,
   Star,
+  Trash2,
   Tv,
   Users,
 } from 'lucide-react';
+import {
+  db,
+  deleteMediaRatingFromFirestore,
+  handleFirestoreError,
+  OperationType,
+  sanitizeRatingMediaId,
+  submitMediaRatingToFirestore,
+} from '../lib/firebase';
 import { FALLBACK_BACKDROP, FALLBACK_POSTER, handleBackdropError, handlePosterError } from '../lib/mediaFilters';
 import { resolveDisplayShortUrl } from '../lib/permalink';
-import { MediaItem, CatalogFilterState } from '../types/media';
+import { MediaItem, CatalogFilterState, MediaRatingRecord } from '../types/media';
 import { MovieCard } from './MovieCard';
 
 interface SingleDetailViewProps {
@@ -28,6 +42,8 @@ interface SingleDetailViewProps {
   item: MediaItem;
   initialEpisode?: number;
   initialOpenDownloads?: boolean;
+  currentUser: User | null;
+  onOpenLogin: () => void;
   onSelectMedia: (item: MediaItem, openDownloads?: boolean) => void;
   onApplyFilter: (partial: Partial<CatalogFilterState>) => void;
   onNavigateHome: () => void;
@@ -41,11 +57,21 @@ interface SingleDetailViewProps {
 
 type DetailTab = 'watch' | 'seasons' | 'franchise' | 'cast';
 
+const STAR_LABELS: Record<number, string> = {
+  1: 'ضعيف',
+  2: 'مقبول',
+  3: 'جيد — ممتع',
+  4: 'جيد جداً — يستحق المشاهدة',
+  5: 'ممتاز — عمل رائع',
+};
+
 export function SingleDetailView({
   catalog,
   item,
   initialEpisode,
   initialOpenDownloads = false,
+  currentUser,
+  onOpenLogin,
   onSelectMedia,
   onApplyFilter,
   onNavigateHome,
@@ -64,17 +90,82 @@ export function SingleDetailView({
   );
   const [copiedUrl, setCopiedUrl] = useState(false);
 
+  // Firestore Star Rating State
+  const [ratingsList, setRatingsList] = useState<MediaRatingRecord[]>([]);
+  const [ratingsLoading, setRatingsLoading] = useState(true);
+  const [hoverStar, setHoverStar] = useState<number | null>(null);
+  const [savingRating, setSavingRating] = useState(false);
+
+  const cleanMediaId = sanitizeRatingMediaId(item.id);
+
   useEffect(() => {
     setActiveTab('watch');
     setShowDownloads(initialOpenDownloads);
     setSelectedSeasonIdx(0);
     setSelectedEpisodeNumber(initialEpisode || item.seasons?.[0]?.episodes?.[0]?.number || 1);
+    setHoverStar(null);
     if (initialOpenDownloads) {
       setTimeout(() => {
         document.getElementById('watch-download-tabs')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 120);
     }
   }, [item.id, initialEpisode, initialOpenDownloads]);
+
+  // Real-time Firestore listener for media star ratings
+  useEffect(() => {
+    setRatingsLoading(true);
+    const ratingsPath = 'ratings';
+    const q = query(collection(db, ratingsPath), where('mediaId', '==', cleanMediaId));
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const list = snapshot.docs
+          .map((d) => {
+            const raw = d.data() as Partial<MediaRatingRecord> & {
+              createdAt?: { toMillis?: () => number };
+              updatedAt?: { toMillis?: () => number };
+            };
+            return {
+              id: String(raw.id || d.id),
+              mediaId: String(raw.mediaId || cleanMediaId),
+              userId: String(raw.userId || ''),
+              stars: Math.min(5, Math.max(1, Math.round(Number(raw.stars) || 0))),
+              createdAtMs:
+                raw.createdAt && typeof raw.createdAt.toMillis === 'function'
+                  ? raw.createdAt.toMillis()
+                  : 0,
+              updatedAtMs:
+                raw.updatedAt && typeof raw.updatedAt.toMillis === 'function'
+                  ? raw.updatedAt.toMillis()
+                  : 0,
+            } as MediaRatingRecord;
+          })
+          .filter((r) => r.stars >= 1 && r.stars <= 5);
+        setRatingsList(list);
+        setRatingsLoading(false);
+      },
+      (error) => {
+        setRatingsLoading(false);
+        try {
+          handleFirestoreError(error, OperationType.LIST, ratingsPath);
+        } catch {
+          // Keep page interactive if rules are not yet deployed or offline
+        }
+      }
+    );
+
+    return () => unsubscribe();
+  }, [cleanMediaId]);
+
+  const ratingCount = ratingsList.length;
+  const averageStars =
+    ratingCount > 0 ? ratingsList.reduce((sum, r) => sum + r.stars, 0) / ratingCount : 0;
+  const userRatingRecord = currentUser
+    ? ratingsList.find((r) => r.userId === currentUser.uid)
+    : undefined;
+  const userStars = userRatingRecord?.stars || 0;
+  const displayedStarValue = hoverStar ?? userStars;
 
   const seasons = item.seasons || [];
   const activeSeason = seasons[selectedSeasonIdx];
@@ -124,6 +215,37 @@ export function SingleDetailView({
 
   const handleDownload = (quality: string, host: string) => {
     onNotify(`بدأ تجهيز رابط التحميل (${quality}) عبر ${host}`);
+  };
+
+  const handleRateStars = async (stars: number) => {
+    if (!currentUser) {
+      onNotify('يرجى تسجيل الدخول أولاً لتقييم العمل وحفظ تقييمك');
+      onOpenLogin();
+      return;
+    }
+    if (savingRating) return;
+    setSavingRating(true);
+    try {
+      const saved = await submitMediaRatingToFirestore(item.id, currentUser.uid, stars);
+      onNotify(`تم حفظ تقييمك (${saved} من 5 نجوم) بنجاح`);
+    } catch {
+      onNotify('تعذر حفظ التقييم حالياً، يرجى المحاولة لاحقاً');
+    } finally {
+      setSavingRating(false);
+    }
+  };
+
+  const handleClearMyRating = async () => {
+    if (!currentUser || !userStars || savingRating) return;
+    setSavingRating(true);
+    try {
+      await deleteMediaRatingFromFirestore(item.id, currentUser.uid);
+      onNotify('تم إزالة تقييمك لهذا العرض');
+    } catch {
+      onNotify('تعذر إزالة التقييم حالياً');
+    } finally {
+      setSavingRating(false);
+    }
   };
 
   return (
@@ -187,99 +309,317 @@ export function SingleDetailView({
               )}
             </div>
 
-            {/* IMDb Card (.single-imdb) */}
-            <div className="inline-flex shrink-0 items-center gap-3.5 self-start md:self-center rounded-2xl bg-[#1a242e]/95 border border-[#f9c400]/35 px-4 py-3 shadow-xl backdrop-blur-md">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#f9c400] text-[#06131c]">
-                <Star className="w-6 h-6 fill-current" />
-              </div>
-              <div>
-                <div className="flex items-baseline gap-1">
-                  <span className="font-latin text-2xl font-black text-white">
-                    {item.imdb.toFixed(1)}
-                  </span>
-                  <span className="font-latin text-xs font-bold text-[#b7c9ef]">/ 10</span>
+            {/* IMDb + Community Rating Badges */}
+            <div className="flex flex-wrap items-center gap-3 self-start md:self-center shrink-0">
+              <div className="inline-flex items-center gap-3.5 rounded-2xl bg-[#1a242e]/95 border border-[#f9c400]/35 px-4 py-3 shadow-xl backdrop-blur-md">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#f9c400] text-[#06131c]">
+                  <Star className="w-6 h-6 fill-current" />
                 </div>
-                <p className="font-latin text-[11px] font-bold text-[#b7c9ef]">
-                  {item.votes} صوت — IMDb
-                </p>
+                <div>
+                  <div className="flex items-baseline gap-1">
+                    <span className="font-latin text-2xl font-black text-white">
+                      {item.imdb.toFixed(1)}
+                    </span>
+                    <span className="font-latin text-xs font-bold text-[#b7c9ef]">/ 10</span>
+                  </div>
+                  <p className="font-latin text-[11px] font-bold text-[#b7c9ef]">
+                    {item.votes} صوت — IMDb
+                  </p>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      {/* 2. Single Inner Split (.single-inner: Poster + Side Actions Column + Info Column) */}
+      {/* 2. Balanced Equal-Height 3-Column Layout (RTL: Right Poster | Center Story & Details | Left Watch, Download & Rating) */}
       <section className="relative z-20 mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 mt-6">
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-6 lg:gap-8 items-start">
-          {/* Side Column: Poster Rectangle + Watch & Download Buttons (visible without scrolling) */}
-          <div className="md:col-span-4 lg:col-span-3 space-y-3">
-            <div className="relative aspect-[2/3] w-full max-w-[260px] mx-auto md:max-w-none overflow-hidden rounded-2xl border border-white/15 bg-[#0c1821] shadow-[0_20px_50px_rgba(0,0,0,0.65)]">
-              {/* Diagonal Quality Ribbon */}
-              <div className="moov-ribbon bg-[#D92321] py-1 text-[11px] font-black tracking-wider text-white font-latin uppercase">
-                {item.quality}
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-5 lg:gap-6 items-stretch">
+          {/* Right Column: Poster Rectangle + Watchlist inside a full-height matching frame */}
+          <div className="md:col-span-4 lg:col-span-3 order-1 flex flex-col">
+            <div className="flex flex-1 flex-col justify-between gap-3.5 rounded-3xl bg-[#0c1821] border border-white/[0.08] p-3.5 shadow-xl">
+              <div className="relative aspect-[2/3] w-full max-w-[270px] mx-auto md:max-w-none overflow-hidden rounded-2xl border border-white/15 bg-[#08121a] shadow-[0_18px_40px_rgba(0,0,0,0.6)]">
+                {/* Diagonal Quality Ribbon */}
+                <div className="moov-ribbon bg-[#D92321] py-1 text-[11px] font-black tracking-wider text-white font-latin uppercase">
+                  {item.quality}
+                </div>
+
+                <img
+                  src={item.poster || FALLBACK_POSTER}
+                  alt={item.title}
+                  referrerPolicy="no-referrer"
+                  onError={handlePosterError}
+                  className="h-full w-full object-cover object-center"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-[#06131c]/85 via-transparent to-black/15" />
+
+                {/* Centered Frosted Trailer Button (.single-trailer-button) */}
+                <button
+                  type="button"
+                  onClick={() => onOpenTrailer(item)}
+                  className="group absolute inset-0 m-auto flex h-14 w-14 flex-col items-center justify-center rounded-full bg-white/20 border border-white/40 text-white backdrop-blur-md shadow-2xl hover:bg-[#D92321] hover:border-[#D92321] hover:scale-110 transition-all cursor-pointer"
+                  aria-label="تشغيل الإعلان الرسمي"
+                >
+                  <Play className="w-6 h-6 fill-current translate-x-0.5" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onOpenTrailer(item)}
+                  className="absolute bottom-3 left-1/2 -translate-x-1/2 inline-flex items-center gap-1.5 rounded-full bg-black/75 backdrop-blur-md border border-white/15 px-3.5 py-1.5 text-xs font-bold text-white/95 hover:bg-[#D92321] hover:border-[#D92321] transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  <Play className="w-3 h-3 fill-current" />
+                  <span>تشغيل الإعلان</span>
+                </button>
               </div>
 
-              <img
-                src={item.poster || FALLBACK_POSTER}
-                alt={item.title}
-                referrerPolicy="no-referrer"
-                onError={handlePosterError}
-                className="h-full w-full object-cover object-center"
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-[#06131c]/85 via-transparent to-black/15" />
-
-              {/* Centered Frosted Trailer Button (.single-trailer-button) */}
+              {/* Watchlist Toggle Button (.single-playlist-button) */}
               <button
                 type="button"
-                onClick={() => onOpenTrailer(item)}
-                className="group absolute inset-0 m-auto flex h-14 w-14 flex-col items-center justify-center rounded-full bg-white/20 border border-white/40 text-white backdrop-blur-md shadow-2xl hover:bg-[#D92321] hover:border-[#D92321] hover:scale-110 transition-all cursor-pointer"
-                aria-label="تشغيل الإعلان الرسمي"
+                onClick={() => onToggleWatchlist(item)}
+                className={`w-full max-w-[270px] mx-auto md:max-w-none flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-extrabold border transition-all cursor-pointer ${
+                  isInWatchlist
+                    ? 'bg-[#4CAF50]/20 border-[#4CAF50] text-[#4CAF50] shadow-[0_8px_20px_rgba(76,175,80,0.18)]'
+                    : 'bg-[#15222d] border-white/10 text-white hover:border-[#4CAF50] hover:text-[#4CAF50] hover:bg-[#1a2a36]'
+                }`}
               >
-                <Play className="w-6 h-6 fill-current translate-x-0.5" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onOpenTrailer(item)}
-                className="absolute bottom-3 left-1/2 -translate-x-1/2 inline-flex items-center gap-1.5 rounded-full bg-black/75 backdrop-blur-md border border-white/15 px-3.5 py-1.5 text-xs font-bold text-white/95 hover:bg-[#D92321] hover:border-[#D92321] transition-colors whitespace-nowrap cursor-pointer"
-              >
-                <Play className="w-3 h-3 fill-current" />
-                <span>تشغيل الإعلان</span>
+                {isInWatchlist ? <Check className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
+                <span>{isInWatchlist ? 'مُضاف إلى قائمتي' : 'إضافة إلى قائمتي'}</span>
               </button>
             </div>
+          </div>
 
-            {/* Side Watch & Download CTAs (No scroll required) */}
-            <div className="w-full max-w-[260px] mx-auto md:max-w-none space-y-2.5">
-              <button
-                type="button"
-                onClick={() => onOpenPlayer(item, selectedEpisodeNumber)}
-                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#D92321] hover:bg-[#dc0e30] px-4 py-3.5 text-sm font-extrabold text-white shadow-[0_10px_25px_rgba(217,35,33,0.4)] transition-all hover:-translate-y-0.5 cursor-pointer"
-              >
-                <Play className="w-4 h-4 fill-current shrink-0" />
-                <span>
-                  {allEpisodes.length > 0
-                    ? `مشاهدة الحلقة ${String(selectedEpisodeNumber).padStart(2, '0')} الآن`
-                    : 'مشاهدة الآن (سيرفرات متعددة)'}
+          {/* Center Column: Story & Symmetrical 8-Tile Details */}
+          <div className="md:col-span-8 lg:col-span-6 order-3 lg:order-2 flex flex-col gap-4">
+            {/* Story Block (.single-story) */}
+            <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 shadow-xl">
+              <h2 className="font-display text-lg font-extrabold text-white mb-2.5 flex items-center gap-2">
+                <span className="h-5 w-1.5 rounded-full bg-[#D92321]" />
+                قصة العرض
+              </h2>
+              <p className="text-sm sm:text-base leading-relaxed text-[#b7c9ef]">{item.story}</p>
+            </div>
+
+            {/* Clickable Details Grid (.single-details) - Stretches evenly to match adjacent columns */}
+            <div className="flex-1 flex flex-col justify-between rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 shadow-xl">
+              <div>
+                <h2 className="font-display text-lg font-extrabold text-white mb-4 flex items-center gap-2">
+                  <span className="h-5 w-1.5 rounded-full bg-[#f9c400]" />
+                  تفاصيل العرض
+                </h2>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                  <div className="flex items-center justify-between gap-2 rounded-2xl bg-[#15222d]/85 border border-white/[0.05] px-3.5 py-3">
+                    <span className="flex items-center gap-2 text-xs text-[#b7c9ef] shrink-0">
+                      <Layers className="w-4 h-4 text-[#D92321]" />
+                      تصنيف العرض
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onApplyFilter({ category: item.categories[1] || item.categories[0] })}
+                      className="font-bold text-xs sm:text-sm text-white hover:text-[#D92321] truncate cursor-pointer"
+                    >
+                      {item.categories[1] || item.categories[0]}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 rounded-2xl bg-[#15222d]/85 border border-white/[0.05] px-3.5 py-3">
+                    <span className="flex items-center gap-2 text-xs text-[#b7c9ef] shrink-0">
+                      <Film className="w-4 h-4 text-[#D92321]" />
+                      نوع العرض
+                    </span>
+                    <div className="flex flex-wrap gap-1.5 justify-end">
+                      {item.genres.slice(0, 3).map((g) => (
+                        <button
+                          key={g}
+                          type="button"
+                          onClick={() => onApplyFilter({ genre: g })}
+                          className="font-bold text-xs sm:text-sm text-white hover:text-[#D92321] cursor-pointer"
+                        >
+                          {g}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 rounded-2xl bg-[#15222d]/85 border border-white/[0.05] px-3.5 py-3">
+                    <span className="flex items-center gap-2 text-xs text-[#b7c9ef] shrink-0">
+                      <Calendar className="w-4 h-4 text-[#D92321]" />
+                      سنة العرض
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onApplyFilter({ year: item.year })}
+                      className="font-latin font-bold text-xs sm:text-sm text-white hover:text-[#D92321] cursor-pointer"
+                    >
+                      {item.year}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 rounded-2xl bg-[#15222d]/85 border border-white/[0.05] px-3.5 py-3">
+                    <span className="flex items-center gap-2 text-xs text-[#b7c9ef] shrink-0">
+                      <Languages className="w-4 h-4 text-[#D92321]" />
+                      لغة العرض
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onApplyFilter({ language: item.language })}
+                      className="font-bold text-xs sm:text-sm text-white hover:text-[#D92321] truncate cursor-pointer"
+                    >
+                      {item.language}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 rounded-2xl bg-[#15222d]/85 border border-white/[0.05] px-3.5 py-3">
+                    <span className="flex items-center gap-2 text-xs text-[#b7c9ef] shrink-0">
+                      <Tv className="w-4 h-4 text-[#D92321]" />
+                      جودة العرض
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onApplyFilter({ quality: item.quality })}
+                      className="font-latin font-bold text-xs sm:text-sm text-[#f9c400] hover:underline cursor-pointer"
+                    >
+                      {item.quality}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 rounded-2xl bg-[#15222d]/85 border border-white/[0.05] px-3.5 py-3">
+                    <span className="flex items-center gap-2 text-xs text-[#b7c9ef] shrink-0">
+                      <Globe className="w-4 h-4 text-[#D92321]" />
+                      بلد العرض
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onApplyFilter({ country: item.country })}
+                      className="font-bold text-xs sm:text-sm text-white hover:text-[#D92321] truncate cursor-pointer"
+                    >
+                      {item.country}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 rounded-2xl bg-[#15222d]/85 border border-white/[0.05] px-3.5 py-3">
+                    <span className="flex items-center gap-2 text-xs text-[#b7c9ef] shrink-0">
+                      <Clock className="w-4 h-4 text-[#D92321]" />
+                      مدة العرض
+                    </span>
+                    <span className="font-bold text-xs sm:text-sm text-white">{item.duration}</span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      document
+                        .getElementById('member-star-rating-card')
+                        ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                    }
+                    className="flex items-center justify-between gap-2 rounded-2xl bg-[#15222d]/85 border border-white/[0.05] hover:border-[#f9c400]/40 px-3.5 py-3 transition-colors cursor-pointer"
+                  >
+                    <span className="flex items-center gap-2 text-xs text-[#b7c9ef] shrink-0">
+                      <Star className="w-4 h-4 text-[#f9c400] fill-[#f9c400]" />
+                      تقييم الأعضاء
+                    </span>
+                    <span className="font-bold text-xs sm:text-sm text-[#f9c400]">
+                      {ratingCount > 0 ? (
+                        <span className="font-latin">
+                          {averageStars.toFixed(1)} / 5 ({ratingCount})
+                        </span>
+                      ) : (
+                        'قيّم الآن'
+                      )}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Balanced Bottom Info Bar inside Details Card */}
+              <div className="mt-4 pt-3 border-t border-white/[0.06] flex flex-wrap items-center justify-between gap-2 text-xs text-[#b7c9ef]">
+                <span className="font-latin font-bold text-white/80 truncate">{item.englishTitle}</span>
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-bold">
+                  <span className="h-2 w-2 rounded-full bg-[#4CAF50]" />
+                  <span>متوفر للمشاهدة المباشرة والتحميل</span>
                 </span>
-              </button>
+              </div>
+            </div>
+          </div>
 
-              <button
-                type="button"
-                onClick={() => setShowDownloads((prev) => !prev)}
-                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#4CAF50] hover:bg-[#43a047] px-4 py-3.5 text-sm font-extrabold text-white shadow-[0_10px_25px_rgba(76,175,80,0.3)] transition-all hover:-translate-y-0.5 cursor-pointer"
-              >
-                <Download className="w-4 h-4 shrink-0" />
-                <span>{showDownloads ? 'إخفاء روابط التحميل' : 'تحميل الآن (روابط مباشرة)'}</span>
-              </button>
+          {/* Left Side Column: Upgraded Watch & Download Box + Interactive Firestore Star Rating Card */}
+          <aside className="md:col-span-12 lg:col-span-3 order-2 lg:order-3 flex flex-col gap-4">
+            {/* Watch & Download Professional Action Card */}
+            <div className="relative overflow-hidden rounded-3xl bg-gradient-to-b from-[#10202c] to-[#0b1620] border border-white/[0.1] p-4 sm:p-5 space-y-3.5 shadow-[0_20px_45px_rgba(0,0,0,0.5)]">
+              <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-l from-[#D92321] via-[#f9c400] to-[#4CAF50]" />
 
-              {/* Inline Side Download Links Panel (opens directly in sidebar without scrolling) */}
+              <div className="flex items-center justify-between gap-2 pb-2 border-b border-white/[0.07]">
+                <h2 className="font-display text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
+                  <span className="h-4 w-1.5 rounded-full bg-[#D92321]" />
+                  <span>المشاهدة والتحميل</span>
+                </h2>
+                <span className="font-latin rounded-lg bg-[#162531] border border-white/10 px-2.5 py-0.5 text-[11px] font-extrabold text-[#f9c400]">
+                  {activeServers.length} سيرفر
+                </span>
+              </div>
+
+              {/* Polished Primary Watch & Download Buttons */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => onOpenPlayer(item, selectedEpisodeNumber)}
+                  className="group relative flex w-full items-center justify-between gap-3 rounded-2xl bg-gradient-to-l from-[#E50914] via-[#d91e23] to-[#b30c14] border border-white/20 px-3.5 py-3 text-right text-white shadow-[0_12px_28px_rgba(229,9,20,0.35)] hover:shadow-[0_14px_34px_rgba(229,9,20,0.5)] hover:-translate-y-0.5 transition-all cursor-pointer"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/20 border border-white/20 shadow-inner group-hover:scale-105 transition-transform">
+                      <Play className="w-5 h-5 fill-current translate-x-0.5" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-black leading-tight truncate">
+                        {allEpisodes.length > 0
+                          ? `مشاهدة الحلقة ${String(selectedEpisodeNumber).padStart(2, '0')}`
+                          : 'مشاهدة الآن'}
+                      </p>
+                      <p className="text-[11px] font-bold text-white/85 truncate mt-0.5">
+                        سيرفرات متعددة • تشغيل فوري
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronLeft className="w-4 h-4 shrink-0 text-white/85 group-hover:-translate-x-0.5 transition-transform" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowDownloads((prev) => !prev)}
+                  className="group relative flex w-full items-center justify-between gap-3 rounded-2xl bg-gradient-to-l from-[#10b981] via-[#16a34a] to-[#15803d] border border-white/20 px-3.5 py-3 text-right text-white shadow-[0_12px_28px_rgba(16,185,129,0.28)] hover:shadow-[0_14px_34px_rgba(16,185,129,0.42)] hover:-translate-y-0.5 transition-all cursor-pointer"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/20 border border-white/20 shadow-inner group-hover:scale-105 transition-transform">
+                      <Download className="w-5 h-5" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-black leading-tight truncate">
+                        {showDownloads ? 'إخفاء روابط التحميل' : 'تحميل الآن'}
+                      </p>
+                      <p className="text-[11px] font-bold text-white/85 truncate mt-0.5">
+                        {item.downloads.length > 0
+                          ? `${item.downloads.length} روابط مباشرة • HD`
+                          : 'روابط تحميل سريعة ومباشرة'}
+                      </p>
+                    </div>
+                  </div>
+                  {showDownloads ? (
+                    <ChevronUp className="w-4 h-4 shrink-0 text-white/90" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 shrink-0 text-white/90" />
+                  )}
+                </button>
+              </div>
+
+              {/* Inline Download Links Panel inside Left Column */}
               {showDownloads && (
-                <div className="rounded-2xl bg-[#1a242e] border border-[#4CAF50]/35 p-3 space-y-2">
+                <div className="rounded-2xl bg-[#15222d] border border-[#10b981]/35 p-3 space-y-2">
                   <p className="text-xs font-extrabold text-white">روابط التحميل المباشرة:</p>
                   {item.downloads.length === 0 ? (
                     <p className="text-[11px] text-[#b7c9ef]">لا توجد روابط تحميل متاحة حاليًا.</p>
                   ) : (
-                    <div className="space-y-1.5 max-h-52 overflow-y-auto pl-0.5">
+                    <div className="space-y-1.5 max-h-44 overflow-y-auto pl-0.5">
                       {item.downloads.map((dl) =>
                         dl.url && /^https?:\/\//i.test(dl.url) ? (
                           <a
@@ -288,7 +628,7 @@ export function SingleDetailView({
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={() => handleDownload(dl.quality, dl.host)}
-                            className="flex items-center justify-between gap-2 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-right hover:border-[#4CAF50] transition-colors cursor-pointer"
+                            className="flex items-center justify-between gap-2 rounded-xl bg-[#0b1620] border border-white/10 px-3 py-2 text-right hover:border-[#10b981] transition-colors cursor-pointer"
                           >
                             <div className="min-w-0">
                               <p className="font-latin text-xs font-extrabold text-white truncate">
@@ -298,14 +638,14 @@ export function SingleDetailView({
                                 {dl.host} • {dl.format}
                               </p>
                             </div>
-                            <Download className="w-3.5 h-3.5 text-[#4CAF50] shrink-0" />
+                            <Download className="w-3.5 h-3.5 text-[#10b981] shrink-0" />
                           </a>
                         ) : (
                           <button
                             key={dl.id}
                             type="button"
                             onClick={() => handleDownload(dl.quality, dl.host)}
-                            className="flex w-full items-center justify-between gap-2 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-right hover:border-[#4CAF50] transition-colors cursor-pointer"
+                            className="flex w-full items-center justify-between gap-2 rounded-xl bg-[#0b1620] border border-white/10 px-3 py-2 text-right hover:border-[#10b981] transition-colors cursor-pointer"
                           >
                             <div className="min-w-0">
                               <p className="font-latin text-xs font-extrabold text-white truncate">
@@ -315,7 +655,7 @@ export function SingleDetailView({
                                 {dl.host} • {dl.format}
                               </p>
                             </div>
-                            <Download className="w-3.5 h-3.5 text-[#4CAF50] shrink-0" />
+                            <Download className="w-3.5 h-3.5 text-[#10b981] shrink-0" />
                           </button>
                         )
                       )}
@@ -324,140 +664,166 @@ export function SingleDetailView({
                 </div>
               )}
 
-              {/* Watchlist Toggle Button (.single-playlist-button) */}
-              <button
-                type="button"
-                onClick={() => onToggleWatchlist(item)}
-                className={`w-full flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-extrabold border transition-all cursor-pointer ${
-                  isInWatchlist
-                    ? 'bg-[#4CAF50]/20 border-[#4CAF50] text-[#4CAF50]'
-                    : 'bg-[#1a242e] border-white/10 text-white hover:border-[#4CAF50] hover:text-[#4CAF50]'
-                }`}
-              >
-                {isInWatchlist ? <Check className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
-                <span>{isInWatchlist ? 'مُضاف إلى قائمتي' : 'أضافة الي قائمتي'}</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Info Column (.single-left) */}
-          <div className="md:col-span-8 lg:col-span-9 space-y-5">
-            {/* Story Block (.single-story) */}
-            <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5">
-              <h2 className="font-display text-lg font-extrabold text-white mb-2 flex items-center gap-2">
-                <span className="h-5 w-1.5 rounded-full bg-[#D92321]" />
-                قصة العرض
-              </h2>
-              <p className="text-sm sm:text-base leading-relaxed text-[#b7c9ef]">{item.story}</p>
-            </div>
-
-            {/* Clickable Details Grid (.single-details) */}
-            <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5">
-              <h2 className="font-display text-lg font-extrabold text-white mb-3.5 flex items-center gap-2">
-                <span className="h-5 w-1.5 rounded-full bg-[#f9c400]" />
-                تفاصيل العرض
-              </h2>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                <div className="flex items-center justify-between rounded-2xl bg-[#1a242e]/70 px-4 py-3">
-                  <span className="flex items-center gap-2 text-[#b7c9ef]">
-                    <Layers className="w-4 h-4 text-[#D92321]" />
-                    تصنيف العرض
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => onApplyFilter({ category: item.categories[1] || item.categories[0] })}
-                    className="font-bold text-white hover:text-[#D92321] cursor-pointer"
-                  >
-                    {item.categories[1] || item.categories[0]}
-                  </button>
-                </div>
-
-                <div className="flex items-center justify-between rounded-2xl bg-[#1a242e]/70 px-4 py-3">
-                  <span className="flex items-center gap-2 text-[#b7c9ef]">
-                    <Film className="w-4 h-4 text-[#D92321]" />
-                    نوع العرض
-                  </span>
-                  <div className="flex flex-wrap gap-1.5 justify-end">
-                    {item.genres.map((g) => (
-                      <button
-                        key={g}
-                        type="button"
-                        onClick={() => onApplyFilter({ genre: g })}
-                        className="font-bold text-white hover:text-[#D92321] cursor-pointer"
-                      >
-                        {g}
-                      </button>
-                    ))}
+              {/* Quick Server Launchers inside Left Side Panel */}
+              {activeServers.length > 0 && (
+                <div className="pt-2.5 border-t border-white/[0.07] space-y-2">
+                  <div className="flex items-center justify-between text-[11px] font-bold text-[#b7c9ef]">
+                    <span className="flex items-center gap-1.5 text-white">
+                      <Server className="w-3.5 h-3.5 text-[#D92321]" />
+                      سيرفرات سريعة
+                    </span>
+                    <span className="text-[#b7c9ef]">تشغيل مباشر</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {activeServers.slice(0, 4).map((srv, idx) => {
+                      const cleanQ =
+                        String(srv.quality || item.quality || 'HD')
+                          .replace(/مستورد|embed/gi, '')
+                          .trim() || 'HD';
+                      return (
+                        <button
+                          key={srv.id || idx}
+                          type="button"
+                          onClick={() => onOpenPlayer(item, selectedEpisodeNumber, idx)}
+                          className="group flex items-center justify-between gap-1.5 rounded-xl bg-[#15222d] border border-white/[0.08] px-2.5 py-2 text-[11px] font-bold text-white hover:border-[#D92321]/80 hover:bg-[#D92321]/15 transition-all cursor-pointer"
+                        >
+                          <span className="flex items-center gap-1.5 truncate">
+                            <span className="h-1.5 w-1.5 rounded-full bg-[#4CAF50] shrink-0" />
+                            <span className="truncate">سيرفر {idx + 1}</span>
+                          </span>
+                          <span className="font-latin rounded bg-[#0b1620] px-1.5 py-0.5 text-[9px] font-black text-[#f9c400] shrink-0">
+                            {cleanQ}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
+              )}
+            </div>
 
-                <div className="flex items-center justify-between rounded-2xl bg-[#1a242e]/70 px-4 py-3">
-                  <span className="flex items-center gap-2 text-[#b7c9ef]">
-                    <Calendar className="w-4 h-4 text-[#D92321]" />
-                    سنة العرض
+            {/* Firestore Star Rating Card (Fills remaining height to match Right & Center columns) */}
+            <div
+              id="member-star-rating-card"
+              className="flex-1 flex flex-col justify-between rounded-3xl bg-[#0c1821] border border-white/[0.08] p-4 sm:p-5 shadow-xl gap-3"
+            >
+              <div className="flex items-center justify-between gap-2 pb-2 border-b border-white/[0.06]">
+                <h2 className="font-display text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
+                  <span className="h-4 w-1.5 rounded-full bg-[#f9c400]" />
+                  <span>تقييم المشاهدين</span>
+                </h2>
+                <div className="inline-flex items-center gap-1 rounded-lg bg-[#15222d] border border-[#f9c400]/25 px-2.5 py-1">
+                  <Star className="w-3.5 h-3.5 text-[#f9c400] fill-[#f9c400]" />
+                  <span className="font-latin text-xs font-black text-white">
+                    {ratingCount > 0 ? averageStars.toFixed(1) : '—'}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => onApplyFilter({ year: item.year })}
-                    className="font-latin font-bold text-white hover:text-[#D92321] cursor-pointer"
-                  >
-                    {item.year}
-                  </button>
-                </div>
-
-                <div className="flex items-center justify-between rounded-2xl bg-[#1a242e]/70 px-4 py-3">
-                  <span className="flex items-center gap-2 text-[#b7c9ef]">
-                    <Languages className="w-4 h-4 text-[#D92321]" />
-                    لغة العرض
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => onApplyFilter({ language: item.language })}
-                    className="font-bold text-white hover:text-[#D92321] cursor-pointer"
-                  >
-                    {item.language}
-                  </button>
-                </div>
-
-                <div className="flex items-center justify-between rounded-2xl bg-[#1a242e]/70 px-4 py-3">
-                  <span className="flex items-center gap-2 text-[#b7c9ef]">
-                    <Tv className="w-4 h-4 text-[#D92321]" />
-                    جودة العرض
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => onApplyFilter({ quality: item.quality })}
-                    className="font-latin font-bold text-[#f9c400] hover:underline cursor-pointer"
-                  >
-                    {item.quality}
-                  </button>
-                </div>
-
-                <div className="flex items-center justify-between rounded-2xl bg-[#1a242e]/70 px-4 py-3">
-                  <span className="flex items-center gap-2 text-[#b7c9ef]">
-                    <Globe className="w-4 h-4 text-[#D92321]" />
-                    بلد العرض
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => onApplyFilter({ country: item.country })}
-                    className="font-bold text-white hover:text-[#D92321] cursor-pointer"
-                  >
-                    {item.country}
-                  </button>
-                </div>
-
-                <div className="flex items-center justify-between rounded-2xl bg-[#1a242e]/70 px-4 py-3 sm:col-span-2">
-                  <span className="flex items-center gap-2 text-[#b7c9ef]">
-                    <Clock className="w-4 h-4 text-[#D92321]" />
-                    مدة العرض
-                  </span>
-                  <span className="font-bold text-white">{item.duration}</span>
+                  <span className="font-latin text-[10px] font-bold text-[#b7c9ef]">/ 5</span>
                 </div>
               </div>
+
+              {/* Interactive 5-Star Picker */}
+              <div className="flex flex-col items-center justify-center gap-2 py-1">
+                <div
+                  dir="ltr"
+                  onMouseLeave={() => setHoverStar(null)}
+                  className="flex items-center justify-center gap-1.5"
+                >
+                  {[1, 2, 3, 4, 5].map((starValue) => {
+                    const isActive = displayedStarValue >= starValue;
+                    return (
+                      <button
+                        key={starValue}
+                        type="button"
+                        disabled={savingRating}
+                        onMouseEnter={() => setHoverStar(starValue)}
+                        onClick={() => void handleRateStars(starValue)}
+                        aria-label={`تقييم ${starValue} من 5 نجوم`}
+                        className={`flex h-9 w-9 items-center justify-center rounded-xl border transition-all cursor-pointer disabled:opacity-60 ${
+                          isActive
+                            ? 'bg-[#f9c400]/15 border-[#f9c400]/50 scale-105 shadow-[0_0_14px_rgba(249,196,0,0.22)]'
+                            : 'bg-[#15222d] border-white/[0.08] hover:border-[#f9c400]/40'
+                        }`}
+                      >
+                        <Star
+                          className={`w-5 h-5 transition-colors ${
+                            isActive ? 'text-[#f9c400] fill-[#f9c400]' : 'text-white/30'
+                          }`}
+                        />
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <p className="text-[11px] font-bold text-[#b7c9ef] text-center min-h-[16px]">
+                  {savingRating
+                    ? 'جارٍ حفظ تقييمك...'
+                    : hoverStar
+                    ? STAR_LABELS[hoverStar]
+                    : userStars > 0
+                    ? `تقييمك المحفوظ: ${userStars} / 5 (${STAR_LABELS[userStars]})`
+                    : 'اختر عدد النجوم لتقييم هذا العرض'}
+                </p>
+
+                {/* Thin Average Score Bar */}
+                <div className="w-full space-y-1">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#15222d]">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-l from-[#f9c400] to-[#f59e0b] transition-all duration-500"
+                      style={{ width: `${ratingCount > 0 ? (averageStars / 5) * 100 : 0}%` }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] font-bold text-[#b7c9ef]">
+                    <span>
+                      {ratingsLoading
+                        ? 'جارٍ تحميل التقييمات...'
+                        : ratingCount > 0
+                        ? `مبني على ${ratingCount} ${ratingCount === 1 ? 'تقييم' : 'تقييمات'}`
+                        : 'كن أول من يقيّم هذا العرض'}
+                    </span>
+                    {ratingCount > 0 && (
+                      <span className="font-latin text-[#f9c400]">
+                        {Math.round((averageStars / 5) * 100)}%
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Auth Prompt or Remove Rating Action */}
+              <div className="pt-2 border-t border-white/[0.06] flex items-center justify-between gap-2">
+                {!currentUser ? (
+                  <button
+                    type="button"
+                    onClick={onOpenLogin}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#15222d] hover:bg-[#1c2c3a] border border-white/10 hover:border-[#f9c400]/45 px-3 py-2 text-xs font-extrabold text-white transition-colors cursor-pointer"
+                  >
+                    <LogIn className="w-3.5 h-3.5 text-[#f9c400]" />
+                    <span>سجّل الدخول لحفظ تقييمك</span>
+                  </button>
+                ) : userStars > 0 ? (
+                  <div className="flex w-full items-center justify-between gap-2 text-[11px]">
+                    <span className="font-bold text-[#4CAF50] flex items-center gap-1">
+                      <Check className="w-3.5 h-3.5" />
+                      تم تسجيل تقييمك
+                    </span>
+                    <button
+                      type="button"
+                      disabled={savingRating}
+                      onClick={() => void handleClearMyRating()}
+                      className="inline-flex items-center gap-1 rounded-lg bg-[#15222d] hover:bg-[#D92321]/20 border border-white/10 hover:border-[#D92321]/50 px-2.5 py-1 font-bold text-[#b7c9ef] hover:text-white transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>حذف</span>
+                    </button>
+                  </div>
+                ) : (
+                  <p className="w-full text-center text-[11px] font-bold text-[#b7c9ef]">
+                    اضغط على أي نجمة لحفظ تقييمك في حسابك
+                  </p>
+                )}
+              </div>
             </div>
-          </div>
+          </aside>
         </div>
       </section>
 

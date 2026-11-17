@@ -163,6 +163,20 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["siteName", "tagline", "announcementText", "tickerEnabled", "featuredLimit", "maintenanceMode", "maintenanceMessage", "updatedBy", "updatedAt"]
+    },
+    "MediaRating": {
+      "title": "MediaRating",
+      "description": "Authenticated user 1-to-5 star rating for a media catalog item.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 3, "maxLength": 260, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mediaId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "stars": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "mediaId", "userId", "stars", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -189,6 +203,10 @@
     "/settings/{settingId}": {
       "schema": { "$ref": "#/entities/SiteSettings" },
       "description": "Global platform configuration controlled by admins."
+    },
+    "/ratings/{ratingId}": {
+      "schema": { "$ref": "#/entities/MediaRating" },
+      "description": "User star ratings (1 to 5 stars) keyed deterministically by mediaId and userId."
     }
   }
 }

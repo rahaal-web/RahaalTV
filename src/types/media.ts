@@ -206,3 +206,12 @@ export interface AdminRoleRecord {
   displayName: string;
   addedBy: string;
 }
+
+export interface MediaRatingRecord {
+  id: string;
+  mediaId: string;
+  userId: string;
+  stars: number;
+  createdAtMs?: number;
+  updatedAtMs?: number;
+}
