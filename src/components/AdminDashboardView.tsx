@@ -4,6 +4,7 @@ import {
   BarChart3,
   CheckCircle2,
   Code2,
+  Copy,
   Database,
   Download,
   Edit3,
@@ -55,6 +56,7 @@ import {
 } from '../lib/firebase';
 import {
   checkServerUrlsInBrowser,
+  CLOUDFLARE_WORKER_SOURCE,
   getCustomApiBaseUrl,
   resolveApiEndpoint,
   ScrapedPayload,
@@ -742,15 +744,23 @@ export function AdminDashboardView({
         });
         const contentType = response.headers.get('content-type') || '';
         if (contentType.includes('application/json')) {
-          data = (await response.json()) as {
+          const json = (await response.json()) as {
             ok?: boolean;
             error?: string;
+            service?: string;
             extracted?: ScrapedPayload;
           };
-          usedBackend = true;
-          if (!response.ok && data.error) {
-            setScrapeError(data.error);
-            return;
+          const isRealScrapeApi =
+            Boolean(json && typeof json === 'object') &&
+            json.service !== 'RahaL TV Proxy Worker' &&
+            ('extracted' in json || (!response.ok && typeof json.error === 'string'));
+          if (isRealScrapeApi) {
+            data = json;
+            usedBackend = true;
+            if (!response.ok && data.error) {
+              setScrapeError(data.error);
+              return;
+            }
           }
         }
       } catch {
@@ -841,18 +851,26 @@ export function AdminDashboardView({
         });
         const contentType = response.headers.get('content-type') || '';
         if (contentType.includes('application/json')) {
-          data = (await response.json()) as {
+          const json = (await response.json()) as {
             ok?: boolean;
             error?: string;
+            service?: string;
             strategy?: string;
             siteTitle?: string;
             totalDiscovered?: number;
             items?: ScrapedPayload[];
           };
-          usedBackend = true;
-          if (!response.ok && data.error) {
-            setSiteCrawlError(data.error);
-            return;
+          const isRealSiteApi =
+            Boolean(json && typeof json === 'object') &&
+            json.service !== 'RahaL TV Proxy Worker' &&
+            (Array.isArray(json.items) || (!response.ok && typeof json.error === 'string'));
+          if (isRealSiteApi) {
+            data = json;
+            usedBackend = true;
+            if (!response.ok && data.error) {
+              setSiteCrawlError(data.error);
+              return;
+            }
           }
         }
       } catch {
@@ -2175,18 +2193,28 @@ export function AdminDashboardView({
                   </form>
 
                   {scrapeError && (
-                    <div className="rounded-2xl bg-[#D92321]/15 border border-[#D92321]/40 p-4 text-xs font-bold text-[#ff8a88] space-y-2">
+                    <div className="rounded-2xl bg-[#D92321]/15 border border-[#D92321]/40 p-4 text-xs font-bold text-[#ff8a88] space-y-2.5">
                       <p>{scrapeError}</p>
-                      {scrapeMode === 'url' && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {scrapeMode === 'url' && (
+                          <button
+                            type="button"
+                            onClick={() => setScrapeMode('html')}
+                            className="inline-flex items-center gap-1 rounded-lg bg-[#D92321] px-3 py-1.5 text-[11px] font-extrabold text-white cursor-pointer"
+                          >
+                            <Code2 className="w-3.5 h-3.5" />
+                            <span>التبديل إلى وضع لصق كود HTML</span>
+                          </button>
+                        )}
                         <button
                           type="button"
-                          onClick={() => setScrapeMode('html')}
-                          className="inline-flex items-center gap-1 rounded-lg bg-[#D92321] px-3 py-1.5 text-[11px] font-extrabold text-white cursor-pointer"
+                          onClick={() => setActiveTab('settings')}
+                          className="inline-flex items-center gap-1 rounded-lg bg-[#f9c400] hover:bg-[#dfb20b] px-3 py-1.5 text-[11px] font-black text-[#06131c] cursor-pointer"
                         >
-                          <Code2 className="w-3.5 h-3.5" />
-                          <span>التبديل إلى وضع لصق كود HTML</span>
+                          <Settings className="w-3.5 h-3.5" />
+                          <span>إعداد بروكسي Cloudflare المجاني في الإعدادات</span>
                         </button>
-                      )}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2261,7 +2289,14 @@ export function AdminDashboardView({
                           سيرفرات المشاهدة ({scrapedResult.servers.length})
                         </p>
                         {scrapedResult.servers.length === 0 ? (
-                          <p className="text-[11px] text-[#b7c9ef]">لم يُعثر على أكواد iframe في الصفحة</p>
+                          <div className="space-y-1.5">
+                            <p className="text-[11px] text-[#b7c9ef]">لم يُعثر على أكواد iframe في الصفحة</p>
+                            {!customApiUrl && (
+                              <p className="text-[10px] leading-relaxed text-[#f9c400]/90">
+                                بعض المواقع (مثل akwams) تضع السيرفرات في صفحة <span className="font-latin">/watch</span> منفصلة؛ فعّل <button type="button" onClick={() => setActiveTab('settings')} className="underline font-bold cursor-pointer">Cloudflare Worker المجاني</button> في الإعدادات لجلبها تلقائياً من GitHub Pages.
+                              </p>
+                            )}
+                          </div>
                         ) : (
                           <ul className="space-y-1.5 text-[11px] text-[#b7c9ef]">
                             {scrapedResult.servers.slice(0, 6).map((s) => {
@@ -2514,18 +2549,28 @@ export function AdminDashboardView({
                   </form>
 
                   {siteCrawlError && (
-                    <div className="rounded-2xl bg-[#D92321]/15 border border-[#D92321]/40 p-4 text-xs font-bold text-[#ff8a88] space-y-2">
+                    <div className="rounded-2xl bg-[#D92321]/15 border border-[#D92321]/40 p-4 text-xs font-bold text-[#ff8a88] space-y-2.5">
                       <p>{siteCrawlError}</p>
-                      {siteScrapeMode === 'url' && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {siteScrapeMode === 'url' && (
+                          <button
+                            type="button"
+                            onClick={() => setSiteScrapeMode('html')}
+                            className="inline-flex items-center gap-1 rounded-lg bg-[#D92321] px-3 py-1.5 text-[11px] font-extrabold text-white cursor-pointer"
+                          >
+                            <Code2 className="w-3.5 h-3.5" />
+                            <span>التبديل إلى وضع لصق HTML الصفحة</span>
+                          </button>
+                        )}
                         <button
                           type="button"
-                          onClick={() => setSiteScrapeMode('html')}
-                          className="inline-flex items-center gap-1 rounded-lg bg-[#D92321] px-3 py-1.5 text-[11px] font-extrabold text-white cursor-pointer"
+                          onClick={() => setActiveTab('settings')}
+                          className="inline-flex items-center gap-1 rounded-lg bg-[#f9c400] hover:bg-[#dfb20b] px-3 py-1.5 text-[11px] font-black text-[#06131c] cursor-pointer"
                         >
-                          <Code2 className="w-3.5 h-3.5" />
-                          <span>التبديل إلى وضع لصق HTML الصفحة</span>
+                          <Settings className="w-3.5 h-3.5" />
+                          <span>إعداد بروكسي Cloudflare المجاني</span>
                         </button>
-                      )}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -3199,24 +3244,60 @@ export function AdminDashboardView({
                   </div>
                 </div>
 
-                <div className="rounded-2xl bg-[#1a242e]/65 border border-white/10 p-5 space-y-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
+                <div className="rounded-2xl bg-[#1a242e]/65 border border-white/10 p-5 space-y-3.5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="space-y-1 flex-1 min-w-[240px]">
                       <h3 className="text-sm font-extrabold text-white">
-                        رابط خادم السحب الخارجي Node.js (اختياري للاستضافة الثابتة)
+                        رابط بروكسي السحب (Cloudflare Worker المجاني أو خادم Node.js)
                       </h3>
-                      <p className="text-[11px] text-[#b7c9ef] mt-0.5">
-                        تعمل أداة السحب تلقائيًا من المتصفح على GitHub Pages بدون خادم. إذا رفعت ملف الخادم على Render أو Railway أو VPS، ضع رابطه هنا للاستفادة من الفحص العميق وتجاوز قيود المتصفح.
+                      <p className="text-[11px] leading-relaxed text-[#b7c9ef]">
+                        مواقع مثل <span className="font-latin text-white">akwams.org</span> تمنع الجلب المباشر من المتصفح وتخفي السيرفرات في صفحة <span className="font-latin text-white">/watch</span>. أنشئ Cloudflare Worker مجانياً (100 ألف طلب يومياً بلا توقف) وضع رابطه هنا لتعمل أداة السحب على GitHub Pages بنفس كفاءة المعاينة تماماً.
                       </p>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (navigator.clipboard?.writeText) {
+                          void navigator.clipboard
+                            .writeText(CLOUDFLARE_WORKER_SOURCE)
+                            .then(() => onNotify('تم نسخ كود Cloudflare Worker المجاني إلى الحافظة!'))
+                            .catch(() => onNotify('تعذر النسخ التلقائي — راجع ملف cloudflare-worker.js في المستودع.'));
+                        } else {
+                          onNotify('افتح ملف cloudflare-worker.js من المستودع وانسخ محتواه.');
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 px-3.5 py-2 text-[11px] font-extrabold text-white cursor-pointer shrink-0"
+                    >
+                      <Copy className="w-3.5 h-3.5 text-[#f9c400]" />
+                      <span>نسخ كود Cloudflare Worker المجاني</span>
+                    </button>
                   </div>
+
+                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-[#b7c9ef] bg-[#0c1821]/70 border border-white/5 rounded-xl p-3">
+                    <li>
+                      ادخل إلى{' '}
+                      <a
+                        href="https://dash.cloudflare.com/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-latin text-[#f9c400] underline inline-flex items-center gap-1"
+                      >
+                        dash.cloudflare.com
+                        <ExternalLink className="w-3 h-3" />
+                      </a>{' '}
+                      ثم اختر <span className="font-latin text-white">Workers &amp; Pages &larr; Create Worker</span>.
+                    </li>
+                    <li>احذف الكود الافتراضي والصق الكود المنسوخ بالزر أعلاه ثم اضغط <span className="font-latin text-white">Deploy</span>.</li>
+                    <li>انسخ رابط الـ Worker (ينتهي بـ <span className="font-latin text-white">.workers.dev</span>) والصقه بالأسفل ثم احفظ.</li>
+                  </ol>
+
                   <div className="flex flex-col sm:flex-row gap-2.5">
                     <input
                       type="url"
                       dir="ltr"
                       value={customApiUrl}
                       onChange={(e) => setCustomApiUrl(e.target.value)}
-                      placeholder="https://your-rahaltv-api.onrender.com"
+                      placeholder="https://rahaltv-proxy.yourname.workers.dev"
                       className="font-latin flex-1 rounded-xl bg-[#0c1821] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:border-[#f9c400] focus:outline-none"
                     />
                     <button
@@ -3226,13 +3307,13 @@ export function AdminDashboardView({
                         setCustomApiUrl(saved);
                         onNotify(
                           saved
-                            ? `تم حفظ رابط خادم السحب: ${saved}`
+                            ? `تم حفظ رابط بروكسي السحب: ${saved}`
                             : 'تم مسح الرابط — سيعمل السحب بالوضع المدمج في المتصفح'
                         );
                       }}
                       className="rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] px-4 py-2.5 text-xs font-black text-[#06131c] cursor-pointer shrink-0"
                     >
-                      حفظ رابط الخادم
+                      حفظ رابط البروكسي
                     </button>
                   </div>
                 </div>

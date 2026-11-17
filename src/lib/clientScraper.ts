@@ -64,6 +64,101 @@ export function resolveApiEndpoint(endpointPath: string): string {
   return base ? `${base}${normalized}` : normalized;
 }
 
+export const CLOUDFLARE_WORKER_SOURCE = `// RahaL TV — Free Cloudflare Worker CORS Proxy
+// Deploy for free at https://dash.cloudflare.com (Workers & Pages -> Create Worker)
+// Free tier: 100,000 requests/day, zero sleep/cold-start, works permanently with GitHub Pages.
+
+function isBlockedHost(hostname) {
+  const h = (hostname || '').toLowerCase();
+  if (
+    h === 'localhost' ||
+    h === '127.0.0.1' ||
+    h === '0.0.0.0' ||
+    h === '::1' ||
+    h.endsWith('.local') ||
+    h.startsWith('10.') ||
+    h.startsWith('192.168.') ||
+    h.startsWith('169.254.')
+  ) {
+    return true;
+  }
+  const m172 = h.match(/^172\\.(\\d+)\\./);
+  if (m172) {
+    const second = Number(m172[1]);
+    if (second >= 16 && second <= 31) return true;
+  }
+  return false;
+}
+
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+export default {
+  async fetch(request) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
+    const reqUrl = new URL(request.url);
+    const target = reqUrl.searchParams.get('url');
+
+    if (!target) {
+      return new Response(
+        JSON.stringify({ ok: true, service: 'RahaL TV Proxy Worker', usage: '?url=https://...' }),
+        { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json; charset=utf-8' } }
+      );
+    }
+
+    let parsedTarget;
+    try {
+      parsedTarget = new URL(target);
+    } catch {
+      return new Response(JSON.stringify({ ok: false, error: 'Invalid target url' }), {
+        status: 400,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json; charset=utf-8' },
+      });
+    }
+
+    if (!['http:', 'https:'].includes(parsedTarget.protocol) || isBlockedHost(parsedTarget.hostname)) {
+      return new Response(JSON.stringify({ ok: false, error: 'Blocked host or protocol' }), {
+        status: 403,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json; charset=utf-8' },
+      });
+    }
+
+    try {
+      const upstream = await fetch(parsedTarget.toString(), {
+        redirect: 'follow',
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7',
+          'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8',
+          Referer: \`\${parsedTarget.origin}/\`,
+        },
+      });
+
+      const body = await upstream.arrayBuffer();
+      const contentType = upstream.headers.get('content-type') || 'text/html; charset=utf-8';
+      return new Response(body, {
+        status: upstream.status,
+        headers: {
+          ...CORS_HEADERS,
+          'Content-Type': contentType,
+        },
+      });
+    } catch (err) {
+      return new Response(JSON.stringify({ ok: false, error: String(err) }), {
+        status: 502,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json; charset=utf-8' },
+      });
+    }
+  },
+};`;
+
 function isBlockedHost(hostname: string): boolean {
   const h = hostname.toLowerCase();
   if (
@@ -612,6 +707,17 @@ function parseHtmlToMediaWithHintsBrowser(
     });
   });
 
+  if (!hints.watchSubpageUrl && allScriptsText) {
+    const jsWatchMatch = allScriptsText.match(
+      /["'](https?:\/\/[^"'\s<>]+\/+(?:watch|play|player)\/?)["']/i
+    );
+    if (jsWatchMatch?.[1]) hints.watchSubpageUrl = jsWatchMatch[1];
+  }
+  if (!hints.downloadSubpageUrl && allScriptsText) {
+    const jsDlMatch = allScriptsText.match(/["'](https?:\/\/[^"'\s<>]+\/+download\/?)["']/i);
+    if (jsDlMatch?.[1]) hints.downloadSubpageUrl = jsDlMatch[1];
+  }
+
   // 8. Episodes
   const episodes: EpisodeItem[] = [];
   doc.querySelectorAll('a[href]').forEach((el) => {
@@ -812,10 +918,45 @@ async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<Respons
   }
 }
 
+function isChallengeOrErrorHtml(text: string): boolean {
+  if (!text || text.length < 40) return true;
+  if (
+    text.length < 25000 &&
+    /<title>\s*(?:Just a moment\.\.\.|Attention Required!\s*\|\s*Cloudflare|Access denied|403 Forbidden|429 Too Many Requests)/i.test(
+      text
+    )
+  ) {
+    return true;
+  }
+  if (
+    text.length < 25000 &&
+    /cf-browser-verification|challenge-platform|__cf_chl_opt|cf_chl_prog/i.test(text)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 async function fetchViaBrowserOrCorsRelay(
   targetUrl: string,
   timeoutMs = 11000
 ): Promise<{ ok: boolean; status: number; text: string }> {
+  const customBase = getCustomApiBaseUrl();
+  if (customBase) {
+    try {
+      const workerUrl = `${customBase}/?url=${encodeURIComponent(targetUrl)}`;
+      const res = await fetchWithTimeout(workerUrl, timeoutMs);
+      if (res.ok) {
+        const text = await res.text();
+        if (!isChallengeOrErrorHtml(text)) {
+          return { ok: true, status: res.status, text };
+        }
+      }
+    } catch {
+      // Fall back to direct/public relays if custom proxy did not answer
+    }
+  }
+
   const isMixedContent =
     typeof window !== 'undefined' &&
     window.location.protocol === 'https:' &&
@@ -826,7 +967,7 @@ async function fetchViaBrowserOrCorsRelay(
       const directRes = await fetchWithTimeout(targetUrl, Math.min(timeoutMs, 6500));
       if (directRes.ok) {
         const text = await directRes.text();
-        if (text && text.length > 30) {
+        if (!isChallengeOrErrorHtml(text)) {
           return { ok: true, status: directRes.status, text };
         }
       }
@@ -835,21 +976,44 @@ async function fetchViaBrowserOrCorsRelay(
     }
   }
 
-  const relays = [
-    (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-    (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
-    (u: string) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+  const relays: { kind: 'raw' | 'allorigins_json'; build: (u: string) => string }[] = [
+    {
+      kind: 'allorigins_json',
+      build: (u: string) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
+    },
+    {
+      kind: 'raw',
+      build: (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    },
+    {
+      kind: 'raw',
+      build: (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+    },
   ];
 
   let lastStatus = 0;
-  for (const buildRelayUrl of relays) {
+  for (const relay of relays) {
     try {
-      const relayUrl = buildRelayUrl(targetUrl);
+      const relayUrl = relay.build(targetUrl);
       const res = await fetchWithTimeout(relayUrl, timeoutMs);
       lastStatus = res.status;
       if (!res.ok) continue;
+
+      if (relay.kind === 'allorigins_json') {
+        const json = (await res.json()) as {
+          contents?: string;
+          status?: { http_code?: number };
+        };
+        const contents = json?.contents || '';
+        const upstreamCode = Number(json?.status?.http_code || 200);
+        if (upstreamCode < 400 && !isChallengeOrErrorHtml(contents)) {
+          return { ok: true, status: upstreamCode, text: contents };
+        }
+        continue;
+      }
+
       const text = await res.text();
-      if (text && text.length > 40) {
+      if (!isChallengeOrErrorHtml(text)) {
         return { ok: true, status: res.status, text };
       }
     } catch {
@@ -1152,6 +1316,71 @@ async function scrapeFullItemInBrowser(mainUrl: string, mainHtml: string): Promi
   return media;
 }
 
+async function tryWordPressSinglePostBrowser(
+  parsedUrl: URL
+): Promise<ScrapedPayload | null> {
+  try {
+    const rawSeg = parsedUrl.pathname.replace(/^\/+|\/+$/g, '').split('/').pop() || '';
+    if (!rawSeg) return null;
+    const decodedSlug = decodeURIComponent(rawSeg);
+    const wpEndpoint = `${parsedUrl.origin}/wp-json/wp/v2/posts?slug=${encodeURIComponent(decodedSlug)}&_embed`;
+
+    const res = await fetchWithTimeout(wpEndpoint, 8000);
+    if (!res.ok) return null;
+    const posts = (await res.json()) as {
+      link?: string;
+      title?: { rendered?: string };
+      content?: { rendered?: string };
+      excerpt?: { rendered?: string };
+      _embedded?: {
+        'wp:featuredmedia'?: { source_url?: string }[];
+        'wp:term'?: { name?: string; taxonomy?: string }[][];
+      };
+    }[];
+
+    if (!Array.isArray(posts) || posts.length === 0) return null;
+    const post = posts[0];
+    const postUrl = post.link || parsedUrl.toString();
+    const htmlBody = `${post.content?.rendered || ''} ${post.excerpt?.rendered || ''}`;
+    const parsed = parseHtmlToMediaWithHintsBrowser(htmlBody, postUrl).media;
+    const tmpDoc = new DOMParser().parseFromString(post.title?.rendered || '', 'text/html');
+    const rawTitle = cleanText(tmpDoc.body?.textContent);
+    if (rawTitle) {
+      parsed.title = rawTitle
+        .replace(/\s*[-|–]\s*(مشاهدة|تحميل|أون لاين|اون لاين|بجودة عالية|مترجم).*$/i, '')
+        .trim()
+        .slice(0, 200);
+      const enMatch = rawTitle.match(/[A-Za-z][A-Za-z0-9\s:'\-&]{2,}/);
+      if (enMatch) parsed.englishTitle = cleanText(enMatch[0]);
+    }
+    const featured = post._embedded?.['wp:featuredmedia']?.[0]?.source_url;
+    if (featured) {
+      parsed.poster = featured;
+      parsed.backdrop = featured;
+    }
+    const termGroups = post._embedded?.['wp:term'] || [];
+    for (const group of termGroups) {
+      if (!Array.isArray(group)) continue;
+      for (const term of group) {
+        const nm = cleanText(term?.name);
+        if (!nm) continue;
+        if (term.taxonomy === 'category' && !parsed.categories.includes(nm) && parsed.categories.length < 8) {
+          parsed.categories.push(nm);
+        } else if (
+          term.taxonomy === 'post_tag' &&
+          !parsed.genres.includes(nm) &&
+          parsed.genres.length < 8
+        ) {
+          parsed.genres.push(nm);
+        }
+      }
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 export async function scrapeSingleInBrowser(params: {
   url?: string;
   rawHtml?: string;
@@ -1187,16 +1416,21 @@ export async function scrapeSingleInBrowser(params: {
   }
 
   const fetched = await fetchViaBrowserOrCorsRelay(parsedUrl.toString(), 12000);
-  if (!fetched.ok || fetched.text.length < 100) {
-    return {
-      ok: false,
-      error:
-        'تعذر سحب الصفحة عبر المتصفح (الموقع محمي بـ Cloudflare أو يمنع الطلبات الخارجية). انسخ View-Source للصفحة واستخدم تبويب "لصق كود HTML" — يعمل فورًا بدون خادم.',
-    };
+  if (fetched.ok && fetched.text.length >= 100) {
+    const extracted = await scrapeFullItemInBrowser(parsedUrl.toString(), fetched.text);
+    return { ok: true, extracted };
   }
 
-  const extracted = await scrapeFullItemInBrowser(parsedUrl.toString(), fetched.text);
-  return { ok: true, extracted };
+  const wpSingle = await tryWordPressSinglePostBrowser(parsedUrl);
+  if (wpSingle) {
+    return { ok: true, extracted: wpSingle };
+  }
+
+  return {
+    ok: false,
+    error:
+      'منع هذا الموقع الجلب المباشر من المتصفح (CORS/Cloudflare) وتعذرت مرحّلات البروكسي العامة. الحل الأسرع: افتح تبويب "لصق كود HTML" (Ctrl+U)، أو أنشئ Cloudflare Worker مجاني في الإعدادات ليصبح الجلب بنفس كفاءة المعاينة على GitHub Pages.',
+  };
 }
 
 export async function scrapeSiteInBrowser(params: {

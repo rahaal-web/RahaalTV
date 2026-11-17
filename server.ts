@@ -592,6 +592,17 @@ function parseHtmlToMediaWithHints(
     });
   });
 
+  if (!hints.watchSubpageUrl && allScriptsText) {
+    const jsWatchMatch = allScriptsText.match(
+      /["'](https?:\/\/[^"'\s<>]+\/+(?:watch|play|player)\/?)["']/i
+    );
+    if (jsWatchMatch?.[1]) hints.watchSubpageUrl = jsWatchMatch[1];
+  }
+  if (!hints.downloadSubpageUrl && allScriptsText) {
+    const jsDlMatch = allScriptsText.match(/["'](https?:\/\/[^"'\s<>]+\/+download\/?)["']/i);
+    if (jsDlMatch?.[1]) hints.downloadSubpageUrl = jsDlMatch[1];
+  }
+
   // 8. Episodes detection (for series)
   const episodes: { number: number; title: string; duration: string; quality: string; watchUrl?: string }[] = [];
   $('a[href]').each((_, el) => {
