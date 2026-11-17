@@ -1,6 +1,8 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowDown,
   ArrowRight,
+  ArrowUp,
   BarChart3,
   CheckCircle2,
   Code2,
@@ -20,6 +22,7 @@ import {
   LogOut,
   MessageSquarePlus,
   Pin,
+  Play,
   Plus,
   RefreshCw,
   Search,
@@ -57,7 +60,9 @@ import {
 import {
   checkServerUrlsInBrowser,
   CLOUDFLARE_WORKER_SOURCE,
+  findTrailerInBrowser,
   getCustomApiBaseUrl,
+  isLikelyNonVideoWebsiteUrl,
   resolveApiEndpoint,
   ScrapedPayload,
   scrapeSingleInBrowser,
@@ -160,6 +165,13 @@ function resolveWatchServerUrl(srv?: { mode?: 'url' | 'embed'; url?: string; emb
   return (srv.url || srv.watchUrl || '').trim();
 }
 
+function renumberServers(servers: StreamServer[]): StreamServer[] {
+  return servers.map((srv, idx) => ({
+    ...srv,
+    name: `سيرفر ${idx + 1}`,
+  }));
+}
+
 function createEmptyMedia(): MediaItem {
   const id = `work-${Date.now()}`;
   return {
@@ -196,7 +208,7 @@ function createEmptyMedia(): MediaItem {
     servers: [
       {
         id: `srv-${Date.now()}-1`,
-        name: 'سيرفر RahaL TV الرئيسي',
+        name: 'سيرفر 1',
         mode: 'url',
         url: '',
         embedCode: '',
@@ -245,7 +257,7 @@ function scrapedToMediaItem(scraped: ScrapedPayload, indexOffset = 0): MediaItem
     tagline: scraped.tagline || scraped.story?.slice(0, 120) || '',
     story: scraped.story || scraped.title,
     shortUrl: scraped.shortUrl || `https://rahaltv.com/${id}`,
-    trailerUrl: '',
+    trailerUrl: scraped.trailerUrl || '',
     trailerLabel: `إعلان ${scraped.title}`,
     trailerDuration: '02:00',
     cast: scraped.cast?.length ? scraped.cast : [{ name: 'طاقم العمل', role: 'تمثيل', initials: 'RT' }],
@@ -253,11 +265,11 @@ function scrapedToMediaItem(scraped: ScrapedPayload, indexOffset = 0): MediaItem
     franchiseIds: [],
     servers:
       scraped.servers?.length > 0
-        ? scraped.servers
+        ? renumberServers(scraped.servers)
         : [
             {
               id: `srv-${Date.now()}`,
-              name: 'سيرفر RahaL TV الأساسي',
+              name: 'سيرفر 1',
               mode: 'url',
               url: '',
               embedCode: '',
@@ -329,6 +341,8 @@ export function AdminDashboardView({
   const [scraping, setScraping] = useState(false);
   const [scrapeError, setScrapeError] = useState<string | null>(null);
   const [scrapedResult, setScrapedResult] = useState<ScrapedPayload | null>(null);
+  const [editingScrapedServerIdx, setEditingScrapedServerIdx] = useState<number | null>(null);
+  const [fetchingTrailer, setFetchingTrailer] = useState(false);
 
   // Site-Wide Bulk Crawler states (Entire Website)
   const [siteScrapeMode, setSiteScrapeMode] = useState<'url' | 'html'>('url');
@@ -634,7 +648,7 @@ export function AdminDashboardView({
 
     const cleanedServers: StreamServer[] = (editingItem.servers || []).map((srv, idx) => ({
       id: srv.id || `srv-${Date.now()}-${idx}`,
-      name: srv.name.trim() || `سيرفر ${idx + 1}`,
+      name: `سيرفر ${idx + 1}`,
       mode: srv.mode || (srv.embedCode ? 'embed' : 'url'),
       url: (srv.url || '').trim(),
       embedCode: (srv.embedCode || '').trim(),
@@ -778,7 +792,11 @@ export function AdminDashboardView({
         return;
       }
 
-      setScrapedResult(data.extracted);
+      setScrapedResult({
+        ...data.extracted,
+        servers: renumberServers(data.extracted.servers || []),
+      });
+      setEditingScrapedServerIdx(null);
       const extractedUrls = (data.extracted.servers || [])
         .map((s) => resolveWatchServerUrl(s))
         .filter((u) => /^https?:\/\//i.test(u));
@@ -1121,9 +1139,10 @@ export function AdminDashboardView({
   /* ---------------- Editor Sub-builders ---------------- */
   const addServerRow = () => {
     if (!editingItem) return;
+    const current = editingItem.servers || [];
     const next: StreamServer = {
       id: `srv-${Date.now()}`,
-      name: `سيرفر مشاهدة ${(editingItem.servers?.length || 0) + 1}`,
+      name: `سيرفر ${current.length + 1}`,
       mode: 'url',
       url: '',
       embedCode: '',
@@ -1131,22 +1150,138 @@ export function AdminDashboardView({
       speed: 'سريع',
       tag: 'HD',
     };
-    setEditingItem({ ...editingItem, servers: [...(editingItem.servers || []), next] });
+    setEditingItem({ ...editingItem, servers: renumberServers([...current, next]) });
   };
 
   const updateServerRow = (idx: number, patch: Partial<StreamServer>) => {
     if (!editingItem) return;
     const next = [...(editingItem.servers || [])];
-    next[idx] = { ...next[idx], ...patch };
+    next[idx] = { ...next[idx], ...patch, name: `سيرفر ${idx + 1}` };
     setEditingItem({ ...editingItem, servers: next });
   };
 
   const removeServerRow = (idx: number) => {
     if (!editingItem) return;
+    const remaining = (editingItem.servers || []).filter((_, i) => i !== idx);
     setEditingItem({
       ...editingItem,
-      servers: (editingItem.servers || []).filter((_, i) => i !== idx),
+      servers: renumberServers(remaining),
     });
+  };
+
+  const moveServerRow = (idx: number, direction: -1 | 1) => {
+    if (!editingItem) return;
+    const list = [...(editingItem.servers || [])];
+    const targetIdx = idx + direction;
+    if (targetIdx < 0 || targetIdx >= list.length) return;
+    const [moved] = list.splice(idx, 1);
+    list.splice(targetIdx, 0, moved);
+    setEditingItem({
+      ...editingItem,
+      servers: renumberServers(list),
+    });
+  };
+
+  /* ---------------- Scraped Preview Server & Trailer Builders ---------------- */
+  const addScrapedServerRow = () => {
+    if (!scrapedResult) return;
+    const nextIdx = (scrapedResult.servers || []).length;
+    const nextSrv: StreamServer = {
+      id: `srv-scraped-${Date.now()}`,
+      name: `سيرفر ${nextIdx + 1}`,
+      mode: 'url',
+      url: '',
+      embedCode: '',
+      quality: scrapedResult.quality || '1080p',
+      speed: 'سريع',
+      tag: 'HD',
+    };
+    setScrapedResult({
+      ...scrapedResult,
+      servers: renumberServers([...(scrapedResult.servers || []), nextSrv]),
+    });
+    setEditingScrapedServerIdx(nextIdx);
+  };
+
+  const updateScrapedServerRow = (idx: number, patch: Partial<StreamServer>) => {
+    if (!scrapedResult) return;
+    const next = [...(scrapedResult.servers || [])];
+    next[idx] = { ...next[idx], ...patch, name: `سيرفر ${idx + 1}` };
+    setScrapedResult({ ...scrapedResult, servers: next });
+  };
+
+  const removeScrapedServerRow = (idx: number) => {
+    if (!scrapedResult) return;
+    const remaining = (scrapedResult.servers || []).filter((_, i) => i !== idx);
+    setScrapedResult({
+      ...scrapedResult,
+      servers: renumberServers(remaining),
+    });
+    setEditingScrapedServerIdx((prev) => {
+      if (prev === null) return null;
+      if (prev === idx) return null;
+      return prev > idx ? prev - 1 : prev;
+    });
+  };
+
+  const moveScrapedServerRow = (idx: number, direction: -1 | 1) => {
+    if (!scrapedResult) return;
+    const list = [...(scrapedResult.servers || [])];
+    const targetIdx = idx + direction;
+    if (targetIdx < 0 || targetIdx >= list.length) return;
+    const [moved] = list.splice(idx, 1);
+    list.splice(targetIdx, 0, moved);
+    setScrapedResult({
+      ...scrapedResult,
+      servers: renumberServers(list),
+    });
+    setEditingScrapedServerIdx((prev) => {
+      if (prev === idx) return targetIdx;
+      if (prev === targetIdx) return idx;
+      return prev;
+    });
+  };
+
+  const handleAutoFetchTrailerForScraped = async () => {
+    if (!scrapedResult || fetchingTrailer) return;
+    setFetchingTrailer(true);
+    try {
+      const found = await findTrailerInBrowser({
+        title: scrapedResult.title,
+        englishTitle: scrapedResult.englishTitle,
+        year: scrapedResult.year,
+        kind: scrapedResult.kind,
+      });
+      if (found) {
+        setScrapedResult((prev) => (prev ? { ...prev, trailerUrl: found } : prev));
+        onNotify('تم جلب رابط التريلر تلقائياً!');
+      } else {
+        onNotify('لم يُعثر على تريلر تلقائي — يمكنك لصق رابط يوتيوب يدوياً');
+      }
+    } finally {
+      setFetchingTrailer(false);
+    }
+  };
+
+  const handleAutoFetchTrailerForEditor = async () => {
+    if (!editingItem || fetchingTrailer) return;
+    setFetchingTrailer(true);
+    try {
+      const found = await findTrailerInBrowser({
+        title: editingItem.title,
+        englishTitle: editingItem.englishTitle,
+        year: editingItem.year,
+        kind: editingItem.kind,
+      });
+      if (found) {
+        setEditingItem((prev) => (prev ? { ...prev, trailerUrl: found } : prev));
+        onNotify('تم جلب رابط التريلر تلقائياً!');
+      } else {
+        onNotify('لم يُعثر على تريلر تلقائي — يمكنك لصق رابط يوتيوب يدوياً');
+      }
+    } finally {
+      setFetchingTrailer(false);
+    }
   };
 
   const addDownloadRow = () => {
@@ -2281,74 +2416,307 @@ export function AdminDashboardView({
                       </div>
                     </div>
 
-                    {/* Extracted Assets Summary */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-3 border-t border-white/10">
-                      <div className="rounded-2xl bg-[#1a242e]/80 p-3.5">
-                        <p className="text-xs font-extrabold text-white flex items-center gap-1.5 mb-2">
-                          <Server className="w-4 h-4 text-[#D92321]" />
-                          سيرفرات المشاهدة ({scrapedResult.servers.length})
+                    {/* Extracted Trailer Control Bar */}
+                    <div className="rounded-2xl bg-[#1a242e]/85 border border-[#D92321]/30 p-3.5 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs font-extrabold text-white flex items-center gap-2">
+                          <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-[#D92321] text-white">
+                            <Play className="w-3 h-3 fill-current" />
+                          </span>
+                          <span>تريلر العمل (Trailer)</span>
+                          {scrapedResult.trailerUrl ? (
+                            <span className="rounded-md bg-[#4CAF50]/15 border border-[#4CAF50]/35 px-2 py-0.5 text-[10px] font-bold text-[#4CAF50]">
+                              مُستخرج تلقائياً
+                            </span>
+                          ) : (
+                            <span className="rounded-md bg-[#f9c400]/15 border border-[#f9c400]/35 px-2 py-0.5 text-[10px] font-bold text-[#f9c400]">
+                              غير متوفر بالصفحة
+                            </span>
+                          )}
                         </p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={fetchingTrailer}
+                            onClick={() => void handleAutoFetchTrailerForScraped()}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-[#D92321] hover:bg-[#dc0e30] disabled:opacity-50 px-3 py-1.5 text-[11px] font-extrabold text-white cursor-pointer"
+                          >
+                            {fetchingTrailer ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Wand2 className="w-3.5 h-3.5" />
+                            )}
+                            <span>{fetchingTrailer ? 'جاري البحث...' : 'جلب التريلر تلقائياً'}</span>
+                          </button>
+                          {scrapedResult.trailerUrl && (
+                            <a
+                              href={scrapedResult.trailerUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 rounded-lg bg-[#0c1821] border border-white/10 px-2.5 py-1.5 text-[11px] font-bold text-[#b7c9ef] hover:text-white"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                              <span>تجربة</span>
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                      <input
+                        type="text"
+                        dir="ltr"
+                        value={scrapedResult.trailerUrl || ''}
+                        onChange={(e) =>
+                          setScrapedResult({ ...scrapedResult, trailerUrl: e.target.value })
+                        }
+                        placeholder="https://www.youtube.com/watch?v=... أو رابط MP4"
+                        className="font-latin w-full rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-xs text-white focus:border-[#D92321] focus:outline-none"
+                      />
+                    </div>
+
+                    {/* Extracted Assets Summary + Full Interactive Server Manager */}
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 pt-2 border-t border-white/10">
+                      {/* Full Interactive Watch Servers Manager */}
+                      <div className="lg:col-span-7 rounded-2xl bg-[#1a242e]/85 border border-white/10 p-4 space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs sm:text-sm font-extrabold text-white flex items-center gap-2">
+                            <Server className="w-4 h-4 text-[#D92321]" />
+                            <span>إدارة سيرفرات المشاهدة ({scrapedResult.servers.length})</span>
+                          </p>
+                          <div className="flex items-center gap-1.5">
+                            {scrapedResult.servers.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const urls = scrapedResult.servers
+                                    .map((s) => resolveWatchServerUrl(s))
+                                    .filter((u) => /^https?:\/\//i.test(u));
+                                  void checkServerUrls(urls, true);
+                                }}
+                                className="inline-flex items-center gap-1 rounded-lg bg-[#0c1821] border border-sky-400/30 px-2.5 py-1 text-[11px] font-bold text-sky-300 hover:bg-sky-500/15 cursor-pointer"
+                              >
+                                <RefreshCw className="w-3 h-3" />
+                                <span>فحص</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={addScrapedServerRow}
+                              className="inline-flex items-center gap-1 rounded-lg bg-[#4CAF50] hover:bg-[#43a047] px-2.5 py-1 text-[11px] font-extrabold text-white cursor-pointer"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>إضافة سيرفر</span>
+                            </button>
+                          </div>
+                        </div>
+
                         {scrapedResult.servers.length === 0 ? (
-                          <div className="space-y-1.5">
-                            <p className="text-[11px] text-[#b7c9ef]">لم يُعثر على أكواد iframe في الصفحة</p>
+                          <div className="space-y-1.5 rounded-xl bg-[#0c1821]/60 p-3">
+                            <p className="text-[11px] text-[#b7c9ef]">
+                              لم يُعثر على سيرفرات صالحة في الصفحة (أو تم استبعاد روابط الصفحات الرئيسية تلقائياً).
+                            </p>
                             {!customApiUrl && (
                               <p className="text-[10px] leading-relaxed text-[#f9c400]/90">
-                                بعض المواقع (مثل akwams) تضع السيرفرات في صفحة <span className="font-latin">/watch</span> منفصلة؛ فعّل <button type="button" onClick={() => setActiveTab('settings')} className="underline font-bold cursor-pointer">Cloudflare Worker المجاني</button> في الإعدادات لجلبها تلقائياً من GitHub Pages.
+                                بعض المواقع تضع السيرفرات في صفحة <span className="font-latin">/watch</span> منفصلة؛ فعّل{' '}
+                                <button
+                                  type="button"
+                                  onClick={() => setActiveTab('settings')}
+                                  className="underline font-bold cursor-pointer"
+                                >
+                                  Cloudflare Worker المجاني
+                                </button>{' '}
+                                في الإعدادات لجلبها تلقائياً من GitHub Pages.
                               </p>
                             )}
                           </div>
                         ) : (
-                          <ul className="space-y-1.5 text-[11px] text-[#b7c9ef]">
-                            {scrapedResult.servers.slice(0, 6).map((s) => {
+                          <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
+                            {scrapedResult.servers.map((s, idx) => {
                               const srvUrl = resolveWatchServerUrl(s);
+                              const isPortal = Boolean(srvUrl && isLikelyNonVideoWebsiteUrl(srvUrl));
+                              const isEditingThis = editingScrapedServerIdx === idx;
+                              const srvMode = s.mode || (s.embedCode ? 'embed' : 'url');
                               return (
-                                <li key={s.id} className="space-y-1">
-                                  <div className="flex items-center justify-between gap-2">
-                                    <span className="truncate font-latin">• {s.name}</span>
-                                    {renderServerStatusBadge(srvUrl, true)}
+                                <div
+                                  key={s.id || idx}
+                                  className={`rounded-xl border p-2.5 space-y-2 ${
+                                    isPortal
+                                      ? 'bg-[#D92321]/10 border-[#D92321]/45'
+                                      : 'bg-[#0c1821]/85 border-white/10'
+                                  }`}
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div className="flex flex-wrap items-center gap-2 min-w-0">
+                                      <span className="inline-flex items-center gap-1 rounded-lg bg-[#D92321] px-2.5 py-0.5 text-[11px] font-black text-white tabular-nums">
+                                        سيرفر {idx + 1}
+                                      </span>
+                                      <span className="font-latin rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-[#f9c400]">
+                                        {s.quality || 'HD'}
+                                      </span>
+                                      {renderServerStatusBadge(srvUrl, true)}
+                                      {isPortal && (
+                                        <span className="rounded bg-[#D92321]/25 px-1.5 py-0.5 text-[10px] font-bold text-[#ff8a88]">
+                                          صفحة موقع وليست فيديو
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        disabled={idx === 0}
+                                        onClick={() => moveScrapedServerRow(idx, -1)}
+                                        title="تحريك لأعلى"
+                                        className="rounded-md bg-[#1a242e] p-1 text-[#b7c9ef] hover:text-white disabled:opacity-30 cursor-pointer"
+                                      >
+                                        <ArrowUp className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={idx === scrapedResult.servers.length - 1}
+                                        onClick={() => moveScrapedServerRow(idx, 1)}
+                                        title="تحريك لأسفل"
+                                        className="rounded-md bg-[#1a242e] p-1 text-[#b7c9ef] hover:text-white disabled:opacity-30 cursor-pointer"
+                                      >
+                                        <ArrowDown className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setEditingScrapedServerIdx(isEditingThis ? null : idx)
+                                        }
+                                        title="تعديل السيرفر"
+                                        className={`rounded-md p-1 cursor-pointer ${
+                                          isEditingThis
+                                            ? 'bg-sky-500 text-white'
+                                            : 'bg-[#1a242e] text-sky-300 hover:bg-sky-500 hover:text-white'
+                                        }`}
+                                      >
+                                        <Edit3 className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => removeScrapedServerRow(idx)}
+                                        title="حذف السيرفر"
+                                        className="rounded-md bg-[#1a242e] p-1 text-[#D92321] hover:bg-[#D92321] hover:text-white cursor-pointer"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
                                   </div>
-                                  <p className="truncate font-latin text-[10px] text-[#b7c9ef]/60" dir="ltr">
-                                    {srvUrl}
+
+                                  <p className="truncate font-latin text-[10px] text-[#b7c9ef]/75" dir="ltr">
+                                    {srvUrl || 'لم يُضف رابط بعد'}
                                   </p>
-                                </li>
+
+                                  {isEditingThis && (
+                                    <div className="space-y-2 pt-2 border-t border-white/10">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <div className="flex rounded-lg bg-[#1a242e] p-0.5 border border-white/10">
+                                          <button
+                                            type="button"
+                                            onClick={() => updateScrapedServerRow(idx, { mode: 'url' })}
+                                            className={`rounded-md px-2 py-0.5 text-[10px] font-bold cursor-pointer ${
+                                              srvMode === 'url'
+                                                ? 'bg-[#4CAF50] text-white'
+                                                : 'text-[#b7c9ef]'
+                                            }`}
+                                          >
+                                            رابط مباشر
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              updateScrapedServerRow(idx, { mode: 'embed' })
+                                            }
+                                            className={`rounded-md px-2 py-0.5 text-[10px] font-bold cursor-pointer ${
+                                              srvMode === 'embed'
+                                                ? 'bg-[#f9c400] text-[#06131c]'
+                                                : 'text-[#b7c9ef]'
+                                            }`}
+                                          >
+                                            كود Iframe
+                                          </button>
+                                        </div>
+                                        <input
+                                          type="text"
+                                          value={s.quality}
+                                          onChange={(e) =>
+                                            updateScrapedServerRow(idx, { quality: e.target.value })
+                                          }
+                                          placeholder="الجودة (1080p)"
+                                          className="w-28 rounded-lg bg-[#1a242e] border border-white/10 px-2.5 py-1 text-[11px] text-white"
+                                        />
+                                      </div>
+
+                                      {srvMode === 'url' ? (
+                                        <input
+                                          type="text"
+                                          dir="ltr"
+                                          value={s.url || ''}
+                                          onChange={(e) =>
+                                            updateScrapedServerRow(idx, { url: e.target.value })
+                                          }
+                                          placeholder="https://..."
+                                          className="font-latin w-full rounded-lg bg-[#1a242e] border border-white/10 px-2.5 py-1.5 text-[11px] text-white focus:border-[#4CAF50] focus:outline-none"
+                                        />
+                                      ) : (
+                                        <textarea
+                                          rows={2}
+                                          dir="ltr"
+                                          value={s.embedCode || ''}
+                                          onChange={(e) =>
+                                            updateScrapedServerRow(idx, {
+                                              embedCode: e.target.value,
+                                            })
+                                          }
+                                          placeholder='<iframe src="https://..." allowfullscreen></iframe>'
+                                          className="font-latin w-full rounded-lg bg-[#1a242e] border border-white/10 p-2 text-[11px] text-white focus:border-[#f9c400] focus:outline-none"
+                                        />
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
                               );
                             })}
-                          </ul>
+                          </div>
                         )}
                       </div>
 
-                      <div className="rounded-2xl bg-[#1a242e]/80 p-3.5">
-                        <p className="text-xs font-extrabold text-white flex items-center gap-1.5 mb-2">
-                          <Download className="w-4 h-4 text-[#4CAF50]" />
-                          روابط التحميل ({scrapedResult.downloads.length})
-                        </p>
-                        {scrapedResult.downloads.length === 0 ? (
-                          <p className="text-[11px] text-[#b7c9ef]">لم يُعثر على روابط تحميل مباشرة</p>
-                        ) : (
-                          <ul className="space-y-1 text-[11px] text-[#b7c9ef]">
-                            {scrapedResult.downloads.slice(0, 4).map((d) => (
-                              <li key={d.id} className="truncate font-latin">
-                                • {d.host} ({d.quality})
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
+                      {/* Downloads & Seasons/Cast Summary */}
+                      <div className="lg:col-span-5 grid grid-cols-1 gap-4">
+                        <div className="rounded-2xl bg-[#1a242e]/80 p-3.5">
+                          <p className="text-xs font-extrabold text-white flex items-center gap-1.5 mb-2">
+                            <Download className="w-4 h-4 text-[#4CAF50]" />
+                            روابط التحميل ({scrapedResult.downloads.length})
+                          </p>
+                          {scrapedResult.downloads.length === 0 ? (
+                            <p className="text-[11px] text-[#b7c9ef]">لم يُعثر على روابط تحميل مباشرة</p>
+                          ) : (
+                            <ul className="space-y-1 text-[11px] text-[#b7c9ef]">
+                              {scrapedResult.downloads.slice(0, 5).map((d) => (
+                                <li key={d.id} className="truncate font-latin">
+                                  • {d.host} ({d.quality})
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
 
-                      <div className="rounded-2xl bg-[#1a242e]/80 p-3.5">
-                        <p className="text-xs font-extrabold text-white flex items-center gap-1.5 mb-2">
-                          <Layers className="w-4 h-4 text-[#f9c400]" />
-                          الحلقات وطاقم العمل
-                        </p>
-                        <p className="text-[11px] text-[#b7c9ef]">
-                          حلقات مستخرجة:{' '}
-                          <strong className="text-white">
-                            {scrapedResult.seasons?.[0]?.episodes.length || 0}
-                          </strong>
-                          <br />
-                          ممثلون مستخرجون:{' '}
-                          <strong className="text-white">{scrapedResult.cast.length}</strong>
-                        </p>
+                        <div className="rounded-2xl bg-[#1a242e]/80 p-3.5">
+                          <p className="text-xs font-extrabold text-white flex items-center gap-1.5 mb-2">
+                            <Layers className="w-4 h-4 text-[#f9c400]" />
+                            الحلقات وطاقم العمل
+                          </p>
+                          <p className="text-[11px] text-[#b7c9ef]">
+                            حلقات مستخرجة:{' '}
+                            <strong className="text-white">
+                              {scrapedResult.seasons?.[0]?.episodes.length || 0}
+                            </strong>
+                            <br />
+                            ممثلون مستخرجون:{' '}
+                            <strong className="text-white">{scrapedResult.cast.length}</strong>
+                          </p>
+                        </div>
                       </div>
                     </div>
 
@@ -2740,6 +3108,7 @@ export function AdminDashboardView({
                                 {item.seasons?.[0]?.episodes.length
                                   ? ` • ${item.seasons[0].episodes.length} حلقة`
                                   : ''}
+                                {item.trailerUrl ? ' • تريلر متاح' : ''}
                               </span>
 
                               <div className="flex items-center gap-1.5">
@@ -3617,9 +3986,24 @@ export function AdminDashboardView({
                           />
                         </div>
                         <div>
-                          <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">
-                            رابط التريلر (YouTube أو MP4)
-                          </label>
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <label className="block text-[11px] font-bold text-[#b7c9ef]">
+                              رابط التريلر (YouTube أو MP4)
+                            </label>
+                            <button
+                              type="button"
+                              disabled={fetchingTrailer}
+                              onClick={() => void handleAutoFetchTrailerForEditor()}
+                              className="inline-flex items-center gap-1 rounded-md bg-[#D92321]/20 hover:bg-[#D92321] border border-[#D92321]/40 px-2 py-0.5 text-[10px] font-bold text-[#ff8a88] hover:text-white cursor-pointer"
+                            >
+                              {fetchingTrailer ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <Wand2 className="w-3 h-3" />
+                              )}
+                              <span>{fetchingTrailer ? 'جاري البحث...' : 'جلب تلقائي'}</span>
+                            </button>
+                          </div>
                           <input
                             type="text"
                             dir="ltr"
@@ -3763,17 +4147,27 @@ export function AdminDashboardView({
                         const mode = srv.mode || (srv.embedCode ? 'embed' : 'url');
                         const detectedSrc = extractIframeSrcPreview(srv.embedCode);
                         const effectiveUrl = resolveWatchServerUrl(srv);
+                        const isPortalUrl = Boolean(effectiveUrl && isLikelyNonVideoWebsiteUrl(effectiveUrl));
                         return (
                           <div
                             key={srv.id || idx}
-                            className="rounded-2xl bg-[#1a242e]/85 border border-white/10 p-4 space-y-3"
+                            className={`rounded-2xl border p-4 space-y-3 ${
+                              isPortalUrl
+                                ? 'bg-[#D92321]/10 border-[#D92321]/50'
+                                : 'bg-[#1a242e]/85 border-white/10'
+                            }`}
                           >
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <div className="flex flex-wrap items-center gap-2">
-                                <span className="rounded-lg bg-[#D92321] px-2.5 py-0.5 text-[11px] font-black text-white">
-                                  سيرفر #{idx + 1}
+                                <span className="rounded-lg bg-[#D92321] px-2.5 py-0.5 text-[11px] font-black text-white tabular-nums">
+                                  سيرفر {idx + 1}
                                 </span>
                                 {renderServerStatusBadge(effectiveUrl)}
+                                {isPortalUrl && (
+                                  <span className="rounded-md bg-[#D92321]/20 border border-[#D92321]/40 px-2 py-0.5 text-[10px] font-bold text-[#ff8a88]">
+                                    تحذير: رابط موقع رئيسي وليس فيديو
+                                  </span>
+                                )}
                                 <div className="flex rounded-lg bg-[#0c1821] p-0.5 border border-white/10">
                                   <button
                                     type="button"
@@ -3802,23 +4196,43 @@ export function AdminDashboardView({
                                 </div>
                               </div>
 
-                              <button
-                                type="button"
-                                onClick={() => removeServerRow(idx)}
-                                className="inline-flex items-center gap-1 rounded-lg bg-[#0c1821] px-2.5 py-1.5 text-[11px] font-bold text-[#D92321] hover:bg-[#D92321] hover:text-white cursor-pointer"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                                <span>حذف السيرفر</span>
-                              </button>
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  disabled={idx === 0}
+                                  onClick={() => moveServerRow(idx, -1)}
+                                  title="تحريك لأعلى"
+                                  className="rounded-lg bg-[#0c1821] p-1.5 text-[#b7c9ef] hover:text-white disabled:opacity-30 cursor-pointer"
+                                >
+                                  <ArrowUp className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={idx === (editingItem.servers || []).length - 1}
+                                  onClick={() => moveServerRow(idx, 1)}
+                                  title="تحريك لأسفل"
+                                  className="rounded-lg bg-[#0c1821] p-1.5 text-[#b7c9ef] hover:text-white disabled:opacity-30 cursor-pointer"
+                                >
+                                  <ArrowDown className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeServerRow(idx)}
+                                  className="inline-flex items-center gap-1 rounded-lg bg-[#0c1821] px-2.5 py-1.5 text-[11px] font-bold text-[#D92321] hover:bg-[#D92321] hover:text-white cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>حذف السيرفر</span>
+                                </button>
+                              </div>
                             </div>
 
                             <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
                               <input
                                 type="text"
-                                value={srv.name}
-                                onChange={(e) => updateServerRow(idx, { name: e.target.value })}
-                                placeholder="اسم السيرفر (مثال: VidStream)"
-                                className="rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-xs text-white"
+                                readOnly
+                                value={`سيرفر ${idx + 1}`}
+                                title="يُرقّم تلقائياً: سيرفر 1، سيرفر 2..."
+                                className="rounded-xl bg-[#0c1821]/70 border border-[#D92321]/30 px-3 py-2 text-xs font-extrabold text-white/90"
                               />
                               <input
                                 type="text"

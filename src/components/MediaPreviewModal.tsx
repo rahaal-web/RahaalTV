@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import {
+  AlertTriangle,
   Calendar,
   CheckCircle2,
   Clock,
@@ -18,6 +19,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { isLikelyNonVideoWebsiteUrl } from '../lib/clientScraper';
 import {
   FALLBACK_BACKDROP,
   FALLBACK_POSTER,
@@ -67,6 +69,7 @@ export function MediaPreviewModal({
   const activeTestSrc = activeTestServer
     ? extractSafePreviewSrc(activeTestServer.embedCode, activeTestServer.url)
     : null;
+  const activeTestIsPortal = Boolean(activeTestSrc && isLikelyNonVideoWebsiteUrl(activeTestSrc));
   const isDirectVideo = Boolean(activeTestSrc && /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(activeTestSrc));
 
   return (
@@ -292,7 +295,7 @@ export function MediaPreviewModal({
                     {item.servers.length === 0 ? (
                       <p className="text-xs text-[#f9c400]">لم تُضف سيرفرات مشاهدة بعد.</p>
                     ) : (
-                      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-2">
                         {item.servers.map((srv, idx) => {
                           const cleanQ =
                             String(srv.quality || item.quality || 'HD')
@@ -304,16 +307,21 @@ export function MediaPreviewModal({
                               key={srv.id || idx}
                               type="button"
                               onClick={() => setTestServerIdx(isTesting ? null : idx)}
-                              className={`flex items-center justify-between gap-1.5 rounded-xl border px-2.5 py-2 cursor-pointer transition-all ${
+                              className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 cursor-pointer transition-all ${
                                 isTesting
-                                  ? 'bg-[#D92321] border-[#ff5a58] text-white'
+                                  ? 'bg-[#D92321] border-[#ff5a58] text-white shadow-[0_6px_18px_rgba(217,35,33,0.4)]'
                                   : 'bg-[#1a242e] border-white/10 text-white hover:border-[#D92321]'
                               }`}
                             >
-                              <span className="font-latin flex h-6 w-6 items-center justify-center rounded-md bg-black/30 text-xs font-black">
-                                {idx + 1}
+                              <span className="flex items-center gap-1.5 min-w-0">
+                                <span className="font-latin flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-black/30 text-[11px] font-black tabular-nums">
+                                  {idx + 1}
+                                </span>
+                                <span className="text-xs font-extrabold truncate">
+                                  سيرفر {idx + 1}
+                                </span>
                               </span>
-                              <span className="font-latin text-[10px] font-black text-[#f9c400]">
+                              <span className="font-latin text-[10px] font-black text-[#f9c400] shrink-0">
                                 {cleanQ}
                               </span>
                             </button>
@@ -322,24 +330,29 @@ export function MediaPreviewModal({
                       </div>
                     )}
 
-                    {/* Inline Test Player inside Preview */}
+                    {/* Inline Test Player inside Preview (RahaL TV Crimson Box) */}
                     {testServerIdx !== null && (
-                      <div className="mt-3 space-y-2">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-bold text-[#4CAF50] flex items-center gap-1.5">
-                            <Play className="w-3.5 h-3.5 fill-current" />
-                            تجربة تشغيل السيرفر #{testServerIdx + 1}
+                      <div className="mt-3 rounded-2xl border-2 border-[#D92321]/80 bg-[#050b11] shadow-[0_12px_32px_rgba(217,35,33,0.22)] overflow-hidden">
+                        <div className="flex items-center justify-between gap-2 px-3.5 py-2 bg-gradient-to-l from-[#1a0a0d] via-[#120d14] to-[#0b131d] border-b border-[#D92321]/35 text-xs">
+                          <span className="font-extrabold text-white flex items-center gap-2">
+                            <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-[#D92321] text-white">
+                              <Play className="w-3 h-3 fill-current" />
+                            </span>
+                            <span>سيرفر {testServerIdx + 1} — مشغل RahaL TV</span>
                           </span>
                           <button
                             type="button"
                             onClick={() => setTestServerIdx(null)}
-                            className="text-[#b7c9ef] hover:text-white cursor-pointer"
+                            className="inline-flex items-center gap-1 rounded-lg bg-[#D92321]/15 hover:bg-[#D92321] px-2.5 py-1 text-[11px] font-bold text-[#ff8a88] hover:text-white transition-colors cursor-pointer"
                           >
-                            إغلاق المشغل التجريبي
+                            <X className="w-3 h-3" />
+                            <span>إغلاق</span>
                           </button>
                         </div>
-                        <div className="aspect-video w-full rounded-xl bg-black border border-white/10 overflow-hidden">
-                          {activeTestSrc ? (
+                        <div className="relative aspect-video w-full bg-black overflow-hidden">
+                          <span className="pointer-events-none absolute top-2 right-2 z-10 h-3 w-3 border-t-2 border-r-2 border-[#D92321]/85 rounded-tr" />
+                          <span className="pointer-events-none absolute top-2 left-2 z-10 h-3 w-3 border-t-2 border-l-2 border-[#D92321]/85 rounded-tl" />
+                          {activeTestSrc && !activeTestIsPortal ? (
                             isDirectVideo ? (
                               <video src={activeTestSrc} controls autoPlay playsInline className="w-full h-full" />
                             ) : (
@@ -351,6 +364,16 @@ export function MediaPreviewModal({
                                 className="w-full h-full border-0"
                               />
                             )
+                          ) : activeTestIsPortal ? (
+                            <div className="h-full flex flex-col items-center justify-center gap-2 p-4 text-center">
+                              <AlertTriangle className="w-8 h-8 text-[#D92321]" />
+                              <p className="text-xs font-extrabold text-white">
+                                تم حجب هذا الرابط لأنه صفحة موقع رئيسية وليس مشغل فيديو
+                              </p>
+                              <p className="font-latin text-[11px] text-[#b7c9ef]/70 truncate max-w-full" dir="ltr">
+                                {activeTestSrc}
+                              </p>
+                            </div>
                           ) : (
                             <div className="h-full flex items-center justify-center text-xs text-[#b7c9ef]">
                               لا يوجد رابط تشغيل صالح في هذا السيرفر

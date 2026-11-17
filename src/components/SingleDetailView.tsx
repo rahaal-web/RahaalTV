@@ -447,20 +447,14 @@ export function SingleDetailView({
                 {item.servers.length > 0 && (
                   <div className="rounded-2xl bg-[#101e29] border border-white/[0.08] p-3.5 sm:p-4 space-y-2.5">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="relative flex h-2.5 w-2.5">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#4CAF50] opacity-75" />
-                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#4CAF50]" />
-                        </span>
-                        <h3 className="text-xs sm:text-sm font-extrabold text-white flex items-center gap-1.5">
-                          <Server className="w-4 h-4 text-[#D92321]" />
-                          <span>السيرفرات ({item.servers.length})</span>
-                        </h3>
-                      </div>
-                      <span className="text-[11px] font-bold text-[#b7c9ef]">اختر رقم السيرفر للتشغيل</span>
+                      <h3 className="text-xs sm:text-sm font-extrabold text-white flex items-center gap-2">
+                        <Server className="w-4 h-4 text-[#D92321]" />
+                        <span>سيرفرات المشاهدة ({item.servers.length})</span>
+                      </h3>
+                      <span className="text-[11px] font-bold text-[#b7c9ef]">اختر السيرفر للتشغيل</span>
                     </div>
 
-                    <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8 gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2">
                       {item.servers.map((srv, idx) => {
                         const cleanQ =
                           String(srv.quality || item.quality || 'HD')
@@ -472,10 +466,15 @@ export function SingleDetailView({
                             type="button"
                             onClick={() => onOpenPlayer(item, 1, idx)}
                             style={{ animationDelay: `${idx * 35}ms` }}
-                            className="moov-server-card moov-server-enter group flex items-center justify-between gap-1.5 rounded-xl bg-[#1a242e]/90 border border-white/[0.08] px-2.5 py-2 transition-all duration-300 hover:border-[#D92321]/70 hover:bg-gradient-to-l hover:from-[#D92321]/25 hover:to-[#1a242e] hover:-translate-y-0.5 cursor-pointer"
+                            className="moov-server-card moov-server-enter group flex items-center justify-between gap-2 rounded-xl bg-[#1a242e]/90 border border-white/[0.08] px-3 py-2.5 transition-all duration-300 hover:border-[#D92321]/80 hover:bg-gradient-to-l hover:from-[#D92321]/25 hover:to-[#1a242e] hover:-translate-y-0.5 cursor-pointer"
                           >
-                            <span className="font-latin flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#0c1821] border border-white/10 text-xs font-black text-white group-hover:bg-[#D92321] group-hover:border-[#D92321] transition-colors">
-                              {idx + 1}
+                            <span className="flex items-center gap-1.5 min-w-0">
+                              <span className="font-latin flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[#0c1821] border border-white/10 text-[11px] font-black text-white tabular-nums group-hover:bg-[#D92321] group-hover:border-[#D92321] transition-colors">
+                                {idx + 1}
+                              </span>
+                              <span className="text-xs font-extrabold text-white truncate">
+                                سيرفر {idx + 1}
+                              </span>
                             </span>
 
                             <span className="font-latin shrink-0 rounded px-1.5 py-0.5 text-[10px] font-black text-[#f9c400]">

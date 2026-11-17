@@ -55,6 +55,104 @@ function resolveUrl(baseUrl: string, maybeRelative: string | undefined): string 
   }
 }
 
+function isYoutubeUrl(rawUrl: string): boolean {
+  return /(?:youtube\.com\/(?:watch|embed|shorts|v\/)|youtube-nocookie\.com\/embed\/|youtu\.be\/)/i.test(
+    rawUrl
+  );
+}
+
+function normalizeTrailerUrlServer(rawUrl: string | undefined | null): string {
+  if (!rawUrl) return '';
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return '';
+  const resolved = trimmed.startsWith('//') ? `https:${trimmed}` : trimmed;
+  if (!/^https?:\/\//i.test(resolved)) return '';
+  const ytMatch = resolved.match(
+    /(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/|v\/|shorts\/)|youtube-nocookie\.com\/embed\/|youtu\.be\/)([A-Za-z0-9_-]{11})/i
+  );
+  if (ytMatch?.[1]) {
+    return `https://www.youtube.com/watch?v=${ytMatch[1]}`;
+  }
+  if (/\.(mp4|webm|ogg)(\?|$)/i.test(resolved) || /vimeo\.com|dailymotion\.com/i.test(resolved)) {
+    return resolved;
+  }
+  return '';
+}
+
+const IGNORED_EMBED_HOSTS_REGEX =
+  /googlesyndication|doubleclick|googletagmanager|facebook\.com\/plugins|recaptcha|cloudflare|ads|histats|yandex|analytics|disqus\.com|gravatar\.com|addtoany|sharethis|twitter\.com\/widgets|instagram\.com\/embed/i;
+
+function isLikelyNonVideoWebsiteUrl(rawUrl: string, sourceOrigin?: string): boolean {
+  if (!rawUrl) return true;
+  if (IGNORED_EMBED_HOSTS_REGEX.test(rawUrl)) return true;
+  let u: URL;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    return true;
+  }
+  if (!['http:', 'https:'].includes(u.protocol) || isBlockedHost(u.hostname)) return true;
+
+  const p = u.pathname.toLowerCase();
+  const search = u.search.toLowerCase();
+  const hasVideoQueryParam = /[?&](?:v|vid|id|embed|file|stream|play|hash|key|token)=/i.test(search);
+
+  // Reject bare root website homepages (e.g. https://www.larooza.tv/ or https://example.com)
+  if ((p === '' || p === '/') && !hasVideoQueryParam) {
+    return true;
+  }
+
+  // Reject homepage & portal section URLs (e.g. /home, /home.24, /index.php, /movies, /series)
+  if (
+    !hasVideoQueryParam &&
+    (/^\/(?:home(?:\.[a-z0-9]+)?|index(?:\.[a-z0-9]+)?|main|start)\/?$/i.test(p) ||
+      /^\/(?:movies|series|shows|episodes|seasons|recent|trends|latest|popular|ramadan|wrestling|tv-channels|actors|collections|requests|news)\/?$/i.test(
+        p
+      ) ||
+      /^\/(?:category|categories|genre|genres|tag|tags|actor|search|login|register|signup|account|profile|contact|about|privacy|terms|dmca|faq)(?:\/|$)/i.test(
+        p
+      ))
+  ) {
+    return true;
+  }
+
+  // Reject same-origin full site pages inside watch servers unless they are explicit player/embed endpoints or video files
+  if (
+    sourceOrigin &&
+    u.origin === sourceOrigin &&
+    !/(?:embed|player|play\.php|jwplayer|videojs)/i.test(p + search) &&
+    !/\.(mp4|m3u8|webm|ogg)(\?|$)/i.test(p)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function hasRealVideoPlayerMarkup(snippet: string): boolean {
+  if (!snippet) return false;
+  return /<video\b|<source\b[^>]+src=|\.mp4\b|\.m3u8\b|jwplayer\s*\(|videojs\s*\(|new\s+Plyr\b|Hls\.isSupported|Clappr\.Player|Artplayer|DPlayer|sources\s*:\s*\[/i.test(
+    snippet
+  );
+}
+
+function isWebsiteHomepageHtml(finalUrl: string, snippet: string): boolean {
+  if (finalUrl && isLikelyNonVideoWebsiteUrl(finalUrl)) return true;
+  if (!snippet || hasRealVideoPlayerMarkup(snippet)) return false;
+
+  const hasPortalNavOrHomeTitle =
+    /<title>[^<]*(?:الصفحة\s*الرئيسية|الرئيسية\s*[-|–]|لاروزا|Larooza|موقع\s*فيديو|ماي\s*سيما|اكوام|أكوام|أفلام\s*و?مسلسلات)[^<]*<\/title>/i.test(
+      snippet
+    ) ||
+    /الصفحة\s*الرئيسية/i.test(snippet) ||
+    (/<nav\b/i.test(snippet) &&
+      /(?:أضيف\s*حديث[اًا]|اضيف\s*حديث[اًا]|مسلسلات\s*رمضان|برامج\s*تلفزيونية)/i.test(snippet)) ||
+    (/placeholder=["'][^"']*(?:ابحث|بحث|search)[^"']*["']/i.test(snippet) &&
+      /(?:مسلسلات|أفلام|افلام)/i.test(snippet));
+
+  return hasPortalNavOrHomeTitle;
+}
+
 interface SubpageHints {
   watchSubpageUrl?: string;
   downloadSubpageUrl?: string;
@@ -73,6 +171,7 @@ function parseHtmlToMediaWithHints(
   let jsonLdTitle = '';
   let jsonLdDesc = '';
   let jsonLdImage = '';
+  let jsonLdTrailer = '';
   let jsonLdImdb = 0;
   let jsonLdType = '';
   const jsonLdCast: { name: string; role: string; initials: string }[] = [];
@@ -94,6 +193,14 @@ function parseHtmlToMediaWithHints(
                 : Array.isArray(obj.image)
                   ? String(obj.image[0] || '')
                   : String(obj.image?.url || '');
+          }
+          if (obj.trailer && !jsonLdTrailer) {
+            const rawTr =
+              typeof obj.trailer === 'string'
+                ? obj.trailer
+                : String(obj.trailer?.embedUrl || obj.trailer?.url || obj.trailer?.contentUrl || '');
+            const normTr = normalizeTrailerUrlServer(rawTr);
+            if (normTr) jsonLdTrailer = normTr;
           }
           if (obj.aggregateRating?.ratingValue) {
             const val = parseFloat(String(obj.aggregateRating.ratingValue));
@@ -297,6 +404,40 @@ function parseHtmlToMediaWithHints(
     genres.push('دراما', 'إثارة');
   }
 
+  let sourceOrigin = '';
+  try {
+    if (sourceUrl) sourceOrigin = new URL(sourceUrl).origin;
+  } catch {
+    // ignore
+  }
+
+  // 5b. Trailer extraction (JSON-LD, DOM trailer containers, YouTube links/embeds, script blocks)
+  let trailerUrl = jsonLdTrailer || '';
+  const trySetTrailer = (rawCandidate: string | undefined | null) => {
+    if (trailerUrl || !rawCandidate) return;
+    const resolved = resolveUrl(sourceUrl, rawCandidate) || rawCandidate.trim();
+    const norm = normalizeTrailerUrlServer(resolved);
+    if (norm) trailerUrl = norm;
+  };
+
+  $(
+    '[data-trailer], [data-youtube], .trailer iframe, #trailer iframe, .trailer a, #trailer a, a[href*="youtube.com/watch"], a[href*="youtu.be/"], iframe[src*="youtube.com"], iframe[src*="youtube-nocookie.com"], iframe[data-src*="youtube"]'
+  ).each((_, el) => {
+    if (trailerUrl) return;
+    trySetTrailer($(el).attr('data-trailer'));
+    trySetTrailer($(el).attr('data-youtube'));
+    trySetTrailer($(el).attr('href'));
+    trySetTrailer($(el).attr('src'));
+    trySetTrailer($(el).attr('data-src'));
+  });
+
+  if (!trailerUrl && allScriptsText) {
+    const ytScriptMatch = allScriptsText.match(
+      /https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?v=|embed\/)|youtube-nocookie\.com\/embed\/|youtu\.be\/)[A-Za-z0-9_-]{11}/i
+    );
+    if (ytScriptMatch?.[0]) trySetTrailer(ytScriptMatch[0]);
+  }
+
   // 6. Watch Servers (<iframe> embeds + data-* attributes + inline JS var servers arrays + <video>)
   const serversMap = new Map<
     string,
@@ -312,26 +453,22 @@ function parseHtmlToMediaWithHints(
     }
   >();
 
-  const ignoredEmbeds =
-    /googlesyndication|doubleclick|googletagmanager|facebook\.com\/plugins|recaptcha|cloudflare|ads|histats|yandex|analytics/i;
-
-  const pushEmbedServer = (rawCandidate: string, preferredName?: string) => {
+  const pushEmbedServer = (rawCandidate: string, _preferredName?: string) => {
     const src = resolveUrl(sourceUrl, rawCandidate);
-    if (!src || ignoredEmbeds.test(src) || serversMap.has(src)) return;
+    if (!src) return;
 
-    let hostLabel = `سيرفر خارجي ${serversMap.size + 1}`;
-    try {
-      const parsed = new URL(src);
-      if (parsed.hostname === 'example.com' || isBlockedHost(parsed.hostname)) return;
-      hostLabel = parsed.hostname.replace(/^www\./, '');
-    } catch {
+    // Route YouTube embeds/links to trailerUrl instead of Watch Servers
+    if (isYoutubeUrl(src)) {
+      trySetTrailer(src);
       return;
     }
 
-    const numLabel = `سيرفر ${serversMap.size + 1}`;
+    if (serversMap.has(src) || isLikelyNonVideoWebsiteUrl(src, sourceOrigin)) return;
+
+    const seqNum = serversMap.size + 1;
     serversMap.set(src, {
-      id: `srv-ext-${serversMap.size + 1}`,
-      name: preferredName ? preferredName.replace(/مستورد|embed/gi, '').trim().slice(0, 40) || numLabel : numLabel,
+      id: `srv-ext-${seqNum}`,
+      name: `سيرفر ${seqNum}`,
       mode: 'embed',
       url: src,
       embedCode: `<iframe src="${src}" frameborder="0" allowfullscreen></iframe>`,
@@ -359,6 +496,7 @@ function parseHtmlToMediaWithHints(
   };
 
   $('iframe').each((_, el) => {
+    if ($(el).closest('header, nav, footer, .ads, .banner, .trailer, #trailer').length > 0) return;
     const rawSrc = $(el).attr('src') || $(el).attr('data-src') || $(el).attr('data-lazy-src') || '';
     pushEmbedServer(rawSrc);
   });
@@ -367,6 +505,7 @@ function parseHtmlToMediaWithHints(
   $('[data-embed], [data-iframe], [data-server], [data-video], [data-url], [data-watch], [data-link], [data-play], li[data-src], button[data-src], a[data-src]').each(
     (_, el) => {
       if (el.tagName?.toLowerCase() === 'img') return;
+      if ($(el).closest('header, nav, footer, .ads, .banner, .trailer, #trailer').length > 0) return;
       const attrVal =
         $(el).attr('data-embed') ||
         $(el).attr('data-iframe') ||
@@ -434,7 +573,7 @@ function parseHtmlToMediaWithHints(
       const decoded = decodeMaybeBase64Embed(b64Match[1]);
       if (/<script/i.test(decoded)) continue;
       const srcInDecoded = decoded.match(/src=["'](https?:\/\/[^"'\s<>]+)["']/i)?.[1] || decoded;
-      if (/^https?:\/\//i.test(srcInDecoded) && !ignoredEmbeds.test(srcInDecoded)) {
+      if (/^https?:\/\//i.test(srcInDecoded) && !IGNORED_EMBED_HOSTS_REGEX.test(srcInDecoded)) {
         pushEmbedServer(srcInDecoded);
       }
     }
@@ -447,7 +586,7 @@ function parseHtmlToMediaWithHints(
       let uMatch: RegExpExecArray | null;
       let arrIdx = 0;
       while ((uMatch = urlRegex.exec(arrMatch[1])) !== null) {
-        if (!ignoredEmbeds.test(uMatch[0])) {
+        if (!IGNORED_EMBED_HOSTS_REGEX.test(uMatch[0])) {
           const label = serverButtonLabels[arrIdx] || undefined;
           pushEmbedServer(uMatch[0], label);
           arrIdx++;
@@ -456,12 +595,13 @@ function parseHtmlToMediaWithHints(
     }
   });
 
-  $('video source, video').each((idx, el) => {
+  $('video source, video').each((_, el) => {
     const src = resolveUrl(sourceUrl, $(el).attr('src'));
-    if (!src || serversMap.has(src)) return;
+    if (!src || serversMap.has(src) || isLikelyNonVideoWebsiteUrl(src, sourceOrigin)) return;
+    const seqNum = serversMap.size + 1;
     serversMap.set(src, {
-      id: `srv-vid-${idx + 1}`,
-      name: `مشغل مباشر MP4 #${idx + 1}`,
+      id: `srv-vid-${seqNum}`,
+      name: `سيرفر ${seqNum}`,
       mode: 'url',
       url: src,
       embedCode: '',
@@ -476,13 +616,6 @@ function parseHtmlToMediaWithHints(
     string,
     { id: string; host: string; quality: string; size: string; format: string; url: string }
   >();
-
-  let sourceOrigin = '';
-  try {
-    sourceOrigin = new URL(sourceUrl).origin;
-  } catch {
-    // ignore
-  }
 
   const candidateOriginsSet = new Set<string>();
   const addOriginCandidate = (maybeUrl: string | undefined | null) => {
@@ -637,6 +770,14 @@ function parseHtmlToMediaWithHints(
     });
   }
 
+  const normalizedServers = Array.from(serversMap.values())
+    .slice(0, 12)
+    .map((srv, idx) => ({
+      ...srv,
+      id: srv.id || `srv-ext-${idx + 1}`,
+      name: `سيرفر ${idx + 1}`,
+    }));
+
   const media = {
     title,
     englishTitle,
@@ -655,8 +796,9 @@ function parseHtmlToMediaWithHints(
     tagline: story.slice(0, 140),
     story,
     shortUrl: sourceUrl || '',
+    trailerUrl,
     cast: jsonLdCast,
-    servers: Array.from(serversMap.values()).slice(0, 12),
+    servers: normalizedServers,
     downloads: Array.from(downloadsMap.values()).slice(0, 12),
     seasons:
       kind === 'series' && episodes.length > 0
@@ -946,6 +1088,102 @@ async function resolveAjaxEmbedsFromOrigins(
   return resolved;
 }
 
+async function findYoutubeTrailerFallback(
+  title: string,
+  englishTitle: string,
+  year: string,
+  kind: 'movie' | 'series' | 'tv' | 'wrestling'
+): Promise<string> {
+  const cleanEn = cleanText(englishTitle)
+    .replace(/\b(20[1-3]\d|19\d\d)\b/g, '')
+    .trim();
+  const cleanAr = cleanText(title)
+    .replace(/\b(20[1-3]\d|19\d\d)\b/g, '')
+    .replace(/^(فيلم|مسلسل|برنامج|عرض)\s+/i, '')
+    .replace(/\s+(مترجم|مدبلج|كامل|اون\s*لاين|أون\s*لاين).*$/i, '')
+    .trim();
+  const baseQuery = cleanEn.length >= 3 && /[A-Za-z]{3,}/.test(cleanEn) ? cleanEn : cleanAr;
+  if (!baseQuery) return '';
+
+  const kindSuffix = kind === 'series' ? 'series official trailer' : 'official trailer';
+  const query = `${baseQuery} ${year || ''} ${kindSuffix}`.replace(/\s+/g, ' ').trim();
+
+  try {
+    const res = await fetchRemoteText(
+      `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
+      4800
+    );
+    if (!res.ok || !res.text) return '';
+    const match = res.text.match(/"videoId":"([A-Za-z0-9_-]{11})"/);
+    if (match?.[1]) {
+      return `https://www.youtube.com/watch?v=${match[1]}`;
+    }
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+async function verifyScrapedServers(
+  servers: ScrapedMediaItem['servers'],
+  sourceOrigin: string
+): Promise<ScrapedMediaItem['servers']> {
+  if (!servers.length) return [];
+
+  const checkOne = async (srv: ScrapedMediaItem['servers'][number]) => {
+    const target = srv.url;
+    if (!target || isLikelyNonVideoWebsiteUrl(target, sourceOrigin)) return false;
+    if (/\.(mp4|m3u8|webm|ogg)(\?|$)/i.test(target)) return true;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3600);
+    try {
+      const response = await fetch(target, {
+        method: 'GET',
+        redirect: 'follow',
+        signal: controller.signal,
+        headers: {
+          ...DEFAULT_FETCH_HEADERS,
+          Referer: sourceOrigin ? `${sourceOrigin}/` : new URL(target).origin + '/',
+          Range: 'bytes=0-24576',
+        },
+      });
+      const finalUrl = response.url || target;
+      if (isLikelyNonVideoWebsiteUrl(finalUrl, sourceOrigin)) return false;
+      if (response.status === 404 || response.status === 410) return false;
+
+      const ct = (response.headers.get('content-type') || '').toLowerCase();
+      if (ct.includes('text/html') || ct.includes('text/plain') || !ct) {
+        const snippet = (await response.text().catch(() => '')).slice(0, 24576);
+        if (isWebsiteHomepageHtml(finalUrl, snippet)) return false;
+        if (
+          /file\s*(?:was|has been)?\s*(?:deleted|removed)|video\s*(?:was|has been)?\s*(?:deleted|removed|not found)|file\s*not\s*found|404\s*not\s*found|تم\s*حذف\s*(?:الملف|الفيديو)|الفيديو\s*غير\s*موجود/i.test(
+            snippet
+          )
+        ) {
+          return false;
+        }
+      }
+      return true;
+    } catch {
+      // Keep if timeout/network block only on server IP so browser iframe still has a chance unless URL itself is portal
+      return true;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const keptFlags = await Promise.all(servers.map((srv) => checkOne(srv)));
+  return servers
+    .filter((_, idx) => keptFlags[idx])
+    .slice(0, 12)
+    .map((srv, idx) => ({
+      ...srv,
+      id: srv.id || `srv-ext-${idx + 1}`,
+      name: `سيرفر ${idx + 1}`,
+    }));
+}
+
 async function scrapeFullItemWithSubpages(
   mainUrl: string,
   mainHtml: string
@@ -963,6 +1201,9 @@ async function scrapeFullItemWithSubpages(
         const watchRes = await fetchRemoteText(watchUrl, 8500);
         if (watchRes.ok && watchRes.text.length > 100) {
           const watchParsed = parseHtmlToMediaWithHints(watchRes.text, watchUrl);
+          if (!media.trailerUrl && watchParsed.media.trailerUrl) {
+            media.trailerUrl = watchParsed.media.trailerUrl;
+          }
           if (watchParsed.media.servers.length > 0) {
             const seen = new Set(media.servers.map((s) => s.url));
             for (const srv of watchParsed.media.servers) {
@@ -1027,14 +1268,31 @@ async function scrapeFullItemWithSubpages(
     );
     const seen = new Set(media.servers.map((s) => s.url));
     for (const srv of ajaxServers) {
-      if (!seen.has(srv.url)) {
+      if (!seen.has(srv.url) && !isLikelyNonVideoWebsiteUrl(srv.url)) {
         media.servers.push(srv);
         seen.add(srv.url);
       }
     }
   }
 
-  media.servers = media.servers.slice(0, 12);
+  let mainOrigin = '';
+  try {
+    if (mainUrl) mainOrigin = new URL(mainUrl).origin;
+  } catch {
+    // ignore
+  }
+
+  // Step 4: Verify scraped servers aren't website homepages / portals + enforce سيرفر 1, سيرفر 2...
+  // Step 5: Fallback trailer search on YouTube if page omitted trailer
+  const [filteredServers, fallbackTrailer] = await Promise.all([
+    verifyScrapedServers(media.servers, mainOrigin),
+    media.trailerUrl
+      ? Promise.resolve(media.trailerUrl)
+      : findYoutubeTrailerFallback(media.title, media.englishTitle, media.year, media.kind),
+  ]);
+
+  media.servers = filteredServers;
+  media.trailerUrl = fallbackTrailer || '';
   media.downloads = media.downloads.slice(0, 12);
   return media;
 }
@@ -1497,6 +1755,7 @@ async function startServer() {
                 tagline: card.title,
                 story: card.title,
                 shortUrl: card.url,
+                trailerUrl: '',
                 cast: [],
                 servers: [],
                 downloads: [],
@@ -1528,6 +1787,7 @@ async function startServer() {
             tagline: card.title,
             story: card.title,
             shortUrl: card.url,
+            trailerUrl: '',
             cast: [],
             servers: [],
             downloads: [],
@@ -1792,7 +2052,23 @@ async function startServer() {
     }
   });
 
-  // Auto Server Filtering Endpoint (detects 403, Sandboxed embed, 404, X-Frame-Options/CSP blocks)
+  // Automatic Official Trailer Lookup Endpoint
+  app.post('/api/find-trailer', async (req, res) => {
+    try {
+      const { title = '', englishTitle = '', year = '', kind = 'movie' } = req.body as {
+        title?: string;
+        englishTitle?: string;
+        year?: string;
+        kind?: 'movie' | 'series' | 'tv' | 'wrestling';
+      };
+      const trailerUrl = await findYoutubeTrailerFallback(title, englishTitle, year, kind);
+      return res.json({ ok: true, trailerUrl });
+    } catch {
+      return res.json({ ok: false, trailerUrl: '' });
+    }
+  });
+
+  // Auto Server Filtering Endpoint (detects 403, Sandboxed embed, 404, X-Frame-Options/CSP blocks, and website homepages)
   app.post('/api/filter-servers', async (req, res) => {
     try {
       const { urls } = req.body as { urls?: unknown };
@@ -1805,7 +2081,7 @@ async function startServer() {
       interface FilterCheckResult {
         url: string;
         ok: boolean;
-        faultType: '403' | 'sandboxed_embed' | '404' | 'frame_blocked' | 'error' | null;
+        faultType: '403' | 'sandboxed_embed' | '404' | 'frame_blocked' | 'not_video' | 'error' | null;
         httpStatus: number;
         reason: string;
         directStreamUrl?: string | null;
@@ -1845,6 +2121,16 @@ async function startServer() {
           };
         }
 
+        if (isLikelyNonVideoWebsiteUrl(parsed.toString())) {
+          return {
+            url: rawUrl,
+            ok: false,
+            faultType: 'not_video',
+            httpStatus: 200,
+            reason: 'الرابط يفتح صفحة موقع وليس مشغل فيديو',
+          };
+        }
+
         const isDirectMedia = /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(parsed.toString());
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 5500);
@@ -1863,6 +2149,7 @@ async function startServer() {
             },
           });
 
+          const finalUrl = response.url || parsed.toString();
           const httpStatus = response.status;
           const contentType = (response.headers.get('content-type') || '').toLowerCase();
           const xFrame = (response.headers.get('x-frame-options') || '').toLowerCase();
@@ -1879,6 +2166,17 @@ async function startServer() {
             }
           }
 
+          // 0. Detect non-video website homepages / redirects (e.g. larooza.tv/, laroza1.bond/home.24)
+          if (!isDirectMedia && isWebsiteHomepageHtml(finalUrl, snippet)) {
+            return {
+              url: rawUrl,
+              ok: false,
+              faultType: 'not_video',
+              httpStatus,
+              reason: 'الرابط يفتح الصفحة الرئيسية لموقع وليس فيديو',
+            };
+          }
+
           // 1. Detect Sandboxed embed messages explicitly
           const hasSandboxedMsg =
             /sandboxed\s+embed\s+is\s+not\s+allowed|sandboxed\s+embed|please\s+disable\s+sandbox|embedding\s+in\s+sandbox\s+is\s+not\s+allowed/i.test(
@@ -1886,7 +2184,6 @@ async function startServer() {
             );
 
           if (hasSandboxedMsg) {
-            // Try extracting direct MP4 fallback before failing
             const mp4Fallback =
               snippet.match(/<(?:video|source)[^>]+src=["'](https?:\/\/[^"']+\.mp4[^"']*)["']/i)?.[1] ||
               snippet.match(/(?:file|src|video_url|mp4_url)\s*:\s*["'](https?:\/\/[^"']+\.mp4[^"']*)["']/i)?.[1];

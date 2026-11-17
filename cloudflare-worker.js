@@ -28,6 +28,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Expose-Headers': 'X-Final-Url',
 };
 
 export default {
@@ -82,6 +83,7 @@ export default {
         headers: {
           ...CORS_HEADERS,
           'Content-Type': contentType,
+          'X-Final-Url': upstream.url || parsedTarget.toString(),
         },
       });
     } catch (err) {

@@ -1,14 +1,21 @@
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Bookmark,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Film,
   LayoutDashboard,
   Loader2,
   LogOut,
+  Maximize2,
+  Minimize2,
+  MonitorPlay,
   Pause,
   Play,
+  RefreshCw,
+  RotateCw,
   Send,
   Server,
   ShieldCheck,
@@ -20,7 +27,11 @@ import {
   X,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
-import { resolveApiEndpoint } from '../lib/clientScraper';
+import {
+  filterServersInBrowser,
+  isLikelyNonVideoWebsiteUrl,
+  resolveApiEndpoint,
+} from '../lib/clientScraper';
 import {
   getFirebaseAuthErrorMessage,
   registerMemberWithEmailPassword,
@@ -156,28 +167,51 @@ export function TrailerModal({ item, onClose, onWatchFull }: TrailerModalProps) 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="fixed inset-0 bg-black/85 backdrop-blur-md" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-4xl rounded-3xl bg-[#0c1821] border border-white/15 shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between bg-[#1a242e] px-5 py-3.5 border-b border-white/10">
+      <div className="relative z-10 w-full max-w-4xl rounded-3xl bg-[#0c1821] border-2 border-[#D92321]/75 shadow-[0_0_40px_-10px_rgba(217,35,33,0.45)] overflow-hidden">
+        <div className="flex items-center justify-between bg-gradient-to-l from-[#220a0e] via-[#131d27] to-[#220a0e] px-5 py-3.5 border-b border-[#D92321]/35">
           <div className="flex items-center gap-2.5 min-w-0">
-            <span className="rounded-lg bg-[#D92321] px-2.5 py-1 text-[11px] font-extrabold text-white">
-              إعلان رسمي
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-[#D92321] text-white shrink-0">
+              <Film className="w-4 h-4" />
             </span>
-            <h3 className="font-display text-sm sm:text-base font-bold text-white truncate">
-              {item.trailerLabel}
-            </h3>
+            <div className="min-w-0">
+              <span className="text-[10px] font-black tracking-wide text-[#ff7371] block">
+                RAHAL TV TRAILER
+              </span>
+              <h3 className="font-display text-sm sm:text-base font-bold text-white truncate">
+                {item.trailerLabel}
+              </h3>
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white hover:bg-[#D92321] cursor-pointer"
-            aria-label="إغلاق الإعلان"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onWatchFull(item);
+              }}
+              className="hidden sm:inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-3.5 py-2 text-xs font-extrabold text-white cursor-pointer"
+            >
+              <Play className="w-3.5 h-3.5 fill-current" />
+              <span>مشاهدة العمل كامل</span>
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white hover:bg-[#D92321] cursor-pointer"
+              aria-label="إغلاق الإعلان"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
-        {/* Trailer Viewport (Real YouTube/Video or Preview Stage) */}
+        {/* Trailer Viewport Inside Crimson Frame */}
         <div className="relative aspect-video w-full bg-black overflow-hidden">
+          <span className="pointer-events-none absolute top-2 right-2 z-10 h-3 w-3 border-t-2 border-r-2 border-[#D92321]" />
+          <span className="pointer-events-none absolute top-2 left-2 z-10 h-3 w-3 border-t-2 border-l-2 border-[#D92321]" />
+          <span className="pointer-events-none absolute bottom-2 right-2 z-10 h-3 w-3 border-b-2 border-r-2 border-[#D92321]" />
+          <span className="pointer-events-none absolute bottom-2 left-2 z-10 h-3 w-3 border-b-2 border-l-2 border-[#D92321]" />
+
           {parsedTrailer ? (
             parsedTrailer.kind === 'video' ? (
               <video
@@ -225,7 +259,7 @@ export function TrailerModal({ item, onClose, onWatchFull }: TrailerModalProps) 
               <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-4 bg-black/70 px-5 py-3 backdrop-blur-sm">
                 <div className="flex items-center gap-3 text-xs font-bold text-white">
                   <Volume2 className="w-4 h-4 text-[#D92321]" />
-                  <span className="font-latin">
+                  <span className="font-latin tabular-nums">
                     {playing ? '00:48' : '00:00'} / {item.trailerDuration}
                   </span>
                   <div className="hidden sm:block h-1.5 w-44 rounded-full bg-white/20 overflow-hidden">
@@ -268,7 +302,7 @@ interface PlayerModalProps {
 interface ServerFilterEntry {
   url: string;
   ok: boolean;
-  faultType: '403' | 'sandboxed_embed' | '404' | 'frame_blocked' | 'error' | null;
+  faultType: '403' | 'sandboxed_embed' | '404' | 'frame_blocked' | 'not_video' | 'error' | null;
   httpStatus: number;
   reason: string;
   directStreamUrl?: string | null;
@@ -316,6 +350,32 @@ export function PlayerModal({
     message: string;
   } | null>(null);
   const [bypassEpisodeSrc, setBypassEpisodeSrc] = useState(false);
+  const [playerReloadKey, setPlayerReloadKey] = useState(0);
+  const [isTheaterMode, setIsTheaterMode] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const playerBoxRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const onFsChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
+
+  const handleToggleFullscreen = async () => {
+    const el = playerBoxRef.current;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await el.requestFullscreen();
+      }
+    } catch {
+      // Fullscreen may be restricted inside nested preview frames
+    }
+  };
 
   // Reset selections when media item or initial props change
   useEffect(() => {
@@ -324,6 +384,7 @@ export function PlayerModal({
     setFilterMap({});
     setFilterAlert(null);
     setBypassEpisodeSrc(false);
+    setPlayerReloadKey(0);
   }, [item?.id, initialEpisode, initialServerIndex]);
 
   // Helper to mark a server faulty at runtime and auto-switch to next healthy server
@@ -360,12 +421,12 @@ export function PlayerModal({
           setSelectedServer(candidateIdx);
           setFilterAlert({
             kind: 'switched',
-            message: `تنبيه: السيرفر ${faultIdx + 1} به عطل (${reason}) — تم التبديل تلقائياً إلى السيرفر ${candidateIdx + 1}.`,
+            message: `تنبيه: سيرفر ${faultIdx + 1} به عطل (${reason}) — تم التبديل تلقائياً إلى سيرفر ${candidateIdx + 1}.`,
           });
         } else {
           setFilterAlert({
             kind: 'warning',
-            message: `تنبيه: السيرفر ${faultIdx + 1} به عطل (${reason}).`,
+            message: `تنبيه: سيرفر ${faultIdx + 1} به عطل (${reason}).`,
           });
         }
 
@@ -375,7 +436,7 @@ export function PlayerModal({
     [item]
   );
 
-  // Proactive Server Filtering scan on open / episode change
+  // Proactive Server Filtering scan on open / episode change (backend + browser/Worker fallback)
   useEffect(() => {
     if (!item) return;
 
@@ -394,33 +455,48 @@ export function PlayerModal({
 
     (async () => {
       try {
-        const res = await fetch(resolveApiEndpoint('/api/filter-servers'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ urls: allUrls }),
-        });
-        const contentType = res.headers.get('content-type') || '';
-        if (!res.ok || !contentType.includes('application/json')) return;
-        const data = (await res.json()) as { ok?: boolean; results?: ServerFilterEntry[] };
-        if (cancelled || !data.ok || !Array.isArray(data.results)) return;
+        let filterResults: ServerFilterEntry[] | null = null;
+
+        try {
+          const res = await fetch(resolveApiEndpoint('/api/filter-servers'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ urls: allUrls }),
+          });
+          const contentType = res.headers.get('content-type') || '';
+          if (res.ok && contentType.includes('application/json')) {
+            const data = (await res.json()) as { ok?: boolean; results?: ServerFilterEntry[] };
+            if (data.ok && Array.isArray(data.results)) {
+              filterResults = data.results;
+            }
+          }
+        } catch {
+          // Static hosting -> fall through to browser/Worker filter
+        }
+
+        if (!filterResults) {
+          filterResults = await filterServersInBrowser(allUrls);
+        }
+
+        if (cancelled || !filterResults) return;
 
         const nextMap: Record<number, ServerFilterEntry> = {};
         const faultySummaries: string[] = [];
 
         item.servers.forEach((_, idx) => {
-          const entry = data.results?.[idx];
+          const entry = filterResults?.[idx];
           if (entry) {
             nextMap[idx] = entry;
             if (!entry.ok) {
-              faultySummaries.push(`السيرفر ${idx + 1} (${entry.reason})`);
+              faultySummaries.push(`سيرفر ${idx + 1} (${entry.reason})`);
             }
           }
         });
 
         setFilterMap(nextMap);
 
-        // If episode-specific URL failed (403 / Sandboxed embed / 404), bypass it if we have a working server
-        const epResult = epSrc ? data.results[item.servers.length] : null;
+        // If episode-specific URL failed, bypass it if we have a working server
+        const epResult = epSrc ? filterResults[item.servers.length] : null;
         const firstHealthyIdx = item.servers.findIndex((_, idx) => nextMap[idx]?.ok === true);
 
         if (epSrc && epResult && !epResult.ok && firstHealthyIdx !== -1) {
@@ -428,34 +504,34 @@ export function PlayerModal({
           setSelectedServer(firstHealthyIdx);
           setFilterAlert({
             kind: 'switched',
-            message: `تنبيه: رابط الحلقة الأساسي به عطل (${epResult.reason}) — تم التبديل تلقائياً إلى السيرفر ${firstHealthyIdx + 1}.`,
+            message: `تنبيه: رابط الحلقة الأساسي به عطل (${epResult.reason}) — تم التبديل تلقائياً إلى سيرفر ${firstHealthyIdx + 1}.`,
           });
           return;
         }
 
-        // Check active server health and auto-switch on 403 / Sandboxed embed / broken
+        // Check active server health and auto-switch on 403 / Sandboxed embed / non-video homepage / broken
         const activeEntry = nextMap[initialServerIndex];
         if (activeEntry && !activeEntry.ok) {
           if (firstHealthyIdx !== -1 && firstHealthyIdx !== initialServerIndex) {
             setSelectedServer(firstHealthyIdx);
             setFilterAlert({
               kind: 'switched',
-              message: `تنبيه: السيرفر ${initialServerIndex + 1} به عطل (${activeEntry.reason}) — تم التبديل تلقائياً إلى السيرفر ${firstHealthyIdx + 1}.`,
+              message: `تنبيه: سيرفر ${initialServerIndex + 1} به عطل (${activeEntry.reason}) — تم التبديل تلقائياً إلى سيرفر ${firstHealthyIdx + 1}.`,
             });
           } else {
             setFilterAlert({
               kind: 'warning',
-              message: `تنبيه: السيرفر ${initialServerIndex + 1} به عطل (${activeEntry.reason}).`,
+              message: `تنبيه: سيرفر ${initialServerIndex + 1} به عطل (${activeEntry.reason}).`,
             });
           }
         } else if (faultySummaries.length > 0) {
           setFilterAlert({
             kind: 'warning',
-            message: `تنبيه تصفية السيرفرات: تم رصد عطل في ${faultySummaries[0]} وتم تجنبه تلقائياً.`,
+            message: `تنبيه تصفية السيرفرات: تم استبعاد ${faultySummaries[0]} تلقائياً.`,
           });
         }
       } catch {
-        // Silent fallback if filter request cannot complete
+        // Silent fallback
       } finally {
         if (!cancelled) setIsFiltering(false);
       }
@@ -508,6 +584,10 @@ export function PlayerModal({
   const serverSrc =
     activeFilterEntry?.directStreamUrl || extractSafeStreamSrc(activeServer.embedCode, activeServer.url);
   const finalStreamSrc = episodeSpecificSrc || serverSrc;
+  const isBlockedHomepageUrl = Boolean(
+    finalStreamSrc &&
+      (isLikelyNonVideoWebsiteUrl(finalStreamSrc) || activeFilterEntry?.faultType === 'not_video')
+  );
   const isDirectVideoFile = Boolean(finalStreamSrc && /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(finalStreamSrc));
 
   const handleManualServerSelect = (idx: number) => {
@@ -518,48 +598,49 @@ export function PlayerModal({
         setSelectedServer(healthyAlt);
         setFilterAlert({
           kind: 'switched',
-          message: `السيرفر ${idx + 1} معطل حالياً (${entry.reason}) — تم تحويلك تلقائياً إلى السيرفر ${healthyAlt + 1}.`,
+          message: `سيرفر ${idx + 1} معطل حالياً (${entry.reason}) — تم تحويلك تلقائياً إلى سيرفر ${healthyAlt + 1}.`,
         });
         return;
       }
       setFilterAlert({
         kind: 'warning',
-        message: `تنبيه: السيرفر ${idx + 1} مسجل كمعطل (${entry.reason}).`,
+        message: `تنبيه: سيرفر ${idx + 1} غير صالح (${entry.reason}).`,
       });
     }
     setSelectedServer(idx);
   };
 
+  const healthyNextIdx = serversList.findIndex(
+    (_, idx) => idx !== selectedServer && filterMap[idx]?.ok !== false
+  );
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4">
       <div className="fixed inset-0 bg-black/90 backdrop-blur-md" onClick={onClose} />
-      <div className="relative z-10 w-[96vw] max-w-[1320px] rounded-2xl sm:rounded-3xl bg-[#0c1821] border border-white/15 shadow-2xl overflow-hidden max-h-[95vh] flex flex-col">
-        {/* Compact Top Bar */}
-        <div className="flex items-center justify-between gap-3 bg-[#1a242e] px-4 py-2.5 border-b border-white/10">
+      <div className="relative z-10 w-[96vw] max-w-[1340px] rounded-2xl sm:rounded-3xl bg-[#0c1821] border border-[#D92321]/35 shadow-2xl overflow-hidden max-h-[95vh] flex flex-col">
+        {/* Compact Crimson Branded Top Bar */}
+        <div className="flex items-center justify-between gap-3 bg-[#151e27] px-4 py-2.5 border-b border-[#D92321]/30">
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-[#D92321]/15 border border-[#D92321]/40 text-[#D92321] shrink-0">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#D92321] text-white shrink-0 shadow-[0_4px_14px_rgba(217,35,33,0.45)]">
               <Tv className="w-4 h-4" />
-              <span className="absolute -top-1 -right-1 flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#4CAF50] opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-[#4CAF50]" />
-              </span>
             </div>
             <div className="min-w-0">
               <h3 className="font-display text-xs sm:text-sm font-extrabold text-white truncate">
                 {item.title}
                 {item.kind === 'series' ? ` — الحلقة ${String(episodeNum).padStart(2, '0')}` : ''}
               </h3>
-              <p className="text-[11px] text-[#b7c9ef] flex items-center gap-1.5">
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-[#4CAF50]" />
-                <span>سيرفر #{selectedServer + 1}</span>
-                <span className="font-latin rounded bg-white/10 px-1.5 py-0.2 text-[10px] font-black text-[#f9c400]">
-                  {activeQuality}
-                </span>
+              <p className="text-[11px] text-[#b7c9ef] flex items-center gap-1.5 tabular-nums">
+                <span className="font-bold text-[#ff7674]">سيرفر {selectedServer + 1}</span>
+                <span>·</span>
+                <span className="font-latin font-black text-[#f9c400]">{activeQuality}</span>
                 {isFiltering && (
-                  <span className="inline-flex items-center gap-1 text-[10px] text-[#4CAF50] font-bold mr-1">
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                    <span>تصفية السيرفرات...</span>
-                  </span>
+                  <>
+                    <span>·</span>
+                    <span className="inline-flex items-center gap-1 text-[10px] text-[#ff8a88] font-bold">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <span>فحص السيرفرات...</span>
+                    </span>
+                  </>
                 )}
               </p>
             </div>
@@ -568,7 +649,7 @@ export function PlayerModal({
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/10 text-white hover:bg-[#D92321] transition-colors cursor-pointer shrink-0"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#D92321]/15 border border-[#D92321]/40 text-white hover:bg-[#D92321] transition-colors cursor-pointer shrink-0"
             aria-label="إغلاق المشغل"
           >
             <X className="w-4 h-4" />
@@ -599,194 +680,337 @@ export function PlayerModal({
           </div>
         )}
 
-        {/* Main Body: Right Compact Server Rail (in RTL first column = right) + Large Video Viewport */}
+        {/* Main Body: Right Server Rail + Custom Red RahaL TV Video Box */}
         <div className="flex-1 min-h-0 overflow-y-auto p-2.5 sm:p-3.5">
-          <div className="grid grid-cols-1 lg:grid-cols-[152px_minmax(0,1fr)] gap-3 items-start">
-            {/* Right Sidebar: Compact Animated Number + Quality Servers Only */}
-            <aside className="rounded-2xl bg-[#101e29] border border-white/[0.08] p-2.5 space-y-2">
-              <div className="flex items-center justify-between px-1">
-                <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold text-white">
-                  <Server className="w-3.5 h-3.5 text-[#D92321]" />
-                  <span>السيرفرات</span>
-                </span>
-                <span className="font-latin rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-black text-[#f9c400]">
-                  {serversList.length}
-                </span>
-              </div>
+          <div
+            className={`grid grid-cols-1 gap-3 items-start ${
+              isTheaterMode ? 'lg:grid-cols-1' : 'lg:grid-cols-[192px_minmax(0,1fr)]'
+            }`}
+          >
+            {/* Right Sidebar: Strict سيرفر 1, سيرفر 2 ... */}
+            {!isTheaterMode && (
+              <aside className="rounded-2xl bg-[#101923] border border-[#D92321]/25 p-2.5 space-y-2">
+                <div className="flex items-center justify-between px-1">
+                  <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold text-white">
+                    <Server className="w-3.5 h-3.5 text-[#D92321]" />
+                    <span>سيرفرات المشاهدة</span>
+                  </span>
+                  <span className="font-latin tabular-nums rounded bg-[#D92321]/20 border border-[#D92321]/40 px-1.5 py-0.5 text-[10px] font-black text-[#ff8a88]">
+                    {serversList.length}
+                  </span>
+                </div>
 
-              <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-1 gap-1.5 lg:max-h-[580px] lg:overflow-y-auto">
-                {serversList.map((srv, idx) => {
-                  const isActive = selectedServer === idx;
-                  const srvFilter = filterMap[idx];
-                  const isBroken = Boolean(srvFilter && !srvFilter.ok);
-                  const isVerifiedOk = Boolean(srvFilter && srvFilter.ok);
-                  const qualityLabel = cleanQualityIdentifier(srv.quality, item.quality);
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-1 gap-1.5 lg:max-h-[580px] lg:overflow-y-auto">
+                  {serversList.map((srv, idx) => {
+                    const isActive = selectedServer === idx;
+                    const srvFilter = filterMap[idx];
+                    const isBroken = Boolean(srvFilter && !srvFilter.ok);
+                    const isVerifiedOk = Boolean(srvFilter && srvFilter.ok);
+                    const qualityLabel = cleanQualityIdentifier(srv.quality, item.quality);
 
-                  return (
-                    <button
-                      key={srv.id || idx}
-                      type="button"
-                      onClick={() => handleManualServerSelect(idx)}
-                      title={
-                        isBroken
-                          ? `عطل في السيرفر ${idx + 1}: ${srvFilter?.reason}`
-                          : `سيرفر ${idx + 1} (${qualityLabel})`
-                      }
-                      style={{ animationDelay: `${idx * 35}ms` }}
-                      className={`moov-server-card moov-server-enter group flex items-center justify-between gap-1.5 rounded-xl border px-2.5 py-2 transition-all duration-300 cursor-pointer ${
-                        isActive
-                          ? 'moov-server-card-active bg-gradient-to-l from-[#D92321] via-[#b81b1a] to-[#7c1318] border-[#ff5a58]/70 text-white shadow-[0_8px_20px_-6px_rgba(217,35,33,0.65)]'
-                          : isBroken
-                            ? 'bg-[#D92321]/10 border-[#D92321]/35 text-[#ff9d9b] opacity-75 hover:opacity-100'
-                            : 'bg-[#1a242e]/90 border-white/[0.08] text-white hover:border-[#D92321]/60 hover:bg-[#1e2c38]'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span
-                          className={`font-latin flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-xs font-black ${
-                            isActive
-                              ? 'bg-black/35 text-[#f9c400]'
-                              : isBroken
-                                ? 'bg-[#D92321]/25 text-[#ff8a88]'
-                                : 'bg-[#0c1821] text-white border border-white/10 group-hover:border-[#D92321]/50'
-                          }`}
-                        >
-                          {idx + 1}
-                        </span>
-
-                        {isActive ? (
-                          <span className="flex items-end gap-[2px] h-3" aria-hidden="true">
-                            <span className="moov-eq-bar-1 w-[2.5px] h-full rounded-full bg-[#f9c400]" />
-                            <span className="moov-eq-bar-2 w-[2.5px] h-full rounded-full bg-white" />
-                            <span className="moov-eq-bar-3 w-[2.5px] h-full rounded-full bg-[#4CAF50]" />
-                          </span>
-                        ) : isBroken ? (
-                          <AlertTriangle className="w-3 h-3 text-[#f9c400] shrink-0" />
-                        ) : isVerifiedOk ? (
-                          <span className="h-1.5 w-1.5 rounded-full bg-[#4CAF50] shrink-0" />
-                        ) : null}
-                      </div>
-
-                      <span
-                        className={`font-latin shrink-0 rounded px-1.5 py-0.5 text-[10px] font-black ${
+                    return (
+                      <button
+                        key={srv.id || idx}
+                        type="button"
+                        onClick={() => handleManualServerSelect(idx)}
+                        title={
+                          isBroken
+                            ? `عطل في سيرفر ${idx + 1}: ${srvFilter?.reason}`
+                            : `سيرفر ${idx + 1} (${qualityLabel})`
+                        }
+                        style={{ animationDelay: `${idx * 35}ms` }}
+                        className={`moov-server-card moov-server-enter group flex items-center justify-between gap-1.5 rounded-xl border px-2.5 py-2 transition-all duration-300 cursor-pointer ${
                           isActive
-                            ? 'bg-black/30 text-[#f9c400]'
-                            : 'bg-[#0c1821] text-[#b7c9ef] border border-white/10'
+                            ? 'moov-server-card-active bg-gradient-to-l from-[#D92321] via-[#b81b1a] to-[#7c1318] border-[#ff5a58]/80 text-white shadow-[0_8px_20px_-6px_rgba(217,35,33,0.65)]'
+                            : isBroken
+                              ? 'bg-[#D92321]/10 border-[#D92321]/35 text-[#ff9d9b] opacity-75 hover:opacity-100'
+                              : 'bg-[#17212c] border-white/[0.08] text-white hover:border-[#D92321]/70 hover:bg-[#1d2734]'
                         }`}
                       >
-                        {qualityLabel}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </aside>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span
+                            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${
+                              isActive
+                                ? 'bg-black/35 text-[#f9c400]'
+                                : isBroken
+                                  ? 'bg-[#D92321]/25 text-[#ff8a88]'
+                                  : 'bg-[#D92321]/15 text-[#D92321] group-hover:bg-[#D92321] group-hover:text-white'
+                            }`}
+                          >
+                            <Play className="w-2.5 h-2.5 fill-current" />
+                          </span>
 
-            {/* Main Left Area: Large Video Viewport + Series Episodes */}
+                          <span className="text-xs font-extrabold truncate tabular-nums">
+                            سيرفر {idx + 1}
+                          </span>
+
+                          {isBroken ? (
+                            <AlertTriangle className="w-3 h-3 text-[#f9c400] shrink-0" />
+                          ) : isVerifiedOk && !isActive ? (
+                            <CheckCircle2 className="w-3 h-3 text-[#4CAF50] shrink-0" />
+                          ) : null}
+                        </div>
+
+                        <span
+                          className={`font-latin shrink-0 rounded px-1.5 py-0.5 text-[10px] font-black ${
+                            isActive
+                              ? 'bg-black/35 text-[#f9c400]'
+                              : 'bg-[#0c1821] text-[#b7c9ef] border border-white/10'
+                          }`}
+                        >
+                          {qualityLabel}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </aside>
+            )}
+
+            {/* Main Area: Custom Red RahaL TV Video Box + Series Episodes */}
             <div className="min-w-0 space-y-3">
-              <div className="relative aspect-video w-full rounded-2xl bg-black border border-white/10 overflow-hidden shadow-2xl">
-                {finalStreamSrc ? (
-                  isDirectVideoFile ? (
-                    <video
-                      key={finalStreamSrc}
-                      src={finalStreamSrc}
-                      controls
-                      autoPlay
-                      playsInline
-                      onError={() => handleServerFaultFailover(selectedServer, 'تعذر تحميل ملف الفيديو')}
-                      className="h-full w-full bg-black"
-                    />
-                  ) : (
-                    <iframe
-                      key={finalStreamSrc}
-                      src={finalStreamSrc}
-                      title={`${item.title} - ${selectedServer + 1}`}
-                      allowFullScreen
-                      referrerPolicy="no-referrer"
-                      onError={() => handleServerFaultFailover(selectedServer, 'تعذر تحميل المشغل المدمج')}
-                      allow="autoplay; fullscreen; encrypted-media; picture-in-picture; accelerometer; gyroscope"
-                      className="h-full w-full border-0 bg-black"
-                    />
-                  )
-                ) : (
-                  <>
-                    <img
-                      src={item.backdrop || item.poster}
-                      alt={item.title}
-                      className={`h-full w-full object-cover opacity-80 transition-transform duration-[8000ms] ${
-                        isPlaying ? 'scale-105' : 'scale-100'
-                      }`}
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black via-black/25 to-black/40" />
-
-                    {/* Top Quality Watermark */}
-                    <div className="absolute top-4 left-4 flex items-center gap-2">
-                      <span className="font-latin rounded-lg bg-[#D92321] px-2.5 py-1 text-[11px] font-black text-white">
+              {/* Custom Branded Crimson Video Frame */}
+              <div
+                ref={playerBoxRef}
+                className="rounded-2xl bg-[#070d14] border-2 border-[#D92321]/80 shadow-[0_0_40px_-10px_rgba(217,35,33,0.45)] overflow-hidden"
+              >
+                {/* Crimson Video Box Top Header */}
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-gradient-to-l from-[#240a0e] via-[#131b24] to-[#240a0e] px-3.5 py-2 border-b border-[#D92321]/40">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#D92321] text-white shadow-[0_2px_10px_rgba(217,35,33,0.55)] shrink-0">
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                    </span>
+                    <div className="flex items-center gap-2 text-xs min-w-0">
+                      <span className="font-latin font-black tracking-wide text-white">
+                        RahaL <span className="text-[#D92321]">TV</span>
+                      </span>
+                      <span className="text-white/25">·</span>
+                      <span className="font-extrabold text-[#ff8a88] tabular-nums">
+                        سيرفر {selectedServer + 1}
+                      </span>
+                      <span className="hidden sm:inline text-white/25">·</span>
+                      <span className="hidden sm:inline font-latin font-black text-[#f9c400]">
                         {activeQuality}
                       </span>
                     </div>
+                  </div>
 
-                    {/* Center Play Button */}
-                    <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4">
-                      <button
-                        type="button"
-                        onClick={() => setIsPlaying((p) => !p)}
-                        className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-[#D92321] text-white shadow-[0_0_32px_rgba(217,35,33,0.7)] hover:scale-105 transition-transform cursor-pointer"
-                        aria-label={isPlaying ? 'إيقاف التشغيل' : 'استئناف التشغيل'}
-                      >
-                        {isPlaying ? <Pause className="w-7 h-7" /> : <Play className="w-7 h-7 fill-current" />}
-                      </button>
+                  {/* Red-Accented Interactive Box Controls */}
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={selectedServer <= 0}
+                      onClick={() => handleManualServerSelect(Math.max(0, selectedServer - 1))}
+                      title="السيرفر السابق"
+                      aria-label="السيرفر السابق"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#D92321]/15 border border-[#D92321]/35 text-[#ff8a88] hover:bg-[#D92321] hover:text-white disabled:opacity-35 transition-colors cursor-pointer"
+                    >
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
 
-                      {subtitleLang !== 'off' && (
-                        <div className="mt-8 rounded-lg bg-black/75 px-4 py-1.5 text-sm font-bold text-white border border-white/10">
-                          {subtitleLang === 'ar'
-                            ? 'ترجمة عربية احترافية متزامنة — جاري البث على سيرفر RahaL TV'
-                            : 'English Subtitles Active — Streaming via RahaL TV CDN'}
-                        </div>
+                    <button
+                      type="button"
+                      disabled={selectedServer >= serversList.length - 1}
+                      onClick={() =>
+                        handleManualServerSelect(Math.min(serversList.length - 1, selectedServer + 1))
+                      }
+                      title="السيرفر التالي"
+                      aria-label="السيرفر التالي"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#D92321]/15 border border-[#D92321]/35 text-[#ff8a88] hover:bg-[#D92321] hover:text-white disabled:opacity-35 transition-colors cursor-pointer"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setPlayerReloadKey((k) => k + 1)}
+                      title="إعادة تحميل المشغل"
+                      aria-label="إعادة تحميل المشغل"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#D92321]/15 border border-[#D92321]/35 text-[#ff8a88] hover:bg-[#D92321] hover:text-white transition-colors cursor-pointer"
+                    >
+                      <RotateCw className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsTheaterMode((t) => !t)}
+                      title={isTheaterMode ? 'إظهار قائمة السيرفرات' : 'وضع العرض الكامل (السينمائي)'}
+                      aria-label={isTheaterMode ? 'إظهار قائمة السيرفرات' : 'وضع السينما'}
+                      className={`hidden lg:inline-flex h-7 items-center gap-1 rounded-lg border px-2 text-[11px] font-bold transition-colors cursor-pointer ${
+                        isTheaterMode
+                          ? 'bg-[#D92321] border-[#D92321] text-white'
+                          : 'bg-[#D92321]/15 border-[#D92321]/35 text-[#ff8a88] hover:bg-[#D92321] hover:text-white'
+                      }`}
+                    >
+                      <MonitorPlay className="w-3.5 h-3.5" />
+                      <span>{isTheaterMode ? 'السيرفرات' : 'تكبير'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void handleToggleFullscreen()}
+                      title="ملء الشاشة"
+                      aria-label="ملء الشاشة"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#D92321] text-white hover:bg-[#dc0e30] transition-colors cursor-pointer"
+                    >
+                      {isFullscreen ? (
+                        <Minimize2 className="w-3.5 h-3.5" />
+                      ) : (
+                        <Maximize2 className="w-3.5 h-3.5" />
                       )}
-                    </div>
+                    </button>
+                  </div>
+                </div>
 
-                    {/* Bottom Controls */}
-                    <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-center justify-between gap-3 bg-black/80 px-4 py-3 backdrop-blur-sm">
-                      <div className="flex items-center gap-3 text-xs font-bold text-white">
+                {/* Inner Video Stage with Crisp Crimson Corner Framing */}
+                <div className="relative aspect-video w-full bg-black overflow-hidden">
+                  <span className="pointer-events-none absolute top-2 right-2 z-10 h-3.5 w-3.5 border-t-2 border-r-2 border-[#D92321]" />
+                  <span className="pointer-events-none absolute top-2 left-2 z-10 h-3.5 w-3.5 border-t-2 border-l-2 border-[#D92321]" />
+                  <span className="pointer-events-none absolute bottom-2 right-2 z-10 h-3.5 w-3.5 border-b-2 border-r-2 border-[#D92321]" />
+                  <span className="pointer-events-none absolute bottom-2 left-2 z-10 h-3.5 w-3.5 border-b-2 border-l-2 border-[#D92321]" />
+
+                  {isBlockedHomepageUrl ? (
+                    <div className="h-full w-full flex flex-col items-center justify-center p-6 text-center bg-[#090d14] space-y-3">
+                      <div className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-[#D92321]/20 border border-[#D92321]/50 text-[#D92321]">
+                        <AlertTriangle className="w-7 h-7" />
+                      </div>
+                      <h4 className="font-display text-base font-extrabold text-white">
+                        تم حظر هذا الرابط تلقائياً داخل المشغل
+                      </h4>
+                      <p className="max-w-md text-xs text-[#b7c9ef] leading-relaxed">
+                        اكتشف نظام الحماية أن سيرفر {selectedServer + 1} يفتح صفحة موقع خارجي وليس ملف فيديو فعلي.
+                      </p>
+                      {healthyNextIdx !== -1 && (
                         <button
                           type="button"
-                          onClick={() => setIsPlaying((p) => !p)}
-                          className="hover:text-[#D92321] cursor-pointer"
+                          onClick={() => handleManualServerSelect(healthyNextIdx)}
+                          className="inline-flex items-center gap-2 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-5 py-2.5 text-xs font-extrabold text-white cursor-pointer"
                         >
-                          {isPlaying ? 'إيقاف' : 'تشغيل'}
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>الانتقال إلى سيرفر {healthyNextIdx + 1}</span>
                         </button>
-                        <span className="font-latin text-[#b7c9ef]">
-                          {isPlaying ? '14:22' : '00:00'} / {item.duration}
+                      )}
+                    </div>
+                  ) : finalStreamSrc ? (
+                    isDirectVideoFile ? (
+                      <video
+                        key={`${finalStreamSrc}-${playerReloadKey}`}
+                        src={finalStreamSrc}
+                        controls
+                        autoPlay
+                        playsInline
+                        onError={() => handleServerFaultFailover(selectedServer, 'تعذر تحميل ملف الفيديو')}
+                        className="h-full w-full bg-black"
+                      />
+                    ) : (
+                      <iframe
+                        key={`${finalStreamSrc}-${playerReloadKey}`}
+                        src={finalStreamSrc}
+                        title={`${item.title} - سيرفر ${selectedServer + 1}`}
+                        allowFullScreen
+                        referrerPolicy="no-referrer"
+                        onError={() => handleServerFaultFailover(selectedServer, 'تعذر تحميل المشغل المدمج')}
+                        allow="autoplay; fullscreen; encrypted-media; picture-in-picture; accelerometer; gyroscope"
+                        className="h-full w-full border-0 bg-black"
+                      />
+                    )
+                  ) : (
+                    <>
+                      <img
+                        src={item.backdrop || item.poster}
+                        alt={item.title}
+                        className={`h-full w-full object-cover opacity-80 transition-transform duration-[8000ms] ${
+                          isPlaying ? 'scale-105' : 'scale-100'
+                        }`}
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black via-black/25 to-black/40" />
+
+                      <div className="absolute top-4 left-4 flex items-center gap-2">
+                        <span className="font-latin rounded-lg bg-[#D92321] px-2.5 py-1 text-[11px] font-black text-white">
+                          {activeQuality}
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className="text-[#b7c9ef]">الترجمة:</span>
-                        {(
-                          [
-                            { id: 'ar', label: 'العربية' },
-                            { id: 'en', label: 'English' },
-                            { id: 'off', label: 'إيقاف' },
-                          ] as const
-                        ).map((sub) => (
-                          <button
-                            key={sub.id}
-                            type="button"
-                            onClick={() => setSubtitleLang(sub.id)}
-                            className={`rounded-lg px-2.5 py-1 font-bold cursor-pointer ${
-                              subtitleLang === sub.id
-                                ? 'bg-[#D92321] text-white'
-                                : 'bg-white/10 text-[#b7c9ef] hover:text-white'
-                            }`}
-                          >
-                            {sub.label}
-                          </button>
-                        ))}
+                      <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4">
+                        <button
+                          type="button"
+                          onClick={() => setIsPlaying((p) => !p)}
+                          className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-[#D92321] text-white shadow-[0_0_32px_rgba(217,35,33,0.7)] hover:scale-105 transition-transform cursor-pointer"
+                          aria-label={isPlaying ? 'إيقاف التشغيل' : 'استئناف التشغيل'}
+                        >
+                          {isPlaying ? <Pause className="w-7 h-7" /> : <Play className="w-7 h-7 fill-current" />}
+                        </button>
+
+                        {subtitleLang !== 'off' && (
+                          <div className="mt-8 rounded-lg bg-black/75 px-4 py-1.5 text-sm font-bold text-white border border-[#D92321]/30">
+                            {subtitleLang === 'ar'
+                              ? 'ترجمة عربية احترافية متزامنة — جاري البث على سيرفر RahaL TV'
+                              : 'English Subtitles Active — Streaming via RahaL TV CDN'}
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  </>
-                )}
+
+                      <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-center justify-between gap-3 bg-black/80 px-4 py-3 backdrop-blur-sm">
+                        <div className="flex items-center gap-3 text-xs font-bold text-white">
+                          <button
+                            type="button"
+                            onClick={() => setIsPlaying((p) => !p)}
+                            className="hover:text-[#D92321] cursor-pointer"
+                          >
+                            {isPlaying ? 'إيقاف' : 'تشغيل'}
+                          </button>
+                          <span className="font-latin text-[#b7c9ef] tabular-nums">
+                            {isPlaying ? '14:22' : '00:00'} / {item.duration}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="text-[#b7c9ef]">الترجمة:</span>
+                          {(
+                            [
+                              { id: 'ar', label: 'العربية' },
+                              { id: 'en', label: 'English' },
+                              { id: 'off', label: 'إيقاف' },
+                            ] as const
+                          ).map((sub) => (
+                            <button
+                              key={sub.id}
+                              type="button"
+                              onClick={() => setSubtitleLang(sub.id)}
+                              className={`rounded-lg px-2.5 py-1 font-bold cursor-pointer ${
+                                subtitleLang === sub.id
+                                  ? 'bg-[#D92321] text-white'
+                                  : 'bg-white/10 text-[#b7c9ef] hover:text-white'
+                              }`}
+                            >
+                              {sub.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Crimson Video Box Footer Bar */}
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-[#0c121a] px-3.5 py-2 border-t border-[#D92321]/30 text-[11px]">
+                  <div className="flex items-center gap-2 text-[#b7c9ef]">
+                    <ShieldCheck className="w-3.5 h-3.5 text-[#D92321] shrink-0" />
+                    <span>مشغل RahaL TV المحمي — إذا لم يعمل الفيديو اضغط على السيرفر التالي</span>
+                  </div>
+                  {serversList.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleManualServerSelect((selectedServer + 1) % serversList.length)
+                      }
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-[#D92321] hover:bg-[#dc0e30] px-3 py-1 text-[11px] font-extrabold text-white cursor-pointer"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      <span>السيرفر التالي</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Series Episodes Switcher */}

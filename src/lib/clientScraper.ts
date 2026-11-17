@@ -25,6 +25,7 @@ export interface ScrapedPayload {
   tagline: string;
   story: string;
   shortUrl: string;
+  trailerUrl: string;
   cast: CastMember[];
   servers: StreamServer[];
   downloads: DownloadMirror[];
@@ -94,6 +95,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Expose-Headers': 'X-Final-Url',
 };
 
 export default {
@@ -148,6 +150,7 @@ export default {
         headers: {
           ...CORS_HEADERS,
           'Content-Type': contentType,
+          'X-Final-Url': upstream.url || parsedTarget.toString(),
         },
       });
     } catch (err) {
@@ -224,6 +227,100 @@ function decodeBase64Safe(val: string): string {
   return trimmed;
 }
 
+function isYoutubeUrlBrowser(rawUrl: string): boolean {
+  return /(?:youtube\.com\/(?:watch|embed|shorts|v\/)|youtube-nocookie\.com\/embed\/|youtu\.be\/)/i.test(
+    rawUrl
+  );
+}
+
+function normalizeTrailerUrlBrowser(rawUrl: string | undefined | null): string {
+  if (!rawUrl) return '';
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return '';
+  const resolved = trimmed.startsWith('//') ? `https:${trimmed}` : trimmed;
+  if (!/^https?:\/\//i.test(resolved)) return '';
+  const ytMatch = resolved.match(
+    /(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/|v\/|shorts\/)|youtube-nocookie\.com\/embed\/|youtu\.be\/)([A-Za-z0-9_-]{11})/i
+  );
+  if (ytMatch?.[1]) {
+    return `https://www.youtube.com/watch?v=${ytMatch[1]}`;
+  }
+  if (/\.(mp4|webm|ogg)(\?|$)/i.test(resolved) || /vimeo\.com|dailymotion\.com/i.test(resolved)) {
+    return resolved;
+  }
+  return '';
+}
+
+const IGNORED_EMBED_HOSTS_BROWSER_REGEX =
+  /googlesyndication|doubleclick|googletagmanager|facebook\.com\/plugins|recaptcha|cloudflare|ads|histats|yandex|analytics|disqus\.com|gravatar\.com|addtoany|sharethis|twitter\.com\/widgets|instagram\.com\/embed/i;
+
+export function isLikelyNonVideoWebsiteUrl(rawUrl: string, sourceOrigin?: string): boolean {
+  if (!rawUrl) return true;
+  if (IGNORED_EMBED_HOSTS_BROWSER_REGEX.test(rawUrl)) return true;
+  let u: URL;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    return true;
+  }
+  if (!['http:', 'https:'].includes(u.protocol) || isBlockedHost(u.hostname)) return true;
+
+  const p = u.pathname.toLowerCase();
+  const search = u.search.toLowerCase();
+  const hasVideoQueryParam = /[?&](?:v|vid|id|embed|file|stream|play|hash|key|token)=/i.test(search);
+
+  if ((p === '' || p === '/') && !hasVideoQueryParam) {
+    return true;
+  }
+
+  if (
+    !hasVideoQueryParam &&
+    (/^\/(?:home(?:\.[a-z0-9]+)?|index(?:\.[a-z0-9]+)?|main|start)\/?$/i.test(p) ||
+      /^\/(?:movies|series|shows|episodes|seasons|recent|trends|latest|popular|ramadan|wrestling|tv-channels|actors|collections|requests|news)\/?$/i.test(
+        p
+      ) ||
+      /^\/(?:category|categories|genre|genres|tag|tags|actor|search|login|register|signup|account|profile|contact|about|privacy|terms|dmca|faq)(?:\/|$)/i.test(
+        p
+      ))
+  ) {
+    return true;
+  }
+
+  if (
+    sourceOrigin &&
+    u.origin === sourceOrigin &&
+    !/(?:embed|player|play\.php|jwplayer|videojs)/i.test(p + search) &&
+    !/\.(mp4|m3u8|webm|ogg)(\?|$)/i.test(p)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function hasRealVideoPlayerMarkupBrowser(snippet: string): boolean {
+  if (!snippet) return false;
+  return /<video\b|<source\b[^>]+src=|\.mp4\b|\.m3u8\b|jwplayer\s*\(|videojs\s*\(|new\s+Plyr\b|Hls\.isSupported|Clappr\.Player|Artplayer|DPlayer|sources\s*:\s*\[/i.test(
+    snippet
+  );
+}
+
+function isWebsiteHomepageHtmlBrowser(finalUrl: string, snippet: string): boolean {
+  if (finalUrl && isLikelyNonVideoWebsiteUrl(finalUrl)) return true;
+  if (!snippet || hasRealVideoPlayerMarkupBrowser(snippet)) return false;
+
+  return (
+    /<title>[^<]*(?:الصفحة\s*الرئيسية|الرئيسية\s*[-|–]|لاروزا|Larooza|موقع\s*فيديو|ماي\s*سيما|اكوام|أكوام|أفلام\s*و?مسلسلات)[^<]*<\/title>/i.test(
+      snippet
+    ) ||
+    /الصفحة\s*الرئيسية/i.test(snippet) ||
+    (/<nav\b/i.test(snippet) &&
+      /(?:أضيف\s*حديث[اًا]|اضيف\s*حديث[اًا]|مسلسلات\s*رمضان|برامج\s*تلفزيونية)/i.test(snippet)) ||
+    (/placeholder=["'][^"']*(?:ابحث|بحث|search)[^"']*["']/i.test(snippet) &&
+      /(?:مسلسلات|أفلام|افلام)/i.test(snippet))
+  );
+}
+
 interface SubpageHints {
   watchSubpageUrl?: string;
   downloadSubpageUrl?: string;
@@ -241,6 +338,7 @@ function parseHtmlToMediaWithHintsBrowser(
   let jsonLdTitle = '';
   let jsonLdDesc = '';
   let jsonLdImage = '';
+  let jsonLdTrailer = '';
   let jsonLdImdb = 0;
   let jsonLdType = '';
   const jsonLdCast: CastMember[] = [];
@@ -262,6 +360,14 @@ function parseHtmlToMediaWithHintsBrowser(
                 : Array.isArray(obj.image)
                   ? String(obj.image[0] || '')
                   : String(obj.image?.url || '');
+          }
+          if (obj.trailer && !jsonLdTrailer) {
+            const rawTr =
+              typeof obj.trailer === 'string'
+                ? obj.trailer
+                : String(obj.trailer?.embedUrl || obj.trailer?.url || obj.trailer?.contentUrl || '');
+            const normTr = normalizeTrailerUrlBrowser(rawTr);
+            if (normTr) jsonLdTrailer = normTr;
           }
           if (obj.aggregateRating?.ratingValue) {
             const val = parseFloat(String(obj.aggregateRating.ratingValue));
@@ -469,27 +575,58 @@ function parseHtmlToMediaWithHintsBrowser(
     genres.push('دراما', 'إثارة');
   }
 
+  let sourceOrigin = '';
+  try {
+    if (sourceUrl) sourceOrigin = new URL(sourceUrl).origin;
+  } catch {
+    // ignore
+  }
+
+  // 5b. Trailer extraction
+  let trailerUrl = jsonLdTrailer || '';
+  const trySetTrailer = (rawCandidate: string | undefined | null) => {
+    if (trailerUrl || !rawCandidate) return;
+    const resolved = resolveUrl(sourceUrl, rawCandidate) || rawCandidate.trim();
+    const norm = normalizeTrailerUrlBrowser(resolved);
+    if (norm) trailerUrl = norm;
+  };
+
+  doc
+    .querySelectorAll(
+      '[data-trailer], [data-youtube], .trailer iframe, #trailer iframe, .trailer a, #trailer a, a[href*="youtube.com/watch"], a[href*="youtu.be/"], iframe[src*="youtube.com"], iframe[src*="youtube-nocookie.com"], iframe[data-src*="youtube"]'
+    )
+    .forEach((el) => {
+      if (trailerUrl) return;
+      trySetTrailer(el.getAttribute('data-trailer'));
+      trySetTrailer(el.getAttribute('data-youtube'));
+      trySetTrailer(el.getAttribute('href'));
+      trySetTrailer(el.getAttribute('src'));
+      trySetTrailer(el.getAttribute('data-src'));
+    });
+
+  if (!trailerUrl && allScriptsText) {
+    const ytScriptMatch = allScriptsText.match(
+      /https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?v=|embed\/)|youtube-nocookie\.com\/embed\/|youtu\.be\/)[A-Za-z0-9_-]{11}/i
+    );
+    if (ytScriptMatch?.[0]) trySetTrailer(ytScriptMatch[0]);
+  }
+
   // 6. Watch Servers
   const serversMap = new Map<string, StreamServer>();
-  const ignoredEmbeds =
-    /googlesyndication|doubleclick|googletagmanager|facebook\.com\/plugins|recaptcha|cloudflare|ads|histats|yandex|analytics/i;
 
-  const pushEmbedServer = (rawCandidate: string, preferredName?: string) => {
+  const pushEmbedServer = (rawCandidate: string, _preferredName?: string) => {
     const src = resolveUrl(sourceUrl, rawCandidate);
-    if (!src || ignoredEmbeds.test(src) || serversMap.has(src)) return;
-    try {
-      const parsed = new URL(src);
-      if (parsed.hostname === 'example.com' || isBlockedHost(parsed.hostname)) return;
-    } catch {
+    if (!src) return;
+    if (isYoutubeUrlBrowser(src)) {
+      trySetTrailer(src);
       return;
     }
+    if (serversMap.has(src) || isLikelyNonVideoWebsiteUrl(src, sourceOrigin)) return;
 
-    const numLabel = `سيرفر ${serversMap.size + 1}`;
+    const seqNum = serversMap.size + 1;
     serversMap.set(src, {
-      id: `srv-ext-${serversMap.size + 1}`,
-      name: preferredName
-        ? preferredName.replace(/مستورد|embed/gi, '').trim().slice(0, 40) || numLabel
-        : numLabel,
+      id: `srv-ext-${seqNum}`,
+      name: `سيرفر ${seqNum}`,
       mode: 'embed',
       url: src,
       embedCode: `<iframe src="${src}" frameborder="0" allowfullscreen></iframe>`,
@@ -500,6 +637,7 @@ function parseHtmlToMediaWithHintsBrowser(
   };
 
   doc.querySelectorAll('iframe').forEach((el) => {
+    if (el.closest('header, nav, footer, .ads, .banner, .trailer, #trailer')) return;
     const rawSrc =
       el.getAttribute('src') ||
       el.getAttribute('data-src') ||
@@ -514,6 +652,7 @@ function parseHtmlToMediaWithHintsBrowser(
     )
     .forEach((el) => {
       if (el.tagName.toLowerCase() === 'img') return;
+      if (el.closest('header, nav, footer, .ads, .banner, .trailer, #trailer')) return;
       const attrVal =
         el.getAttribute('data-embed') ||
         el.getAttribute('data-iframe') ||
@@ -572,7 +711,7 @@ function parseHtmlToMediaWithHintsBrowser(
       const decoded = decodeBase64Safe(b64Match[1]);
       if (/<script/i.test(decoded)) continue;
       const srcInDecoded = decoded.match(/src=["'](https?:\/\/[^"'\s<>]+)["']/i)?.[1] || decoded;
-      if (/^https?:\/\//i.test(srcInDecoded) && !ignoredEmbeds.test(srcInDecoded)) {
+      if (/^https?:\/\//i.test(srcInDecoded) && !IGNORED_EMBED_HOSTS_BROWSER_REGEX.test(srcInDecoded)) {
         pushEmbedServer(srcInDecoded);
       }
     }
@@ -585,7 +724,7 @@ function parseHtmlToMediaWithHintsBrowser(
       let uMatch: RegExpExecArray | null;
       let arrIdx = 0;
       while ((uMatch = urlRegex.exec(arrMatch[1])) !== null) {
-        if (!ignoredEmbeds.test(uMatch[0])) {
+        if (!IGNORED_EMBED_HOSTS_BROWSER_REGEX.test(uMatch[0])) {
           const label = serverButtonLabels[arrIdx] || undefined;
           pushEmbedServer(uMatch[0], label);
           arrIdx++;
@@ -594,12 +733,13 @@ function parseHtmlToMediaWithHintsBrowser(
     }
   });
 
-  doc.querySelectorAll('video source, video').forEach((el, idx) => {
+  doc.querySelectorAll('video source, video').forEach((el) => {
     const src = resolveUrl(sourceUrl, el.getAttribute('src'));
-    if (!src || serversMap.has(src)) return;
+    if (!src || serversMap.has(src) || isLikelyNonVideoWebsiteUrl(src, sourceOrigin)) return;
+    const seqNum = serversMap.size + 1;
     serversMap.set(src, {
-      id: `srv-vid-${idx + 1}`,
-      name: `مشغل مباشر MP4 #${idx + 1}`,
+      id: `srv-vid-${seqNum}`,
+      name: `سيرفر ${seqNum}`,
       mode: 'url',
       url: src,
       embedCode: '',
@@ -612,12 +752,6 @@ function parseHtmlToMediaWithHintsBrowser(
   // 7. Downloads & Subpage Hints
   const downloadsMap = new Map<string, DownloadMirror>();
   const hints: SubpageHints = {};
-  let sourceOrigin = '';
-  try {
-    sourceOrigin = new URL(sourceUrl).origin;
-  } catch {
-    // ignore
-  }
 
   const ignoredDownloadHosts =
     /facebook\.com|twitter\.com|x\.com|t\.me|telegram|whatsapp|instagram|youtube\.com|tiktok\.com|pinterest|linkedin|plus\.google\.com|google\.com\/search|sharer\.php|\/share\?/i;
@@ -754,6 +888,14 @@ function parseHtmlToMediaWithHintsBrowser(
       });
   }
 
+  const normalizedServers = Array.from(serversMap.values())
+    .slice(0, 12)
+    .map((srv, idx) => ({
+      ...srv,
+      id: srv.id || `srv-ext-${idx + 1}`,
+      name: `سيرفر ${idx + 1}`,
+    }));
+
   return {
     media: {
       title,
@@ -773,8 +915,9 @@ function parseHtmlToMediaWithHintsBrowser(
       tagline: story.slice(0, 140),
       story,
       shortUrl: sourceUrl || '',
+      trailerUrl,
       cast: jsonLdCast,
-      servers: Array.from(serversMap.values()).slice(0, 12),
+      servers: normalizedServers,
       downloads: Array.from(downloadsMap.values()).slice(0, 12),
       seasons:
         kind === 'series' && episodes.length > 0
@@ -947,7 +1090,7 @@ function isChallengeOrErrorHtml(text: string): boolean {
 async function fetchViaBrowserOrCorsRelay(
   targetUrl: string,
   timeoutMs = 11000
-): Promise<{ ok: boolean; status: number; text: string }> {
+): Promise<{ ok: boolean; status: number; text: string; finalUrl?: string }> {
   const customBase = getCustomApiBaseUrl();
   if (customBase) {
     try {
@@ -955,8 +1098,9 @@ async function fetchViaBrowserOrCorsRelay(
       const res = await fetchWithTimeout(workerUrl, timeoutMs);
       if (res.ok) {
         const text = await res.text();
+        const finalUrl = res.headers.get('X-Final-Url') || targetUrl;
         if (!isChallengeOrErrorHtml(text)) {
-          return { ok: true, status: res.status, text };
+          return { ok: true, status: res.status, text, finalUrl };
         }
       }
     } catch {
@@ -1252,6 +1396,192 @@ async function trySitemapDiscoveryBrowser(origin: string, maxItems: number): Pro
   return discovered.slice(0, maxItems);
 }
 
+export async function findTrailerInBrowser(params: {
+  title?: string;
+  englishTitle?: string;
+  year?: string;
+  kind?: MediaKind;
+}): Promise<string> {
+  const { title = '', englishTitle = '', year = '', kind = 'movie' } = params;
+
+  try {
+    const res = await fetch(resolveApiEndpoint('/api/find-trailer'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, englishTitle, year, kind }),
+    });
+    const ct = res.headers.get('content-type') || '';
+    if (res.ok && ct.includes('application/json')) {
+      const json = (await res.json()) as { ok?: boolean; trailerUrl?: string };
+      if (json.ok && json.trailerUrl) return json.trailerUrl;
+    }
+  } catch {
+    // Static hosting fallback below
+  }
+
+  const cleanEn = cleanText(englishTitle)
+    .replace(/\b(20[1-3]\d|19\d\d)\b/g, '')
+    .trim();
+  const cleanAr = cleanText(title)
+    .replace(/\b(20[1-3]\d|19\d\d)\b/g, '')
+    .replace(/^(فيلم|مسلسل|برنامج|عرض)\s+/i, '')
+    .replace(/\s+(مترجم|مدبلج|كامل|اون\s*لاين|أون\s*لاين).*$/i, '')
+    .trim();
+  const baseQuery = cleanEn.length >= 3 && /[A-Za-z]{3,}/.test(cleanEn) ? cleanEn : cleanAr;
+  if (!baseQuery) return '';
+
+  const kindSuffix = kind === 'series' ? 'series official trailer' : 'official trailer';
+  const query = `${baseQuery} ${year || ''} ${kindSuffix}`.replace(/\s+/g, ' ').trim();
+
+  try {
+    const ytRes = await fetchViaBrowserOrCorsRelay(
+      `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
+      6500
+    );
+    if (ytRes.ok && ytRes.text) {
+      const m = ytRes.text.match(/"videoId":"([A-Za-z0-9_-]{11})"/);
+      if (m?.[1]) return `https://www.youtube.com/watch?v=${m[1]}`;
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  return '';
+}
+
+export async function filterServersInBrowser(urls: string[]): Promise<
+  {
+    url: string;
+    ok: boolean;
+    faultType: '403' | 'sandboxed_embed' | '404' | 'frame_blocked' | 'not_video' | 'error' | null;
+    httpStatus: number;
+    reason: string;
+    directStreamUrl?: string | null;
+  }[]
+> {
+  const customBase = getCustomApiBaseUrl();
+  return Promise.all(
+    urls.map(async (rawUrl) => {
+      if (!rawUrl || isLikelyNonVideoWebsiteUrl(rawUrl)) {
+        return {
+          url: rawUrl,
+          ok: false,
+          faultType: 'not_video' as const,
+          httpStatus: 200,
+          reason: 'الرابط يفتح صفحة موقع وليس مشغل فيديو',
+        };
+      }
+
+      if (/\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(rawUrl) || !customBase) {
+        return {
+          url: rawUrl,
+          ok: true,
+          faultType: null,
+          httpStatus: 200,
+          reason: 'الرابط جاهز للتشغيل',
+        };
+      }
+
+      try {
+        const workerUrl = `${customBase}/?url=${encodeURIComponent(rawUrl)}`;
+        const res = await fetchWithTimeout(workerUrl, 5000);
+        const finalUrl = res.headers.get('X-Final-Url') || rawUrl;
+        const text = await res.text().catch(() => '');
+        const snippet = text.slice(0, 28000);
+
+        if (isWebsiteHomepageHtmlBrowser(finalUrl, snippet)) {
+          return {
+            url: rawUrl,
+            ok: false,
+            faultType: 'not_video' as const,
+            httpStatus: res.status,
+            reason: 'الرابط يفتح الصفحة الرئيسية لموقع وليس فيديو',
+          };
+        }
+        if (res.status === 404 || res.status === 410) {
+          return {
+            url: rawUrl,
+            ok: false,
+            faultType: '404' as const,
+            httpStatus: res.status,
+            reason: 'الملف غير موجود (404)',
+          };
+        }
+        if (/sandboxed\s+embed/i.test(snippet)) {
+          return {
+            url: rawUrl,
+            ok: false,
+            faultType: 'sandboxed_embed' as const,
+            httpStatus: res.status,
+            reason: 'رسالة Sandboxed embed',
+          };
+        }
+        return {
+          url: rawUrl,
+          ok: true,
+          faultType: null,
+          httpStatus: res.status,
+          reason: 'السيرفر يعمل بنجاح',
+        };
+      } catch {
+        return {
+          url: rawUrl,
+          ok: true,
+          faultType: null,
+          httpStatus: 200,
+          reason: 'متاح',
+        };
+      }
+    })
+  );
+}
+
+async function verifyScrapedServersInBrowser(
+  servers: StreamServer[],
+  sourceOrigin: string
+): Promise<StreamServer[]> {
+  const preFiltered = servers.filter((s) => {
+    const u = s.url || '';
+    return u && !isLikelyNonVideoWebsiteUrl(u, sourceOrigin);
+  });
+
+  const customBase = getCustomApiBaseUrl();
+  if (!customBase || preFiltered.length === 0) {
+    return preFiltered.slice(0, 12).map((srv, idx) => ({
+      ...srv,
+      id: srv.id || `srv-ext-${idx + 1}`,
+      name: `سيرفر ${idx + 1}`,
+    }));
+  }
+
+  const flags = await Promise.all(
+    preFiltered.map(async (srv) => {
+      const target = srv.url || '';
+      if (/\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(target)) return true;
+      try {
+        const res = await fetchWithTimeout(`${customBase}/?url=${encodeURIComponent(target)}`, 4000);
+        const finalUrl = res.headers.get('X-Final-Url') || target;
+        if (isLikelyNonVideoWebsiteUrl(finalUrl, sourceOrigin)) return false;
+        if (res.status === 404 || res.status === 410) return false;
+        const snippet = (await res.text().catch(() => '')).slice(0, 24576);
+        if (isWebsiteHomepageHtmlBrowser(finalUrl, snippet)) return false;
+        return true;
+      } catch {
+        return true;
+      }
+    })
+  );
+
+  return preFiltered
+    .filter((_, idx) => flags[idx])
+    .slice(0, 12)
+    .map((srv, idx) => ({
+      ...srv,
+      id: srv.id || `srv-ext-${idx + 1}`,
+      name: `سيرفر ${idx + 1}`,
+    }));
+}
+
 async function scrapeFullItemInBrowser(mainUrl: string, mainHtml: string): Promise<ScrapedPayload> {
   const { media, hints } = parseHtmlToMediaWithHintsBrowser(mainHtml, mainUrl);
 
@@ -1265,6 +1595,9 @@ async function scrapeFullItemInBrowser(mainUrl: string, mainHtml: string): Promi
         const watchRes = await fetchViaBrowserOrCorsRelay(watchUrl, 8000);
         if (watchRes.ok && watchRes.text.length > 100) {
           const watchParsed = parseHtmlToMediaWithHintsBrowser(watchRes.text, watchUrl);
+          if (!media.trailerUrl && watchParsed.media.trailerUrl) {
+            media.trailerUrl = watchParsed.media.trailerUrl;
+          }
           if (watchParsed.media.servers.length > 0) {
             const seen = new Set(media.servers.map((s) => s.url));
             for (const srv of watchParsed.media.servers) {
@@ -1318,7 +1651,27 @@ async function scrapeFullItemInBrowser(mainUrl: string, mainHtml: string): Promi
     }
   }
 
-  media.servers = media.servers.slice(0, 12);
+  let mainOrigin = '';
+  try {
+    if (mainUrl) mainOrigin = new URL(mainUrl).origin;
+  } catch {
+    // ignore
+  }
+
+  const [filteredServers, fallbackTrailer] = await Promise.all([
+    verifyScrapedServersInBrowser(media.servers, mainOrigin),
+    media.trailerUrl
+      ? Promise.resolve(media.trailerUrl)
+      : findTrailerInBrowser({
+          title: media.title,
+          englishTitle: media.englishTitle,
+          year: media.year,
+          kind: media.kind,
+        }),
+  ]);
+
+  media.servers = filteredServers;
+  media.trailerUrl = fallbackTrailer || '';
   media.downloads = media.downloads.slice(0, 12);
   return media;
 }
@@ -1401,6 +1754,14 @@ export async function scrapeSingleInBrowser(params: {
       '';
     const effectiveUrl = (url && url.trim()) || canonicalInHtml || '';
     const extracted = parseHtmlToMediaWithHintsBrowser(rawHtml, effectiveUrl).media;
+    if (!extracted.trailerUrl) {
+      extracted.trailerUrl = await findTrailerInBrowser({
+        title: extracted.title,
+        englishTitle: extracted.englishTitle,
+        year: extracted.year,
+        kind: extracted.kind,
+      });
+    }
     return { ok: true, extracted };
   }
 
@@ -1665,6 +2026,7 @@ function buildFallbackCardItem(card: { url: string; title: string; poster: strin
     tagline: card.title,
     story: card.title,
     shortUrl: card.url,
+    trailerUrl: '',
     cast: [],
     servers: [],
     downloads: [],
