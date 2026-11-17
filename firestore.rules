@@ -186,7 +186,7 @@ service cloud.firestore {
     match /requests/{requestId} {
       allow get: if isValidId(requestId) && ((isSignedIn() && existing().userId == request.auth.uid) || isAdmin());
       allow list: if (isSignedIn() && existing().userId == request.auth.uid) || isAdmin();
-      allow create: if isVerifiedUser()
+      allow create: if isSignedIn()
         && isValidId(requestId)
         && isValidVisitorRequest(incoming())
         && incoming().id == requestId
@@ -203,13 +203,13 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminNote', 'updatedAt']);
-      allow delete: if isValidId(requestId) && ((isVerifiedUser() && existing().userId == request.auth.uid) || isAdmin());
+      allow delete: if isValidId(requestId) && ((isSignedIn() && existing().userId == request.auth.uid) || isAdmin());
     }
 
     match /users/{userId} {
       allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
       allow list: if isAdmin();
-      allow create: if (isVerifiedUser() || isAdmin())
+      allow create: if isSignedIn()
         && isValidId(userId)
         && isOwner(userId)
         && isValidUserProfile(incoming())
@@ -217,7 +217,7 @@ service cloud.firestore {
         && (incoming().role == 'member' || isAdmin())
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
-      allow update: if (isVerifiedUser() || isAdmin())
+      allow update: if isSignedIn()
         && isValidId(userId)
         && isValidUserProfile(incoming())
         && incoming().uid == existing().uid
@@ -232,7 +232,7 @@ service cloud.firestore {
       match /private/info {
         allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
         allow list: if false;
-        allow create, update: if (isVerifiedUser() || isAdmin())
+        allow create, update: if isSignedIn()
           && isValidId(userId)
           && isOwner(userId)
           && isValidUserPrivateInfo(incoming())

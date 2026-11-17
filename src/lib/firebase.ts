@@ -521,7 +521,7 @@ export async function saveSiteSettingsToFirestore(settings: SiteSettings, uid: s
   try {
     await setDoc(doc(db, 'settings', 'general'), {
       siteName: settings.siteName.trim().slice(0, 80) || 'RahaL TV',
-      tagline: settings.tagline.trim().slice(0, 300),
+      tagline: settings.tagline.trim().slice(0, 300) || 'منصة RahaL TV الترفيهية',
       announcementText: settings.announcementText.trim().slice(0, 300),
       tickerEnabled: Boolean(settings.tickerEnabled),
       featuredLimit: Math.min(20, Math.max(1, Number(settings.featuredLimit) || 5)),

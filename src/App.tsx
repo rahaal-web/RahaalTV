@@ -308,32 +308,38 @@ export default function App() {
     const reqPath = 'requests';
     const reqQuery = isAdmin
       ? query(collection(db, reqPath), orderBy('createdAt', 'desc'))
-      : query(
-          collection(db, reqPath),
-          where('userId', '==', firebaseUser.uid),
-          orderBy('createdAt', 'desc')
-        );
+      : query(collection(db, reqPath), where('userId', '==', firebaseUser.uid));
 
     const unsubRequests = onSnapshot(
       reqQuery,
       (snapshot) => {
-        const list = snapshot.docs.map((d) => {
-          const data = d.data();
-          return {
-            id: data.id || d.id,
-            userId: data.userId,
-            requesterName: data.requesterName,
-            title: data.title,
-            type: data.type,
-            notes: data.notes || '',
-            status: data.status || 'pending',
-            adminNote: data.adminNote || '',
-            createdAt:
-              data.createdAt && typeof data.createdAt.toDate === 'function'
-                ? data.createdAt.toDate().toISOString()
-                : new Date().toISOString(),
-          } as VisitorRequest;
-        });
+        const list = snapshot.docs
+          .map((d) => {
+            const data = d.data();
+            const createdMs =
+              data.createdAt && typeof data.createdAt.toMillis === 'function'
+                ? data.createdAt.toMillis()
+                : 0;
+            return {
+              createdMs,
+              item: {
+                id: data.id || d.id,
+                userId: data.userId,
+                requesterName: data.requesterName,
+                title: data.title,
+                type: data.type,
+                notes: data.notes || '',
+                status: data.status || 'pending',
+                adminNote: data.adminNote || '',
+                createdAt:
+                  data.createdAt && typeof data.createdAt.toDate === 'function'
+                    ? data.createdAt.toDate().toISOString()
+                    : new Date().toISOString(),
+              } as VisitorRequest,
+            };
+          })
+          .sort((a, b) => b.createdMs - a.createdMs)
+          .map((entry) => entry.item);
         setVisitorRequests(list);
       },
       (error) => {
