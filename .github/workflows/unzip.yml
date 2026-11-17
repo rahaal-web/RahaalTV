@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       zip_file:
-        description: "اسم ملف الـ zip (مثال: files.zip)"
+        description: "zip file name"
         required: true
         default: "files.zip"
       target_dir:
-        description: "المجلد اللي هتتفك فيه الملفات (سيبه . للمجلد الرئيسي)"
+        description: "target folder (use . for root)"
         required: true
         default: "."
 
