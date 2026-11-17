@@ -32,10 +32,12 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isVerifiedUser() && (
-        request.auth.token.email == 'rahalahmed348@gmail.com' ||
-        request.auth.token.email == 'mfeshmeny2@gmail.com' ||
-        request.auth.token.email == 'ccicada6@gmail.com' ||
+      return isSignedIn() && (
+        (isVerifiedUser() && (
+          request.auth.token.email == 'rahalahmed348@gmail.com' ||
+          request.auth.token.email == 'mfeshmeny2@gmail.com' ||
+          request.auth.token.email == 'ccicada6@gmail.com'
+        )) ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
@@ -207,7 +209,7 @@ service cloud.firestore {
     match /users/{userId} {
       allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
       allow list: if isAdmin();
-      allow create: if isVerifiedUser()
+      allow create: if (isVerifiedUser() || isAdmin())
         && isValidId(userId)
         && isOwner(userId)
         && isValidUserProfile(incoming())
@@ -215,7 +217,7 @@ service cloud.firestore {
         && (incoming().role == 'member' || isAdmin())
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
-      allow update: if isVerifiedUser()
+      allow update: if (isVerifiedUser() || isAdmin())
         && isValidId(userId)
         && isValidUserProfile(incoming())
         && incoming().uid == existing().uid
@@ -230,7 +232,7 @@ service cloud.firestore {
       match /private/info {
         allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
         allow list: if false;
-        allow create, update: if isVerifiedUser()
+        allow create, update: if (isVerifiedUser() || isAdmin())
           && isValidId(userId)
           && isOwner(userId)
           && isValidUserPrivateInfo(incoming())

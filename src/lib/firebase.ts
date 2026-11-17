@@ -1,9 +1,13 @@
-import { initializeApp } from 'firebase/app';
+import { deleteApp, initializeApp } from 'firebase/app';
 import {
+  createUserWithEmailAndPassword,
   getAuth,
   GoogleAuthProvider,
+  sendEmailVerification,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
+  updateProfile,
   User,
 } from 'firebase/auth';
 import {
@@ -104,6 +108,68 @@ async function testConnection() {
 }
 void testConnection();
 
+export function normalizeAuthIdentifier(identifier: string): string {
+  const clean = identifier.trim();
+  if (!clean) return '';
+  if (clean.includes('@')) return clean.toLowerCase();
+  return `${clean.toLowerCase()}@rahaltv.com`;
+}
+
+export function getFirebaseAuthErrorMessage(err: unknown): string {
+  const code =
+    typeof err === 'object' && err !== null && 'code' in err
+      ? String((err as { code?: unknown }).code || '')
+      : '';
+  const host = typeof window !== 'undefined' ? window.location.hostname : '';
+
+  switch (code) {
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'البريد الإلكتروني / اسم المستخدم أو كلمة المرور غير صحيحة.';
+    case 'auth/invalid-email':
+      return 'صيغة البريد الإلكتروني غير صالحة.';
+    case 'auth/email-already-in-use':
+      return 'هذا البريد الإلكتروني أو اسم المستخدم مسجل بالفعل.';
+    case 'auth/weak-password':
+      return 'كلمة المرور ضعيفة — يجب أن تكون 6 أحرف على الأقل.';
+    case 'auth/operation-not-allowed':
+      return 'ميزة تسجيل الدخول بالبريد وكلمة المرور غير مفعّلة بعد في Firebase Console → Authentication → Sign-in method → Email/Password.';
+    case 'auth/too-many-requests':
+      return 'محاولات دخول متكررة، يرجى الانتظار قليلاً ثم المحاولة مرة أخرى.';
+    case 'auth/unauthorized-domain':
+      return `الدومين (${host}) غير مضاف في Firebase Authorized Domains.`;
+    case 'auth/popup-blocked':
+      return 'المتصفح منع النافذة المنبثقة لتسجيل الدخول.';
+    case 'auth/popup-closed-by-user':
+      return 'تم إغلاق نافذة تسجيل الدخول.';
+    default:
+      return `تعذر إتمام تسجيل الدخول (${code || 'خطأ غير معروف'}).`;
+  }
+}
+
+export async function signInWithEmailPassword(identifier: string, password: string) {
+  const email = normalizeAuthIdentifier(identifier);
+  return signInWithEmailAndPassword(auth, email, password);
+}
+
+export async function registerMemberWithEmailPassword(
+  identifier: string,
+  password: string,
+  displayName: string
+) {
+  const email = normalizeAuthIdentifier(identifier);
+  const cred = await createUserWithEmailAndPassword(auth, email, password);
+  if (displayName.trim()) {
+    await updateProfile(cred.user, { displayName: displayName.trim().slice(0, 120) });
+  }
+  return cred;
+}
+
+export async function resendVerificationEmail(user: User) {
+  return sendEmailVerification(user);
+}
+
 export async function signInWithGoogle() {
   return signInWithPopup(auth, googleProvider);
 }
@@ -113,9 +179,11 @@ export async function signOutFirebase() {
 }
 
 export async function checkIsAdminUser(user: User | null): Promise<boolean> {
-  if (!user || !user.emailVerified) return false;
+  if (!user) return false;
   const email = user.email?.toLowerCase() || '';
-  if (PRIMARY_ADMIN_EMAILS.some((e) => e.toLowerCase() === email)) return true;
+  if (user.emailVerified && PRIMARY_ADMIN_EMAILS.some((e) => e.toLowerCase() === email)) {
+    return true;
+  }
   try {
     const adminDoc = await getDoc(doc(db, 'admins', user.uid));
     return adminDoc.exists();
@@ -483,6 +551,27 @@ export async function grantAdminRoleInFirestore(
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function createAdminAccountInFirebase(
+  identifier: string,
+  password: string,
+  displayName: string,
+  addedByUid: string
+): Promise<{ uid: string; email: string }> {
+  const email = normalizeAuthIdentifier(identifier);
+  const cleanName = displayName.trim().slice(0, 120) || email.split('@')[0] || 'مشرف RahaL TV';
+  const secondaryApp = initializeApp(firebaseConfig, `admin-creator-${Date.now()}`);
+  const secondaryAuth = getAuth(secondaryApp);
+  try {
+    const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+    await updateProfile(cred.user, { displayName: cleanName });
+    await grantAdminRoleInFirestore(cred.user.uid, cleanName, addedByUid);
+    await signOut(secondaryAuth);
+    return { uid: cred.user.uid, email };
+  } finally {
+    await deleteApp(secondaryApp).catch(() => undefined);
   }
 }
 

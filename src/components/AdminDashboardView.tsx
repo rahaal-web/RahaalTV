@@ -40,14 +40,16 @@ import { MediaPreviewModal } from './MediaPreviewModal';
 import {
   bulkDeleteMediaFromFirestore,
   bulkSaveMediaToFirestore,
+  createAdminAccountInFirebase,
   deleteMediaFromFirestore,
   deleteVisitorRequestFromFirestore,
+  getFirebaseAuthErrorMessage,
   grantAdminRoleInFirestore,
   revokeAdminRoleFromFirestore,
   saveMediaToFirestore,
   saveSiteSettingsToFirestore,
   seedCatalogToFirestore,
-  signInWithGoogle,
+  signInWithEmailPassword,
   signOutFirebase,
   updateVisitorRequestInFirestore,
 } from '../lib/firebase';
@@ -315,6 +317,8 @@ export function AdminDashboardView({
   const [busyAction, setBusyAction] = useState(false);
   const [adminSigningIn, setAdminSigningIn] = useState(false);
   const [adminAuthError, setAdminAuthError] = useState<string | null>(null);
+  const [adminLoginEmail, setAdminLoginEmail] = useState('');
+  const [adminLoginPassword, setAdminLoginPassword] = useState('');
 
   // Catalog tab states
   const [searchQuery, setSearchQuery] = useState('');
@@ -367,6 +371,11 @@ export function AdminDashboardView({
   // Admins tab states
   const [newAdminUid, setNewAdminUid] = useState('');
   const [newAdminName, setNewAdminName] = useState('');
+  const [createAdminName, setCreateAdminName] = useState('');
+  const [createAdminEmail, setCreateAdminEmail] = useState('');
+  const [createAdminPassword, setCreateAdminPassword] = useState('');
+  const [createAdminError, setCreateAdminError] = useState<string | null>(null);
+  const [creatingAdmin, setCreatingAdmin] = useState(false);
 
   // Settings tab state
   const [settingsForm, setSettingsForm] = useState<SiteSettings>(siteSettings);
@@ -1034,6 +1043,32 @@ export function AdminDashboardView({
     }
   };
 
+  const handleCreateAdminAccount = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!user || !createAdminEmail.trim() || createAdminPassword.length < 6) {
+      setCreateAdminError('يرجى إدخال البريد/اسم المستخدم وكلمة مرور لا تقل عن 6 أحرف.');
+      return;
+    }
+    setCreateAdminError(null);
+    setCreatingAdmin(true);
+    try {
+      const created = await createAdminAccountInFirebase(
+        createAdminEmail,
+        createAdminPassword,
+        createAdminName,
+        user.uid
+      );
+      setCreateAdminName('');
+      setCreateAdminEmail('');
+      setCreateAdminPassword('');
+      onNotify(`تم إنشاء حساب المشرف (${created.email}) ومنحه الصلاحية بنجاح!`);
+    } catch (err: unknown) {
+      setCreateAdminError(getFirebaseAuthErrorMessage(err));
+    } finally {
+      setCreatingAdmin(false);
+    }
+  };
+
   const handleSaveSettings = async (e: FormEvent) => {
     e.preventDefault();
     if (!user) return;
@@ -1255,47 +1290,64 @@ export function AdminDashboardView({
             </h1>
             <p className="mt-2 text-sm text-[#b7c9ef] leading-relaxed">
               {!user
-                ? 'للوصول إلى لوحة التحكم المستقلة، إدارة الأفلام والمسلسلات وأداة سحب المحتوى، سجّل الدخول بحساب Google المعتمد.'
-                : `الحساب الحالي (${user.email}) لا يمتلك صلاحيات المشرف.`}
+                ? 'سجّل الدخول بالبريد الإلكتروني (أو اسم المستخدم) وكلمة المرور للوصول إلى لوحة تحكم الإدارة.'
+                : `الحساب الحالي (${user.email}) لا يمتلك صلاحيات المشرف بعد.`}
             </p>
           </div>
 
           {!user ? (
-            <div className="space-y-3">
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!adminLoginEmail.trim() || !adminLoginPassword) {
+                  setAdminAuthError('يرجى إدخال اسم المستخدم/البريد الإلكتروني وكلمة المرور.');
+                  return;
+                }
+                setAdminAuthError(null);
+                setAdminSigningIn(true);
+                try {
+                  await signInWithEmailPassword(adminLoginEmail, adminLoginPassword);
+                } catch (err: unknown) {
+                  setAdminAuthError(getFirebaseAuthErrorMessage(err));
+                } finally {
+                  setAdminSigningIn(false);
+                }
+              }}
+              className="space-y-3 text-right"
+            >
+              <div>
+                <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
+                  البريد الإلكتروني أو اسم المستخدم
+                </label>
+                <input
+                  type="text"
+                  required
+                  dir="ltr"
+                  value={adminLoginEmail}
+                  onChange={(e) => setAdminLoginEmail(e.target.value)}
+                  placeholder="admin@rahaltv.com أو admin"
+                  className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-4 py-3 text-sm text-white focus:border-[#D92321] focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
+                  كلمة المرور
+                </label>
+                <input
+                  type="password"
+                  required
+                  dir="ltr"
+                  value={adminLoginPassword}
+                  onChange={(e) => setAdminLoginPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-4 py-3 text-sm text-white focus:border-[#D92321] focus:outline-none"
+                />
+              </div>
+
               <button
-                type="button"
+                type="submit"
                 disabled={adminSigningIn}
-                onClick={async () => {
-                  setAdminAuthError(null);
-                  setAdminSigningIn(true);
-                  try {
-                    await signInWithGoogle();
-                  } catch (err: unknown) {
-                    const code =
-                      typeof err === 'object' && err !== null && 'code' in err
-                        ? String((err as { code?: unknown }).code || '')
-                        : '';
-                    const host =
-                      typeof window !== 'undefined' ? window.location.hostname : '';
-                    if (code === 'auth/unauthorized-domain') {
-                      setAdminAuthError(
-                        `هذا الدومين (${host}) غير مضاف في Firebase Authorized Domains. أضف "${host}" في Firebase Console → Authentication → Settings → Authorized domains ثم أعد المحاولة.`
-                      );
-                    } else if (code === 'auth/popup-blocked') {
-                      setAdminAuthError(
-                        'المتصفح منع نافذة تسجيل الدخول المنبثقة. اسمح بالنوافذ المنبثقة (Popups) ثم أعد المحاولة.'
-                      );
-                    } else if (code === 'auth/popup-closed-by-user') {
-                      setAdminAuthError('تم إغلاق نافذة تسجيل الدخول قبل إتمام العملية.');
-                    } else {
-                      setAdminAuthError(
-                        `تعذر تسجيل الدخول عبر Google (${code || 'خطأ غير معروف'}).`
-                      );
-                    }
-                  } finally {
-                    setAdminSigningIn(false);
-                  }
-                }}
                 className="w-full inline-flex items-center justify-center gap-2.5 rounded-2xl bg-[#D92321] hover:bg-[#dc0e30] disabled:opacity-60 py-3.5 px-6 text-sm font-extrabold text-white shadow-lg transition-colors cursor-pointer"
               >
                 {adminSigningIn ? (
@@ -1303,19 +1355,42 @@ export function AdminDashboardView({
                 ) : (
                   <ShieldCheck className="w-5 h-5" />
                 )}
-                <span>{adminSigningIn ? 'جاري فتح نافذة Google...' : 'تسجيل الدخول بحساب Google'}</span>
+                <span>{adminSigningIn ? 'جاري تسجيل الدخول...' : 'دخول إلى لوحة التحكم'}</span>
               </button>
 
               {adminAuthError && (
-                <div className="rounded-xl bg-[#D92321]/15 border border-[#D92321]/40 p-3 text-xs text-right leading-relaxed text-red-200">
+                <div className="rounded-xl bg-[#D92321]/15 border border-[#D92321]/40 p-3 text-xs leading-relaxed text-red-200">
                   {adminAuthError}
                 </div>
               )}
-            </div>
+
+              <p className="text-[11px] text-[#b7c9ef]/70 text-center leading-relaxed pt-1">
+                إذا كتبت اسم مستخدم بدون @ سيتم إلحاق <span className="font-latin text-white/90">@rahaltv.com</span> تلقائيًا.
+              </p>
+            </form>
           ) : (
-            <div className="space-y-3">
-              <div className="rounded-xl bg-[#1a242e] p-3 text-xs text-[#b7c9ef]">
-                معرّف المستخدم (UID): <span className="font-bold text-white select-all">{user.uid}</span>
+            <div className="space-y-3 text-right">
+              <div className="rounded-xl bg-[#1a242e] p-3.5 text-xs text-[#b7c9ef] space-y-2">
+                <p className="font-bold text-white">معرّف الحساب (UID) في Firebase:</p>
+                <div className="flex items-center justify-between gap-2 rounded-lg bg-[#06131c] px-3 py-2 border border-white/10">
+                  <span className="font-latin text-xs font-bold text-[#f9c400] select-all truncate" dir="ltr">
+                    {user.uid}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard?.writeText(user.uid);
+                      onNotify('تم نسخ UID بنجاح');
+                    }}
+                    className="shrink-0 rounded-md bg-white/10 hover:bg-white/20 px-2.5 py-1 text-[11px] font-bold text-white cursor-pointer"
+                  >
+                    نسخ
+                  </button>
+                </div>
+                <p className="text-[11px] leading-relaxed text-[#b7c9ef]/85">
+                  لتفعيل هذا الحساب كمدير رئيسي: أنشئ مستندًا في Firestore داخل مجموعة{' '}
+                  <span className="font-latin text-white">admins</span> بنفس معرف الـ UID أعلاه، أو اطلب من المدير الحالي إضافتك من تبويب إدارة المشرفين.
+                </p>
               </div>
               <button
                 type="button"
@@ -1323,7 +1398,7 @@ export function AdminDashboardView({
                 className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-[#1a242e] hover:bg-[#D92321] border border-white/10 py-3 text-xs font-extrabold text-white transition-colors cursor-pointer"
               >
                 <LogOut className="w-4 h-4" />
-                <span>تبديل الحساب</span>
+                <span>تسجيل الخروج / تبديل الحساب</span>
               </button>
             </div>
           )}
@@ -2752,9 +2827,65 @@ export function AdminDashboardView({
             {/* TAB 5: USERS & ADMINS RBAC */}
             {activeTab === 'users' && (
               <div className="space-y-6">
+                {/* Create New Admin Directly with Email/Username & Password */}
+                <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 space-y-4">
+                  <div>
+                    <h2 className="font-display text-base font-extrabold text-white">
+                      إنشاء حساب مشرف جديد (باسم وباسورد مباشرة)
+                    </h2>
+                    <p className="text-xs text-[#b7c9ef] mt-1">
+                      يتم إنشاء الحساب في Firebase Auth ومنحه صلاحية الإدارة فورًا بدون تسجيل خروجك.
+                    </p>
+                  </div>
+
+                  <form onSubmit={handleCreateAdminAccount} className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                    <input
+                      type="text"
+                      required
+                      value={createAdminName}
+                      onChange={(e) => setCreateAdminName(e.target.value)}
+                      placeholder="اسم المشرف (مثال: أحمد)"
+                      className="sm:col-span-3 rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:border-[#D92321] focus:outline-none"
+                    />
+                    <input
+                      type="text"
+                      required
+                      dir="ltr"
+                      value={createAdminEmail}
+                      onChange={(e) => setCreateAdminEmail(e.target.value)}
+                      placeholder="البريد أو اسم المستخدم (mod@rahaltv.com)"
+                      className="sm:col-span-4 rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:border-[#D92321] focus:outline-none"
+                    />
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      dir="ltr"
+                      value={createAdminPassword}
+                      onChange={(e) => setCreateAdminPassword(e.target.value)}
+                      placeholder="كلمة المرور (6 أحرف+)"
+                      className="sm:col-span-3 rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:border-[#D92321] focus:outline-none"
+                    />
+                    <button
+                      type="submit"
+                      disabled={creatingAdmin}
+                      className="sm:col-span-2 inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#4CAF50] hover:bg-[#43a047] disabled:opacity-60 py-2.5 px-4 text-xs font-extrabold text-white cursor-pointer"
+                    >
+                      {creatingAdmin ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                      <span>إضافة مشرف</span>
+                    </button>
+                  </form>
+
+                  {createAdminError && (
+                    <div className="rounded-xl bg-[#D92321]/15 border border-[#D92321]/40 p-3 text-xs text-red-200">
+                      {createAdminError}
+                    </div>
+                  )}
+                </div>
+
                 <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 space-y-4">
                   <h2 className="font-display text-base font-extrabold text-white">
-                    إضافة مشرف جديد عبر معرف المستخدم (UID)
+                    أو إضافة مشرف موجود عبر معرف المستخدم (UID)
                   </h2>
                   <form onSubmit={handleGrantAdmin} className="grid grid-cols-1 sm:grid-cols-12 gap-3">
                     <input
@@ -2784,7 +2915,7 @@ export function AdminDashboardView({
 
                   {adminsList.length > 0 && (
                     <div className="pt-3 border-t border-white/10 space-y-2">
-                      <p className="text-xs font-bold text-[#b7c9ef]">المشرفون المضافون:</p>
+                      <p className="text-xs font-bold text-[#b7c9ef]">المشرفون المضافون ({adminsList.length}):</p>
                       {adminsList.map((adm) => (
                         <div
                           key={adm.uid}
@@ -2792,15 +2923,22 @@ export function AdminDashboardView({
                         >
                           <div>
                             <span className="font-extrabold text-white">{adm.displayName}</span>
-                            <span className="text-[#b7c9ef] mr-2">({adm.uid})</span>
+                            {adm.uid === user.uid && (
+                              <span className="mr-2 rounded bg-[#f9c400]/20 px-1.5 py-0.5 text-[10px] font-black text-[#f9c400]">
+                                حسابك الحالي
+                              </span>
+                            )}
+                            <span className="text-[#b7c9ef] mr-2 font-latin" dir="ltr">({adm.uid})</span>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => void revokeAdminRoleFromFirestore(adm.uid)}
-                            className="text-xs font-bold text-[#D92321] hover:underline cursor-pointer"
-                          >
-                            سحب الصلاحية
-                          </button>
+                          {adm.uid !== user.uid && (
+                            <button
+                              type="button"
+                              onClick={() => void revokeAdminRoleFromFirestore(adm.uid)}
+                              className="text-xs font-bold text-[#D92321] hover:underline cursor-pointer"
+                            >
+                              سحب الصلاحية
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>

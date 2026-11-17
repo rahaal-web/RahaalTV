@@ -26,7 +26,6 @@ import {
   handleFirestoreError,
   OperationType,
   saveWatchlistToFirestore,
-  signInWithGoogle,
   signOutFirebase,
   submitVisitorRequestToFirestore,
   syncUserProfileToFirestore,
@@ -444,26 +443,6 @@ export default function App() {
     });
   };
 
-  const handleGoogleLogin = async () => {
-    try {
-      const res = await signInWithGoogle();
-      showToast(`مرحبًا بك يا ${res.user.displayName || 'مستخدم'} في RahaL TV`);
-    } catch (err: unknown) {
-      const code =
-        typeof err === 'object' && err !== null && 'code' in err
-          ? String((err as { code?: unknown }).code || '')
-          : '';
-      if (code === 'auth/unauthorized-domain') {
-        const host = typeof window !== 'undefined' ? window.location.hostname : '';
-        showToast(`الدومين (${host}) غير مصرح به في Firebase Authorized Domains`);
-      } else if (code === 'auth/popup-blocked') {
-        showToast('المتصفح منع نافذة تسجيل الدخول المنبثقة — اسمح بالـ Popups');
-      } else {
-        showToast('تم إلغاء تسجيل الدخول');
-      }
-    }
-  };
-
   const handleLogout = async () => {
     await signOutFirebase();
     showToast('تم تسجيل الخروج بنجاح');
@@ -561,9 +540,9 @@ export default function App() {
           onClose={() => setLoginOpen(false)}
           firebaseUser={firebaseUser}
           isAdmin={isAdmin}
-          onGoogleLogin={handleGoogleLogin}
           onLogout={handleLogout}
           onOpenAdmin={openAdminPage}
+          onNotify={showToast}
         />
       </>
     );
@@ -691,16 +670,16 @@ export default function App() {
         onClose={() => setLoginOpen(false)}
         firebaseUser={firebaseUser}
         isAdmin={isAdmin}
-        onGoogleLogin={handleGoogleLogin}
         onLogout={handleLogout}
         onOpenAdmin={openAdminPage}
+        onNotify={showToast}
       />
 
       <FooterInfoModal
         topic={footerTopic}
         onClose={() => setFooterTopic(null)}
         firebaseUser={firebaseUser}
-        onGoogleLogin={handleGoogleLogin}
+        onOpenLogin={() => setLoginOpen(true)}
         requests={visitorRequests}
         onAddRequest={handleAddRequest}
       />

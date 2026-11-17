@@ -20,6 +20,11 @@ import {
   X,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
+import {
+  getFirebaseAuthErrorMessage,
+  registerMemberWithEmailPassword,
+  signInWithEmailPassword,
+} from '../lib/firebase';
 import { MediaItem, VisitorRequest } from '../types/media';
 import { FooterTopic } from './Footer';
 
@@ -813,15 +818,15 @@ export function PlayerModal({
   );
 }
 
-/* ---------------- Google Auth Login Modal ---------------- */
+/* ---------------- Email/Password Auth Login Modal ---------------- */
 interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
   firebaseUser: User | null;
   isAdmin: boolean;
-  onGoogleLogin: () => Promise<void>;
   onLogout: () => Promise<void>;
   onOpenAdmin: () => void;
+  onNotify?: (msg: string) => void;
 }
 
 export function LoginModal({
@@ -829,19 +834,39 @@ export function LoginModal({
   onClose,
   firebaseUser,
   isAdmin,
-  onGoogleLogin,
   onLogout,
   onOpenAdmin,
+  onNotify,
 }: LoginModalProps) {
   const [signingIn, setSigningIn] = useState(false);
+  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [identifier, setIdentifier] = useState('');
+  const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
-  const handleGoogleClick = async () => {
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!identifier.trim() || !password) {
+      setAuthError('يرجى إدخال اسم المستخدم أو البريد الإلكتروني وكلمة المرور.');
+      return;
+    }
+    setAuthError(null);
     setSigningIn(true);
     try {
-      await onGoogleLogin();
+      if (mode === 'login') {
+        const cred = await signInWithEmailPassword(identifier, password);
+        onNotify?.(`مرحبًا بك يا ${cred.user.displayName || cred.user.email || 'مستخدم'} في RahaL TV`);
+      } else {
+        const cred = await registerMemberWithEmailPassword(identifier, password, displayName);
+        onNotify?.(`تم إنشاء حسابك بنجاح، أهلاً بك ${cred.user.displayName || ''}`);
+      }
+      setPassword('');
       onClose();
+    } catch (err: unknown) {
+      setAuthError(getFirebaseAuthErrorMessage(err));
     } finally {
       setSigningIn(false);
     }
@@ -853,7 +878,11 @@ export function LoginModal({
       <div className="relative z-10 w-full max-w-md rounded-3xl bg-[#0c1821] border border-white/10 p-6 shadow-2xl">
         <div className="flex items-center justify-between mb-5">
           <h2 className="font-display text-lg font-extrabold text-white">
-            {firebaseUser ? 'حسابي على RahaL TV' : 'تسجيل الدخول إلى RahaL TV'}
+            {firebaseUser
+              ? 'حسابي على RahaL TV'
+              : mode === 'login'
+                ? 'تسجيل الدخول إلى RahaL TV'
+                : 'إنشاء حساب جديد'}
           </h2>
           <button
             type="button"
@@ -876,7 +905,7 @@ export function LoginModal({
               />
             ) : (
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[#D92321]/20 border border-[#D92321] text-xl font-black text-white">
-                {(firebaseUser.displayName || 'RT').slice(0, 2).toUpperCase()}
+                {(firebaseUser.displayName || firebaseUser.email || 'RT').slice(0, 2).toUpperCase()}
               </div>
             )}
 
@@ -920,21 +949,90 @@ export function LoginModal({
             </button>
           </div>
         ) : (
-          <div className="space-y-4 text-center">
+          <form onSubmit={handleSubmit} className="space-y-3.5">
             <p className="text-xs text-[#b7c9ef] leading-relaxed">
-              سجّل الدخول بحساب Google لحفظ قائمتك سحابيًا، إرسال طلبات الأفلام والمسلسلات، أو
-              الدخول إلى لوحة تحكم الإدارة.
+              {mode === 'login'
+                ? 'أدخل البريد الإلكتروني (أو اسم المستخدم) وكلمة المرور للدخول إلى حسابك أو لوحة الإدارة.'
+                : 'أنشئ حسابًا جديدًا بالبريد الإلكتروني وكلمة المرور لحفظ قائمتك ومتابعة طلباتك.'}
             </p>
+
+            {mode === 'register' && (
+              <div>
+                <label className="block text-xs font-bold text-[#b7c9ef] mb-1">الاسم</label>
+                <input
+                  type="text"
+                  required
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder="مثال: رحال أحمد"
+                  className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
+                />
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-bold text-[#b7c9ef] mb-1">
+                البريد الإلكتروني أو اسم المستخدم
+              </label>
+              <input
+                type="text"
+                required
+                dir="ltr"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+                placeholder="admin@rahaltv.com أو admin"
+                className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-[#b7c9ef] mb-1">كلمة المرور</label>
+              <input
+                type="password"
+                required
+                minLength={6}
+                dir="ltr"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
+              />
+            </div>
+
+            {authError && (
+              <div className="rounded-xl bg-[#D92321]/15 border border-[#D92321]/40 p-3 text-xs text-red-200 leading-relaxed">
+                {authError}
+              </div>
+            )}
+
             <button
-              type="button"
+              type="submit"
               disabled={signingIn}
-              onClick={() => void handleGoogleClick()}
-              className="w-full inline-flex items-center justify-center gap-2.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] py-3.5 text-sm font-extrabold text-white shadow-lg transition-colors cursor-pointer"
+              className="w-full inline-flex items-center justify-center gap-2.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] disabled:opacity-60 py-3.5 text-sm font-extrabold text-white shadow-lg transition-colors cursor-pointer"
             >
               <ShieldCheck className="w-5 h-5" />
-              <span>{signingIn ? 'جاري فتح نافذة Google...' : 'تسجيل الدخول بحساب Google'}</span>
+              <span>
+                {signingIn
+                  ? 'جاري المعالجة...'
+                  : mode === 'login'
+                    ? 'تسجيل الدخول'
+                    : 'إنشاء الحساب'}
+              </span>
             </button>
-          </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setAuthError(null);
+                setMode((m) => (m === 'login' ? 'register' : 'login'));
+              }}
+              className="w-full text-center text-xs font-bold text-[#b7c9ef] hover:text-white pt-1 cursor-pointer"
+            >
+              {mode === 'login'
+                ? 'ليس لديك حساب؟ إنشاء حساب عضو جديد'
+                : 'لديك حساب بالفعل؟ العودة لتسجيل الدخول'}
+            </button>
+          </form>
         )}
       </div>
     </div>
@@ -946,7 +1044,7 @@ interface FooterInfoModalProps {
   topic: FooterTopic | null;
   onClose: () => void;
   firebaseUser: User | null;
-  onGoogleLogin: () => Promise<void>;
+  onOpenLogin: () => void;
   requests: VisitorRequest[];
   onAddRequest: (req: { title: string; type: VisitorRequest['type']; notes: string }) => Promise<void>;
 }
@@ -955,7 +1053,7 @@ export function FooterInfoModal({
   topic,
   onClose,
   firebaseUser,
-  onGoogleLogin,
+  onOpenLogin,
   requests,
   onAddRequest,
 }: FooterInfoModalProps) {
@@ -1053,15 +1151,18 @@ export function FooterInfoModal({
               {!firebaseUser ? (
                 <div className="rounded-2xl bg-[#1a242e] border border-white/10 p-5 text-center space-y-3">
                   <p className="text-sm font-bold text-white">
-                    سجّل الدخول بحساب Google لإرسال طلبك ومتابعة حالة تنفيذه في قاعدة البيانات
+                    سجّل الدخول بحسابك لإرسال طلبك ومتابعة حالة تنفيذه في قاعدة البيانات
                   </p>
                   <button
                     type="button"
-                    onClick={() => void onGoogleLogin()}
+                    onClick={() => {
+                      onClose();
+                      onOpenLogin();
+                    }}
                     className="inline-flex items-center gap-2 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-5 py-2.5 text-xs font-extrabold text-white cursor-pointer"
                   >
                     <ShieldCheck className="w-4 h-4" />
-                    <span>تسجيل الدخول بحساب Google</span>
+                    <span>تسجيل الدخول</span>
                   </button>
                 </div>
               ) : (
