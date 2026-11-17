@@ -82,6 +82,10 @@ function normalizeTrailerUrlServer(rawUrl: string | undefined | null): string {
 const IGNORED_EMBED_HOSTS_REGEX =
   /googlesyndication|doubleclick|googletagmanager|facebook\.com\/plugins|recaptcha|cloudflare|ads|histats|yandex|analytics|disqus\.com|gravatar\.com|addtoany|sharethis|twitter\.com\/widgets|instagram\.com\/embed/i;
 
+function normalizeArabicDigits(text: string): string {
+  return text.replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+}
+
 function isLikelyNonVideoWebsiteUrl(rawUrl: string, sourceOrigin?: string): boolean {
   if (!rawUrl) return true;
   if (IGNORED_EMBED_HOSTS_REGEX.test(rawUrl)) return true;
@@ -99,6 +103,11 @@ function isLikelyNonVideoWebsiteUrl(rawUrl: string, sourceOrigin?: string): bool
 
   // Reject bare root website homepages (e.g. https://www.larooza.tv/ or https://example.com)
   if ((p === '' || p === '/') && !hasVideoQueryParam) {
+    return true;
+  }
+
+  // Reject full PHP Melody / Arabic streaming site webpage URLs masquerading as video servers
+  if (/\/(?:play|watch|download)\.php$/i.test(p) && /[?&](?:vid|v|id)=/i.test(search)) {
     return true;
   }
 
@@ -120,7 +129,7 @@ function isLikelyNonVideoWebsiteUrl(rawUrl: string, sourceOrigin?: string): bool
   if (
     sourceOrigin &&
     u.origin === sourceOrigin &&
-    !/(?:embed|player|play\.php|jwplayer|videojs)/i.test(p + search) &&
+    !/(?:\/embed|\/player|\/e\/|jwplayer|videojs)/i.test(p + search) &&
     !/\.(mp4|m3u8|webm|ogg)(\?|$)/i.test(p)
   ) {
     return true;
@@ -131,26 +140,44 @@ function isLikelyNonVideoWebsiteUrl(rawUrl: string, sourceOrigin?: string): bool
 
 function hasRealVideoPlayerMarkup(snippet: string): boolean {
   if (!snippet) return false;
-  return /<video\b|<source\b[^>]+src=|\.mp4\b|\.m3u8\b|jwplayer\s*\(|videojs\s*\(|new\s+Plyr\b|Hls\.isSupported|Clappr\.Player|Artplayer|DPlayer|sources\s*:\s*\[/i.test(
+  return /<video\b|<source\b[^>]+src=|\.mp4\b|\.m3u8\b|\.mpd\b|jwplayer\s*\(|videojs\s*\(|new\s+Plyr\b|Hls\.isSupported|Clappr\.Player|Artplayer|DPlayer|FluidPlayer|flowplayer|sources\s*:\s*\[|eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k/i.test(
     snippet
   );
 }
 
 function isWebsiteHomepageHtml(finalUrl: string, snippet: string): boolean {
   if (finalUrl && isLikelyNonVideoWebsiteUrl(finalUrl)) return true;
-  if (!snippet || hasRealVideoPlayerMarkup(snippet)) return false;
+  if (!snippet) return false;
+  if (hasRealVideoPlayerMarkup(snippet)) return false;
 
   const hasPortalNavOrHomeTitle =
-    /<title>[^<]*(?:الصفحة\s*الرئيسية|الرئيسية\s*[-|–]|لاروزا|Larooza|موقع\s*فيديو|ماي\s*سيما|اكوام|أكوام|أفلام\s*و?مسلسلات)[^<]*<\/title>/i.test(
+    /<title>[^<]*(?:الصفحة\s*الرئيسية|الرئيسية\s*[-|–]|لاروزا|Larooza|موقع\s*فيديو|ماي\s*سيما|اكوام|أكوام|أفلام\s*و?مسلسلات|قائمة\s*الأفلام|قائمة\s*المسلسلات)[^<]*<\/title>/i.test(
       snippet
     ) ||
     /الصفحة\s*الرئيسية/i.test(snippet) ||
     (/<nav\b/i.test(snippet) &&
-      /(?:أضيف\s*حديث[اًا]|اضيف\s*حديث[اًا]|مسلسلات\s*رمضان|برامج\s*تلفزيونية)/i.test(snippet)) ||
+      /(?:أضيف\s*حديث[اًا]|اضيف\s*حديث[اًا]|مسلسلات\s*رمضان|برامج\s*تلفزيونية|جميع\s*الأفلام|جميع\s*المسلسلات)/i.test(
+        snippet
+      )) ||
     (/placeholder=["'][^"']*(?:ابحث|بحث|search)[^"']*["']/i.test(snippet) &&
       /(?:مسلسلات|أفلام|افلام)/i.test(snippet));
 
-  return hasPortalNavOrHomeTitle;
+  if (hasPortalNavOrHomeTitle) return true;
+
+  // Detect any generic multi-link website page with nav/header/footer and no embedded video iframe or player
+  const hasFullSiteChrome =
+    /<(header|nav|footer)\b/i.test(snippet) &&
+    (snippet.match(/<a\b[^>]+href=/gi)?.length || 0) >= 12;
+  const hasNestedVideoIframe =
+    /<iframe[^>]+src=["'][^"']*(?:embed|player|vid|stream|mp4|m3u8|dood|uqload|filemoon|streamtape|vidmoly|ok\.ru|vk\.com|mail\.ru)[^"']*["']/i.test(
+      snippet
+    );
+
+  if (hasFullSiteChrome && !hasNestedVideoIframe) {
+    return true;
+  }
+
+  return false;
 }
 
 interface SubpageHints {
@@ -737,24 +764,69 @@ function parseHtmlToMediaWithHints(
   }
 
   // 8. Episodes detection (for series)
-  const episodes: { number: number; title: string; duration: string; quality: string; watchUrl?: string }[] = [];
+  const episodes: {
+    number: number;
+    title: string;
+    duration: string;
+    quality: string;
+    watchUrl?: string;
+    servers?: {
+      id: string;
+      name: string;
+      mode: 'url' | 'embed';
+      url: string;
+      embedCode: string;
+      quality: string;
+      speed: string;
+      tag: string;
+    }[];
+  }[] = [];
+
   $('a[href]').each((_, el) => {
-    const text = cleanText($(el).text());
-    const epMatch = text.match(/(?:الحلقة|Episode|Ep)\s*(\d{1,3})/i);
+    if ($(el).closest('header nav, .navbar, footer').length > 0) return;
+    const rawHref = resolveUrl(sourceUrl, $(el).attr('href'));
+    if (!rawHref) return;
+    const text = normalizeArabicDigits(cleanText($(el).text()));
+    const titleAttr = normalizeArabicDigits(cleanText($(el).attr('title')));
+    const combinedLabel = text || titleAttr;
+    if (!combinedLabel || /أحدث\s*الحلقات|جميع\s*الحلقات|كل\s*الحلقات/.test(combinedLabel)) return;
+
+    const epMatch =
+      combinedLabel.match(/(?:الحلقة|حلقة|Episode|Ep\.?)\s*#?(\d{1,3})/i) ||
+      (rawHref.includes('vid=') ? combinedLabel.match(/^(\d{1,3})$/) : null);
+
     if (epMatch && episodes.length < 40) {
       const num = Number(epMatch[1]);
-      if (!episodes.some((e) => e.number === num)) {
+      if (num > 0 && !episodes.some((e) => e.number === num)) {
         episodes.push({
           number: num,
-          title: text.slice(0, 80),
+          title: (text || titleAttr || `الحلقة ${num}`).slice(0, 80),
           duration: '45 دقيقة',
           quality,
-          watchUrl: resolveUrl(sourceUrl, $(el).attr('href')),
+          watchUrl: rawHref,
         });
       }
     }
   });
   episodes.sort((a, b) => a.number - b.number);
+
+  // If current page itself looks like Episode N and wasn't linked in the list (common on PHP Melody active episode), include it
+  const currentEpMatch = normalizeArabicDigits(`${rawTitle} ${h1Title}`).match(
+    /(?:الحلقة|حلقة|Episode|Ep\.?)\s*#?(\d{1,3})/i
+  );
+  if (currentEpMatch && sourceUrl) {
+    const currNum = Number(currentEpMatch[1]);
+    if (currNum > 0 && episodes.length > 0 && !episodes.some((e) => e.number === currNum)) {
+      episodes.push({
+        number: currNum,
+        title: `الحلقة ${String(currNum).padStart(2, '0')}`,
+        duration: '45 دقيقة',
+        quality,
+        watchUrl: sourceUrl,
+      });
+      episodes.sort((a, b) => a.number - b.number);
+    }
+  }
 
   // 9. Cast fallback
   if (jsonLdCast.length === 0) {
@@ -795,13 +867,14 @@ function parseHtmlToMediaWithHints(
     backdrop,
     tagline: story.slice(0, 140),
     story,
-    shortUrl: sourceUrl || '',
+    sourceUrl: sourceUrl || '',
+    shortUrl: '',
     trailerUrl,
     cast: jsonLdCast,
     servers: normalizedServers,
     downloads: Array.from(downloadsMap.values()).slice(0, 12),
     seasons:
-      kind === 'series' && episodes.length > 0
+      (kind === 'series' || episodes.length > 1) && episodes.length > 0
         ? [{ seasonNumber: 1, label: 'الموسم 01', year, episodes }]
         : [],
   };
@@ -1136,7 +1209,7 @@ async function verifyScrapedServers(
     if (/\.(mp4|m3u8|webm|ogg)(\?|$)/i.test(target)) return true;
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3600);
+    const timer = setTimeout(() => controller.abort(), 4500);
     try {
       const response = await fetch(target, {
         method: 'GET',
@@ -1150,24 +1223,42 @@ async function verifyScrapedServers(
       });
       const finalUrl = response.url || target;
       if (isLikelyNonVideoWebsiteUrl(finalUrl, sourceOrigin)) return false;
-      if (response.status === 404 || response.status === 410) return false;
+      if (!response.ok && response.status !== 206) return false;
+
+      const xFrame = (response.headers.get('x-frame-options') || '').toLowerCase();
+      const csp = (response.headers.get('content-security-policy') || '').toLowerCase();
+      const cfMitigated = (response.headers.get('cf-mitigated') || '').toLowerCase();
+      if (cfMitigated === 'challenge') return false;
 
       const ct = (response.headers.get('content-type') || '').toLowerCase();
+      if (ct.includes('video/') || ct.includes('mpegurl')) return true;
+
+      let snippet = '';
       if (ct.includes('text/html') || ct.includes('text/plain') || !ct) {
-        const snippet = (await response.text().catch(() => '')).slice(0, 24576);
+        snippet = (await response.text().catch(() => '')).slice(0, 28000);
         if (isWebsiteHomepageHtml(finalUrl, snippet)) return false;
         if (
-          /file\s*(?:was|has been)?\s*(?:deleted|removed)|video\s*(?:was|has been)?\s*(?:deleted|removed|not found)|file\s*not\s*found|404\s*not\s*found|تم\s*حذف\s*(?:الملف|الفيديو)|الفيديو\s*غير\s*موجود/i.test(
+          /<title>\s*(?:403\s+Forbidden|Access\s+Denied|Just\s+a\s+moment|Attention\s+Required|404\s+Not\s+Found)/i.test(
+            snippet
+          ) ||
+          /file\s*(?:was|has been)?\s*(?:deleted|removed)|video\s*(?:was|has been)?\s*(?:deleted|removed|not found)|file\s*not\s*found|404\s*not\s*found|no\s*longer\s*available|تم\s*حذف\s*(?:الملف|الفيديو)|الفيديو\s*غير\s*موجود|الملف\s*غير\s*موجود/i.test(
             snippet
           )
         ) {
           return false;
         }
+        const frameBlocked =
+          xFrame.includes('deny') ||
+          xFrame.includes('sameorigin') ||
+          /frame-ancestors\s+[^;]*'none'|frame-ancestors\s+'self'/.test(csp) ||
+          /sandboxed\s+embed\s+is\s+not\s+allowed|please\s+disable\s+sandbox/i.test(snippet);
+        if (frameBlocked && !/\.(mp4|m3u8)(\?|"|')/i.test(snippet)) {
+          return false;
+        }
       }
       return true;
     } catch {
-      // Keep if timeout/network block only on server IP so browser iframe still has a chance unless URL itself is portal
-      return true;
+      return false;
     } finally {
       clearTimeout(timer);
     }
@@ -1184,9 +1275,21 @@ async function verifyScrapedServers(
     }));
 }
 
+function canonicalizeCompareUrl(rawUrl?: string): string {
+  if (!rawUrl) return '';
+  try {
+    const u = new URL(rawUrl.trim());
+    u.hash = '';
+    return u.toString().replace(/\/+$/, '');
+  } catch {
+    return rawUrl.trim().replace(/\/+$/, '');
+  }
+}
+
 async function scrapeFullItemWithSubpages(
   mainUrl: string,
-  mainHtml: string
+  mainHtml: string,
+  options?: { skipEpisodeCrawl?: boolean }
 ): Promise<ScrapedMediaItem> {
   const { media, hints } = parseHtmlToMediaWithHints(mainHtml, mainUrl);
 
@@ -1194,7 +1297,7 @@ async function scrapeFullItemWithSubpages(
   let downloadUrl = hints.downloadSubpageUrl;
 
   // Step 1: If a separate watch/player subpage exists (e.g. play.php?vid=...) and servers aren't already complete, fetch it
-  if (watchUrl && watchUrl !== mainUrl) {
+  if (watchUrl && canonicalizeCompareUrl(watchUrl) !== canonicalizeCompareUrl(mainUrl)) {
     try {
       const u = new URL(watchUrl);
       if (!isBlockedHost(u.hostname)) {
@@ -1282,11 +1385,11 @@ async function scrapeFullItemWithSubpages(
     // ignore
   }
 
-  // Step 4: Verify scraped servers aren't website homepages / portals + enforce سيرفر 1, سيرفر 2...
-  // Step 5: Fallback trailer search on YouTube if page omitted trailer
+  // Step 4: Verify scraped servers aren't website homepages / broken + enforce سيرفر 1, سيرفر 2...
+  // Step 5: Fallback trailer search on YouTube if page omitted trailer (skip trailer search when crawling individual episodes)
   const [filteredServers, fallbackTrailer] = await Promise.all([
     verifyScrapedServers(media.servers, mainOrigin),
-    media.trailerUrl
+    media.trailerUrl || options?.skipEpisodeCrawl
       ? Promise.resolve(media.trailerUrl)
       : findYoutubeTrailerFallback(media.title, media.englishTitle, media.year, media.kind),
   ]);
@@ -1294,6 +1397,73 @@ async function scrapeFullItemWithSubpages(
   media.servers = filteredServers;
   media.trailerUrl = fallbackTrailer || '';
   media.downloads = media.downloads.slice(0, 12);
+
+  // Step 6: Per-Episode Deep Server Extraction for Series (so Episode 2, 3, 4... each have their OWN watch servers!)
+  if (!options?.skipEpisodeCrawl && media.seasons.length > 0 && media.seasons[0].episodes.length > 0) {
+    const canonicalMain = canonicalizeCompareUrl(mainUrl);
+    const canonicalWatch = canonicalizeCompareUrl(watchUrl);
+    const episodesList = media.seasons[0].episodes;
+    const EP_CONCURRENCY = 4;
+
+    for (let i = 0; i < episodesList.length; i += EP_CONCURRENCY) {
+      const chunk = episodesList.slice(i, i + EP_CONCURRENCY);
+      await Promise.all(
+        chunk.map(async (ep) => {
+          const epPageUrl = ep.watchUrl || '';
+          const canonicalEp = canonicalizeCompareUrl(epPageUrl);
+
+          if (!canonicalEp || canonicalEp === canonicalMain || canonicalEp === canonicalWatch) {
+            ep.servers = filteredServers.map((s, sIdx) => ({
+              ...s,
+              id: `ep-${ep.number}-srv-${sIdx + 1}`,
+              name: `سيرفر ${sIdx + 1}`,
+            }));
+            ep.watchUrl = ep.servers[0]?.url || '';
+            return;
+          }
+
+          try {
+            const parsedEpUrl = new URL(epPageUrl);
+            if (isBlockedHost(parsedEpUrl.hostname)) {
+              ep.servers = [];
+              ep.watchUrl = '';
+              return;
+            }
+            const epRes = await fetchRemoteText(epPageUrl, 8500);
+            if (epRes.ok && epRes.text.length > 100) {
+              const epData = await scrapeFullItemWithSubpages(epPageUrl, epRes.text, {
+                skipEpisodeCrawl: true,
+              });
+              ep.servers = epData.servers.map((s, sIdx) => ({
+                ...s,
+                id: `ep-${ep.number}-srv-${sIdx + 1}`,
+                name: `سيرفر ${sIdx + 1}`,
+              }));
+              ep.watchUrl = ep.servers[0]?.url || '';
+              return;
+            }
+          } catch {
+            // Fall through and clear raw website URL
+          }
+          ep.servers = [];
+          ep.watchUrl = '';
+        })
+      );
+    }
+
+    // If root media servers were empty (e.g., series overview page), inherit Episode 1's servers
+    if (media.servers.length === 0) {
+      const firstEpWithServers = episodesList.find((e) => e.servers && e.servers.length > 0);
+      if (firstEpWithServers?.servers) {
+        media.servers = firstEpWithServers.servers.map((s, idx) => ({
+          ...s,
+          id: `srv-ext-${idx + 1}`,
+          name: `سيرفر ${idx + 1}`,
+        }));
+      }
+    }
+  }
+
   return media;
 }
 
@@ -1619,11 +1789,12 @@ async function startServer() {
                     const chunk = wpFallback.items.slice(i, i + 4);
                     const updated = await Promise.all(
                       chunk.map(async (item) => {
-                        if (item.servers.length === 0 && item.shortUrl) {
+                        const wpUrl = item.sourceUrl || '';
+                        if (item.servers.length === 0 && wpUrl) {
                           try {
-                            const detailRes = await fetchRemoteText(item.shortUrl, 9000);
+                            const detailRes = await fetchRemoteText(wpUrl, 9000);
                             if (detailRes.ok && detailRes.text.length > 150) {
-                              const full = await scrapeFullItemWithSubpages(item.shortUrl, detailRes.text);
+                              const full = await scrapeFullItemWithSubpages(wpUrl, detailRes.text);
                               if (!full.poster && item.poster) {
                                 full.poster = item.poster;
                                 full.backdrop = item.poster;
@@ -1754,7 +1925,8 @@ async function startServer() {
                 backdrop: card.poster,
                 tagline: card.title,
                 story: card.title,
-                shortUrl: card.url,
+                sourceUrl: card.url,
+                shortUrl: '',
                 trailerUrl: '',
                 cast: [],
                 servers: [],
@@ -1786,7 +1958,8 @@ async function startServer() {
             backdrop: card.poster,
             tagline: card.title,
             story: card.title,
-            shortUrl: card.url,
+            sourceUrl: card.url,
+            shortUrl: '',
             trailerUrl: '',
             cast: [],
             servers: [],
@@ -2076,7 +2249,7 @@ async function startServer() {
         return res.status(400).json({ ok: false, error: 'يجب إرسال قائمة الروابط (urls).' });
       }
 
-      const targetUrls = urls.map((u) => String(u || '').trim()).slice(0, 20);
+      const targetUrls = urls.map((u) => String(u || '').trim()).slice(0, 60);
 
       interface FilterCheckResult {
         url: string;

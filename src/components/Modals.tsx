@@ -429,7 +429,11 @@ export function PlayerModal({
   const handleServerFaultFailover = useCallback(
     (faultIdx: number, reason: string) => {
       if (!item) return;
-      const total = item.servers.length;
+      const epList = item.seasons?.[0]?.episodes || [];
+      const activeEp = epList.find((e) => e.number === episodeNum);
+      const effectiveServers =
+        activeEp?.servers && activeEp.servers.length > 0 ? activeEp.servers : item.servers;
+      const total = effectiveServers.length;
       setFilterMap((prev) => {
         const next: Record<number, ServerFilterEntry> = {
           ...prev,
@@ -471,7 +475,7 @@ export function PlayerModal({
         return next;
       });
     },
-    [item]
+    [item, episodeNum]
   );
 
   // Proactive Server Filtering scan on open / episode change (backend + browser/Worker fallback)
@@ -480,9 +484,15 @@ export function PlayerModal({
 
     const episodesList = item.seasons?.[0]?.episodes || [];
     const activeEp = episodesList.find((e) => e.number === episodeNum);
-    const epSrc = extractSafeStreamSrc(activeEp?.embedCode, activeEp?.watchUrl);
+    const hasPerEpisodeServers = Boolean(activeEp?.servers && activeEp.servers.length > 0);
+    const targetServers = hasPerEpisodeServers ? activeEp!.servers! : item.servers;
 
-    const serverUrls = item.servers.map((srv) => extractSafeStreamSrc(srv.embedCode, srv.url) || '');
+    const rawEpSrc = hasPerEpisodeServers
+      ? null
+      : extractSafeStreamSrc(activeEp?.embedCode, activeEp?.watchUrl);
+    const epSrc = rawEpSrc && !isLikelyNonVideoWebsiteUrl(rawEpSrc) ? rawEpSrc : null;
+
+    const serverUrls = targetServers.map((srv) => extractSafeStreamSrc(srv.embedCode, srv.url) || '');
     const allUrls = epSrc ? [...serverUrls, epSrc] : serverUrls;
 
     if (allUrls.every((u) => !u)) return;
@@ -521,7 +531,7 @@ export function PlayerModal({
         const nextMap: Record<number, ServerFilterEntry> = {};
         const faultySummaries: string[] = [];
 
-        item.servers.forEach((_, idx) => {
+        targetServers.forEach((_, idx) => {
           const entry = filterResults?.[idx];
           if (entry) {
             nextMap[idx] = entry;
@@ -534,8 +544,8 @@ export function PlayerModal({
         setFilterMap(nextMap);
 
         // If episode-specific URL failed, bypass it if we have a working server
-        const epResult = epSrc ? filterResults[item.servers.length] : null;
-        const firstHealthyIdx = item.servers.findIndex((_, idx) => nextMap[idx]?.ok === true);
+        const epResult = epSrc ? filterResults[targetServers.length] : null;
+        const firstHealthyIdx = targetServers.findIndex((_, idx) => nextMap[idx]?.ok === true);
 
         if (epSrc && epResult && !epResult.ok && firstHealthyIdx !== -1) {
           setBypassEpisodeSrc(true);
@@ -547,19 +557,19 @@ export function PlayerModal({
           return;
         }
 
-        // Check active server health and auto-switch on 403 / Sandboxed embed / non-video homepage / broken
-        const activeEntry = nextMap[initialServerIndex];
+        const safeCurrentIdx = selectedServer < targetServers.length ? selectedServer : 0;
+        const activeEntry = nextMap[safeCurrentIdx];
         if (activeEntry && !activeEntry.ok) {
-          if (firstHealthyIdx !== -1 && firstHealthyIdx !== initialServerIndex) {
+          if (firstHealthyIdx !== -1 && firstHealthyIdx !== safeCurrentIdx) {
             setSelectedServer(firstHealthyIdx);
             setFilterAlert({
               kind: 'switched',
-              message: `تنبيه: سيرفر ${initialServerIndex + 1} به عطل (${activeEntry.reason}) — تم التبديل تلقائياً إلى سيرفر ${firstHealthyIdx + 1}.`,
+              message: `تنبيه: سيرفر ${safeCurrentIdx + 1} به عطل (${activeEntry.reason}) — تم التبديل تلقائياً إلى سيرفر ${firstHealthyIdx + 1}.`,
             });
           } else {
             setFilterAlert({
               kind: 'warning',
-              message: `تنبيه: سيرفر ${initialServerIndex + 1} به عطل (${activeEntry.reason}).`,
+              message: `تنبيه: سيرفر ${safeCurrentIdx + 1} به عطل (${activeEntry.reason}).`,
             });
           }
         } else if (faultySummaries.length > 0) {
@@ -598,27 +608,40 @@ export function PlayerModal({
 
   if (!item) return null;
 
+  const episodes = item.seasons?.[0]?.episodes || [];
+  const activeEpisodeObj = episodes.find((e) => e.number === episodeNum);
+  const perEpisodeServers =
+    activeEpisodeObj?.servers && activeEpisodeObj.servers.length > 0
+      ? activeEpisodeObj.servers
+      : item.servers;
+
   const serversList =
-    item.servers.length > 0
-      ? item.servers
+    perEpisodeServers.length > 0
+      ? perEpisodeServers
       : [
           {
             id: 'default',
-            name: '1',
+            name: 'سيرفر 1',
             quality: item.quality,
             speed: 'سريع',
             tag: item.quality,
           },
         ];
 
-  const activeServer = serversList[selectedServer] || serversList[0];
+  const safeServerIndex = selectedServer < serversList.length ? selectedServer : 0;
+  const activeServer = serversList[safeServerIndex] || serversList[0];
   const activeQuality = cleanQualityIdentifier(activeServer.quality, item.quality);
-  const episodes = item.seasons?.[0]?.episodes || [];
-  const activeEpisodeObj = episodes.find((e) => e.number === episodeNum);
-  const episodeSpecificSrc = bypassEpisodeSrc
-    ? null
-    : extractSafeStreamSrc(activeEpisodeObj?.embedCode, activeEpisodeObj?.watchUrl);
-  const activeFilterEntry = filterMap[selectedServer];
+
+  const rawEpFallbackSrc =
+    activeEpisodeObj?.servers && activeEpisodeObj.servers.length > 0
+      ? null
+      : bypassEpisodeSrc
+        ? null
+        : extractSafeStreamSrc(activeEpisodeObj?.embedCode, activeEpisodeObj?.watchUrl);
+  const episodeSpecificSrc =
+    rawEpFallbackSrc && !isLikelyNonVideoWebsiteUrl(rawEpFallbackSrc) ? rawEpFallbackSrc : null;
+
+  const activeFilterEntry = filterMap[safeServerIndex];
   const serverSrc =
     activeFilterEntry?.directStreamUrl || extractSafeStreamSrc(activeServer.embedCode, activeServer.url);
   const finalStreamSrc = episodeSpecificSrc || serverSrc;
@@ -1157,28 +1180,42 @@ export function PlayerModal({
                 >
                   <p className="text-xs font-extrabold text-white mb-2">التنقل السريع بين الحلقات:</p>
                   <div className="flex flex-wrap gap-1.5">
-                    {episodes.map((ep) => (
-                      <button
-                        key={ep.number}
-                        type="button"
-                        onClick={() => setEpisodeNum(ep.number)}
-                        className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors cursor-pointer ${
-                          episodeNum === ep.number
-                            ? ''
-                            : 'bg-white/[0.05] text-[#b7c9ef] border border-white/10 hover:text-white'
-                        }`}
-                        style={
-                          episodeNum === ep.number
-                            ? {
-                                backgroundColor: 'var(--pt-accent)',
-                                color: 'var(--pt-accent-contrast)',
-                              }
-                            : undefined
-                        }
-                      >
-                        الحلقة {String(ep.number).padStart(2, '0')}
-                      </button>
-                    ))}
+                    {episodes.map((ep) => {
+                      const epSrvCount = ep.servers?.length || 0;
+                      return (
+                        <button
+                          key={ep.number}
+                          type="button"
+                          onClick={() => {
+                            setEpisodeNum(ep.number);
+                            setSelectedServer(0);
+                            setFilterMap({});
+                            setFilterAlert(null);
+                            setPlayerReloadKey((k) => k + 1);
+                          }}
+                          className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors cursor-pointer ${
+                            episodeNum === ep.number
+                              ? ''
+                              : 'bg-white/[0.05] text-[#b7c9ef] border border-white/10 hover:text-white'
+                          }`}
+                          style={
+                            episodeNum === ep.number
+                              ? {
+                                  backgroundColor: 'var(--pt-accent)',
+                                  color: 'var(--pt-accent-contrast)',
+                                }
+                              : undefined
+                          }
+                        >
+                          <span>الحلقة {String(ep.number).padStart(2, '0')}</span>
+                          {epSrvCount > 0 && (
+                            <span className="font-latin rounded bg-black/25 px-1.5 py-0.5 text-[10px] font-black tabular-nums">
+                              {epSrvCount}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}

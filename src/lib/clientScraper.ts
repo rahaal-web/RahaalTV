@@ -2,6 +2,7 @@ import {
   CastMember,
   DownloadMirror,
   EpisodeItem,
+  MediaItem,
   MediaKind,
   SeasonItem,
   StreamServer,
@@ -24,6 +25,7 @@ export interface ScrapedPayload {
   backdrop: string;
   tagline: string;
   story: string;
+  sourceUrl?: string;
   shortUrl: string;
   trailerUrl: string;
   cast: CastMember[];
@@ -95,7 +97,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Expose-Headers': 'X-Final-Url',
+  'Access-Control-Expose-Headers': 'X-Final-Url, X-Upstream-X-Frame-Options, X-Upstream-CSP',
 };
 
 export default {
@@ -145,12 +147,16 @@ export default {
 
       const body = await upstream.arrayBuffer();
       const contentType = upstream.headers.get('content-type') || 'text/html; charset=utf-8';
+      const upstreamXFrame = upstream.headers.get('x-frame-options') || '';
+      const upstreamCsp = upstream.headers.get('content-security-policy') || '';
       return new Response(body, {
         status: upstream.status,
         headers: {
           ...CORS_HEADERS,
           'Content-Type': contentType,
           'X-Final-Url': upstream.url || parsedTarget.toString(),
+          ...(upstreamXFrame ? { 'X-Upstream-X-Frame-Options': upstreamXFrame } : {}),
+          ...(upstreamCsp ? { 'X-Upstream-CSP': upstreamCsp } : {}),
         },
       });
     } catch (err) {
@@ -186,6 +192,12 @@ function isBlockedHost(hostname: string): boolean {
 
 function cleanText(val: string | undefined | null): string {
   return (val || '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeArabicDigits(val: string): string {
+  return val
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
 }
 
 function resolveUrl(baseUrl: string, maybeRelative: string | undefined | null): string {
@@ -273,6 +285,11 @@ export function isLikelyNonVideoWebsiteUrl(rawUrl: string, sourceOrigin?: string
     return true;
   }
 
+  // PHP Melody / streaming portal full pages (play.php?vid=..., watch.php?vid=...) are web pages, NOT iframe video sources
+  if (hasVideoQueryParam && /\/(?:play|watch|download)\.php$/i.test(p)) {
+    return true;
+  }
+
   if (
     !hasVideoQueryParam &&
     (/^\/(?:home(?:\.[a-z0-9]+)?|index(?:\.[a-z0-9]+)?|main|start)\/?$/i.test(p) ||
@@ -289,7 +306,7 @@ export function isLikelyNonVideoWebsiteUrl(rawUrl: string, sourceOrigin?: string
   if (
     sourceOrigin &&
     u.origin === sourceOrigin &&
-    !/(?:embed|player|play\.php|jwplayer|videojs)/i.test(p + search) &&
+    !/(?:embed|player|jwplayer|videojs)/i.test(p + search) &&
     !/\.(mp4|m3u8|webm|ogg)(\?|$)/i.test(p)
   ) {
     return true;
@@ -300,16 +317,25 @@ export function isLikelyNonVideoWebsiteUrl(rawUrl: string, sourceOrigin?: string
 
 function hasRealVideoPlayerMarkupBrowser(snippet: string): boolean {
   if (!snippet) return false;
-  return /<video\b|<source\b[^>]+src=|\.mp4\b|\.m3u8\b|jwplayer\s*\(|videojs\s*\(|new\s+Plyr\b|Hls\.isSupported|Clappr\.Player|Artplayer|DPlayer|sources\s*:\s*\[/i.test(
-    snippet
-  );
+  if (
+    /<video\b|<source\b[^>]+src=|\.mp4\b|\.m3u8\b|jwplayer\s*\(|videojs\s*\(|new\s+Plyr\b|Hls\.isSupported|Clappr\.Player|Artplayer|DPlayer|sources\s*:\s*\[/i.test(
+      snippet
+    )
+  ) {
+    return true;
+  }
+  const nestedIframeSrc = snippet.match(/<iframe[^>]+src=["'](https?:\/\/[^"']+)["']/i)?.[1];
+  if (nestedIframeSrc && !isLikelyNonVideoWebsiteUrl(nestedIframeSrc)) {
+    return true;
+  }
+  return false;
 }
 
 function isWebsiteHomepageHtmlBrowser(finalUrl: string, snippet: string): boolean {
   if (finalUrl && isLikelyNonVideoWebsiteUrl(finalUrl)) return true;
   if (!snippet || hasRealVideoPlayerMarkupBrowser(snippet)) return false;
 
-  return (
+  if (
     /<title>[^<]*(?:الصفحة\s*الرئيسية|الرئيسية\s*[-|–]|لاروزا|Larooza|موقع\s*فيديو|ماي\s*سيما|اكوام|أكوام|أفلام\s*و?مسلسلات)[^<]*<\/title>/i.test(
       snippet
     ) ||
@@ -318,7 +344,18 @@ function isWebsiteHomepageHtmlBrowser(finalUrl: string, snippet: string): boolea
       /(?:أضيف\s*حديث[اًا]|اضيف\s*حديث[اًا]|مسلسلات\s*رمضان|برامج\s*تلفزيونية)/i.test(snippet)) ||
     (/placeholder=["'][^"']*(?:ابحث|بحث|search)[^"']*["']/i.test(snippet) &&
       /(?:مسلسلات|أفلام|افلام)/i.test(snippet))
-  );
+  ) {
+    return true;
+  }
+
+  // Full web pages with nav/header/footer + multiple navigation links and zero video markup
+  const hasFullChrome = /<header\b/i.test(snippet) && /<footer\b/i.test(snippet);
+  const navLinksCount = (snippet.match(/<a\b[^>]+href=/gi) || []).length;
+  if (hasFullChrome && navLinksCount >= 10) {
+    return true;
+  }
+
+  return false;
 }
 
 interface SubpageHints {
@@ -855,22 +892,48 @@ function parseHtmlToMediaWithHintsBrowser(
   // 8. Episodes
   const episodes: EpisodeItem[] = [];
   doc.querySelectorAll('a[href]').forEach((el) => {
-    const text = cleanText(el.textContent);
-    const epMatch = text.match(/(?:الحلقة|Episode|Ep)\s*(\d{1,3})/i);
+    if (el.closest('header nav, .navbar, footer')) return;
+    const rawHref = resolveUrl(sourceUrl, el.getAttribute('href'));
+    if (!rawHref) return;
+    const text = normalizeArabicDigits(cleanText(el.textContent));
+    const titleAttr = normalizeArabicDigits(cleanText(el.getAttribute('title')));
+    const combinedLabel = text || titleAttr;
+    if (!combinedLabel || /أحدث\s*الحلقات|جميع\s*الحلقات|كل\s*الحلقات/.test(combinedLabel)) return;
+
+    const epMatch =
+      combinedLabel.match(/(?:الحلقة|حلقة|Episode|Ep\.?)\s*#?(\d{1,3})/i) ||
+      (rawHref.includes('vid=') ? combinedLabel.match(/^(\d{1,3})$/) : null);
     if (epMatch && episodes.length < 40) {
       const num = Number(epMatch[1]);
-      if (!episodes.some((e) => e.number === num)) {
+      if (num > 0 && !episodes.some((e) => e.number === num)) {
         episodes.push({
           number: num,
-          title: text.slice(0, 80),
+          title: (text || titleAttr || `الحلقة ${num}`).slice(0, 80),
           duration: '45 دقيقة',
           quality,
-          watchUrl: resolveUrl(sourceUrl, el.getAttribute('href')),
+          watchUrl: rawHref,
         });
       }
     }
   });
   episodes.sort((a, b) => a.number - b.number);
+
+  const currentEpMatch = normalizeArabicDigits(`${rawTitle} ${h1Title}`).match(
+    /(?:الحلقة|حلقة|Episode|Ep\.?)\s*#?(\d{1,3})/i
+  );
+  if (currentEpMatch && sourceUrl) {
+    const currNum = Number(currentEpMatch[1]);
+    if (currNum > 0 && episodes.length > 0 && !episodes.some((e) => e.number === currNum)) {
+      episodes.push({
+        number: currNum,
+        title: `الحلقة ${String(currNum).padStart(2, '0')}`,
+        duration: '45 دقيقة',
+        quality,
+        watchUrl: sourceUrl,
+      });
+      episodes.sort((a, b) => a.number - b.number);
+    }
+  }
 
   // 9. Cast fallback
   if (jsonLdCast.length === 0) {
@@ -914,13 +977,14 @@ function parseHtmlToMediaWithHintsBrowser(
       backdrop,
       tagline: story.slice(0, 140),
       story,
-      shortUrl: sourceUrl || '',
+      sourceUrl: sourceUrl || '',
+      shortUrl: '',
       trailerUrl,
       cast: jsonLdCast,
       servers: normalizedServers,
       downloads: Array.from(downloadsMap.values()).slice(0, 12),
       seasons:
-        kind === 'series' && episodes.length > 0
+        (kind === 'series' || episodes.length > 1) && episodes.length > 0
           ? [{ seasonNumber: 1, label: 'الموسم 01', year, episodes }]
           : [],
     },
@@ -1449,16 +1513,110 @@ export async function findTrailerInBrowser(params: {
   return '';
 }
 
-export async function filterServersInBrowser(urls: string[]): Promise<
-  {
-    url: string;
-    ok: boolean;
-    faultType: '403' | 'sandboxed_embed' | '404' | 'frame_blocked' | 'not_video' | 'error' | null;
-    httpStatus: number;
-    reason: string;
-    directStreamUrl?: string | null;
-  }[]
-> {
+export type ServerFilterEntryResult = {
+  url: string;
+  ok: boolean;
+  faultType: '403' | 'sandboxed_embed' | '404' | 'frame_blocked' | 'not_video' | 'error' | null;
+  httpStatus: number;
+  reason: string;
+  directStreamUrl?: string | null;
+};
+
+function evaluateFetchedServerResponse(
+  rawUrl: string,
+  finalUrl: string,
+  status: number,
+  xFrame: string,
+  csp: string,
+  snippet: string
+): ServerFilterEntryResult {
+  if (isLikelyNonVideoWebsiteUrl(finalUrl)) {
+    return {
+      url: rawUrl,
+      ok: false,
+      faultType: 'not_video',
+      httpStatus: status,
+      reason: 'الرابط يعيد توجيهه لصفحة موقع وليس مشغل فيديو',
+    };
+  }
+  if (status === 404 || status === 410) {
+    return {
+      url: rawUrl,
+      ok: false,
+      faultType: '404',
+      httpStatus: status,
+      reason: 'الملف غير موجود (404)',
+    };
+  }
+  if (status === 403 || status === 401 || status >= 500) {
+    return {
+      url: rawUrl,
+      ok: false,
+      faultType: status === 403 ? '403' : 'error',
+      httpStatus: status,
+      reason: status === 403 ? 'ممنوع الوصول (403)' : `خطأ من الخادم (${status})`,
+    };
+  }
+  if (isWebsiteHomepageHtmlBrowser(finalUrl, snippet)) {
+    return {
+      url: rawUrl,
+      ok: false,
+      faultType: 'not_video',
+      httpStatus: status,
+      reason: 'الرابط يفتح صفحة موقع وليست مشغل فيديو',
+    };
+  }
+  if (
+    /<title>\s*(?:403\s+Forbidden|Access\s+Denied|Just\s+a\s+moment|Attention\s+Required|404\s+Not\s+Found)/i.test(
+      snippet
+    ) ||
+    /file\s*(?:was|has been)?\s*(?:deleted|removed)|video\s*(?:was|has been)?\s*(?:deleted|removed|not found)|file\s*not\s*found|404\s*not\s*found|no\s*longer\s*available|تم\s*حذف\s*(?:الملف|الفيديو)|الفيديو\s*غير\s*موجود|الملف\s*غير\s*موجود/i.test(
+      snippet
+    )
+  ) {
+    return {
+      url: rawUrl,
+      ok: false,
+      faultType: '404',
+      httpStatus: status,
+      reason: 'الفيديو محذوف أو غير موجود داخل السيرفر',
+    };
+  }
+  if (/sandboxed\s+embed/i.test(snippet)) {
+    return {
+      url: rawUrl,
+      ok: false,
+      faultType: 'sandboxed_embed',
+      httpStatus: status,
+      reason: 'رسالة Sandboxed embed',
+    };
+  }
+  const directMp4 = snippet.match(/https?:\/\/[^\s"'<>]+\.(?:mp4|m3u8)(?:\?[^\s"'<>]*)?/i)?.[0] || null;
+  const frameBlocked =
+    xFrame.toLowerCase().includes('deny') ||
+    xFrame.toLowerCase().includes('sameorigin') ||
+    /frame-ancestors\s+[^;]*'none'|frame-ancestors\s+'self'/i.test(csp);
+  if (frameBlocked && !directMp4) {
+    return {
+      url: rawUrl,
+      ok: false,
+      faultType: 'frame_blocked',
+      httpStatus: status,
+      reason: 'السيرفر يمنع التضمين داخل إطار (X-Frame-Options)',
+    };
+  }
+
+  return {
+    url: rawUrl,
+    ok: true,
+    faultType: null,
+    httpStatus: status || 200,
+    reason: 'السيرفر يعمل بنجاح',
+    directStreamUrl: directMp4,
+  };
+}
+
+export async function filterServersInBrowser(urls: string[]): Promise<ServerFilterEntryResult[]> {
   const customBase = getCustomApiBaseUrl();
   return Promise.all(
     urls.map(async (rawUrl) => {
@@ -1472,64 +1630,78 @@ export async function filterServersInBrowser(urls: string[]): Promise<
         };
       }
 
-      if (/\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(rawUrl) || !customBase) {
+      if (/\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(rawUrl)) {
         return {
           url: rawUrl,
           ok: true,
           faultType: null,
           httpStatus: 200,
-          reason: 'الرابط جاهز للتشغيل',
+          reason: 'ملف فيديو مباشر جاهز للتشغيل',
         };
       }
 
-      try {
-        const workerUrl = `${customBase}/?url=${encodeURIComponent(rawUrl)}`;
-        const res = await fetchWithTimeout(workerUrl, 5000);
-        const finalUrl = res.headers.get('X-Final-Url') || rawUrl;
-        const text = await res.text().catch(() => '');
-        const snippet = text.slice(0, 28000);
+      if (customBase) {
+        try {
+          const workerUrl = `${customBase}/?url=${encodeURIComponent(rawUrl)}`;
+          const res = await fetchWithTimeout(workerUrl, 5500);
+          const finalUrl = res.headers.get('X-Final-Url') || rawUrl;
+          const xFrame = res.headers.get('X-Upstream-X-Frame-Options') || '';
+          const csp = res.headers.get('X-Upstream-CSP') || '';
+          const text = await res.text().catch(() => '');
+          return evaluateFetchedServerResponse(rawUrl, finalUrl, res.status, xFrame, csp, text.slice(0, 28000));
+        } catch {
+          return {
+            url: rawUrl,
+            ok: false,
+            faultType: 'error' as const,
+            httpStatus: 0,
+            reason: 'تعذر الوصول إلى السيرفر (السيرفر لا يستجيب)',
+          };
+        }
+      }
 
-        if (isWebsiteHomepageHtmlBrowser(finalUrl, snippet)) {
+      // No Cloudflare Worker configured: probe via AllOrigins JSON or no-cors reachability
+      try {
+        const relayRes = await fetchWithTimeout(
+          `https://api.allorigins.win/get?url=${encodeURIComponent(rawUrl)}`,
+          5000
+        );
+        if (relayRes.ok) {
+          const json = (await relayRes.json()) as {
+            contents?: string;
+            status?: { http_code?: number; url?: string };
+          };
+          const upstreamStatus = Number(json?.status?.http_code || 200);
+          const finalUrl = json?.status?.url || rawUrl;
+          const snippet = String(json?.contents || '').slice(0, 28000);
+          return evaluateFetchedServerResponse(rawUrl, finalUrl, upstreamStatus, '', '', snippet);
+        }
+      } catch {
+        // Fall through to network reachability check
+      }
+
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 4500);
+        try {
+          await fetch(rawUrl, { mode: 'no-cors', signal: controller.signal });
           return {
             url: rawUrl,
-            ok: false,
-            faultType: 'not_video' as const,
-            httpStatus: res.status,
-            reason: 'الرابط يفتح الصفحة الرئيسية لموقع وليس فيديو',
+            ok: true,
+            faultType: null,
+            httpStatus: 200,
+            reason: 'متاح عبر المتصفح',
           };
+        } finally {
+          clearTimeout(timer);
         }
-        if (res.status === 404 || res.status === 410) {
-          return {
-            url: rawUrl,
-            ok: false,
-            faultType: '404' as const,
-            httpStatus: res.status,
-            reason: 'الملف غير موجود (404)',
-          };
-        }
-        if (/sandboxed\s+embed/i.test(snippet)) {
-          return {
-            url: rawUrl,
-            ok: false,
-            faultType: 'sandboxed_embed' as const,
-            httpStatus: res.status,
-            reason: 'رسالة Sandboxed embed',
-          };
-        }
-        return {
-          url: rawUrl,
-          ok: true,
-          faultType: null,
-          httpStatus: res.status,
-          reason: 'السيرفر يعمل بنجاح',
-        };
       } catch {
         return {
           url: rawUrl,
-          ok: true,
-          faultType: null,
-          httpStatus: 200,
-          reason: 'متاح',
+          ok: false,
+          faultType: 'error' as const,
+          httpStatus: 0,
+          reason: 'الرابط معطل أو لا يستجيب',
         };
       }
     })
@@ -1545,35 +1717,13 @@ async function verifyScrapedServersInBrowser(
     return u && !isLikelyNonVideoWebsiteUrl(u, sourceOrigin);
   });
 
-  const customBase = getCustomApiBaseUrl();
-  if (!customBase || preFiltered.length === 0) {
-    return preFiltered.slice(0, 12).map((srv, idx) => ({
-      ...srv,
-      id: srv.id || `srv-ext-${idx + 1}`,
-      name: `سيرفر ${idx + 1}`,
-    }));
-  }
+  if (preFiltered.length === 0) return [];
 
-  const flags = await Promise.all(
-    preFiltered.map(async (srv) => {
-      const target = srv.url || '';
-      if (/\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(target)) return true;
-      try {
-        const res = await fetchWithTimeout(`${customBase}/?url=${encodeURIComponent(target)}`, 4000);
-        const finalUrl = res.headers.get('X-Final-Url') || target;
-        if (isLikelyNonVideoWebsiteUrl(finalUrl, sourceOrigin)) return false;
-        if (res.status === 404 || res.status === 410) return false;
-        const snippet = (await res.text().catch(() => '')).slice(0, 24576);
-        if (isWebsiteHomepageHtmlBrowser(finalUrl, snippet)) return false;
-        return true;
-      } catch {
-        return true;
-      }
-    })
-  );
+  const urls = preFiltered.map((s) => s.url || '');
+  const results = await filterServersInBrowser(urls);
 
   return preFiltered
-    .filter((_, idx) => flags[idx])
+    .filter((_, idx) => results[idx]?.ok !== false)
     .slice(0, 12)
     .map((srv, idx) => ({
       ...srv,
@@ -1582,13 +1732,28 @@ async function verifyScrapedServersInBrowser(
     }));
 }
 
-async function scrapeFullItemInBrowser(mainUrl: string, mainHtml: string): Promise<ScrapedPayload> {
+function canonicalizeCompareUrlBrowser(rawUrl?: string): string {
+  if (!rawUrl) return '';
+  try {
+    const u = new URL(rawUrl.trim());
+    u.hash = '';
+    return u.toString().replace(/\/+$/, '');
+  } catch {
+    return rawUrl.trim().replace(/\/+$/, '');
+  }
+}
+
+async function scrapeFullItemInBrowser(
+  mainUrl: string,
+  mainHtml: string,
+  options?: { skipEpisodeCrawl?: boolean }
+): Promise<ScrapedPayload> {
   const { media, hints } = parseHtmlToMediaWithHintsBrowser(mainHtml, mainUrl);
 
   let watchUrl = hints.watchSubpageUrl;
   let downloadUrl = hints.downloadSubpageUrl;
 
-  if (watchUrl && watchUrl !== mainUrl) {
+  if (watchUrl && canonicalizeCompareUrlBrowser(watchUrl) !== canonicalizeCompareUrlBrowser(mainUrl)) {
     try {
       const u = new URL(watchUrl);
       if (!isBlockedHost(u.hostname)) {
@@ -1660,7 +1825,7 @@ async function scrapeFullItemInBrowser(mainUrl: string, mainHtml: string): Promi
 
   const [filteredServers, fallbackTrailer] = await Promise.all([
     verifyScrapedServersInBrowser(media.servers, mainOrigin),
-    media.trailerUrl
+    media.trailerUrl || options?.skipEpisodeCrawl
       ? Promise.resolve(media.trailerUrl)
       : findTrailerInBrowser({
           title: media.title,
@@ -1673,6 +1838,72 @@ async function scrapeFullItemInBrowser(mainUrl: string, mainHtml: string): Promi
   media.servers = filteredServers;
   media.trailerUrl = fallbackTrailer || '';
   media.downloads = media.downloads.slice(0, 12);
+
+  // Per-Episode Deep Server Extraction so Episode 2, 3, 4... each get their OWN watch servers
+  if (!options?.skipEpisodeCrawl && media.seasons.length > 0 && media.seasons[0].episodes.length > 0) {
+    const canonicalMain = canonicalizeCompareUrlBrowser(mainUrl);
+    const canonicalWatch = canonicalizeCompareUrlBrowser(watchUrl);
+    const episodesList = media.seasons[0].episodes;
+    const EP_CONCURRENCY = getCustomApiBaseUrl() ? 4 : 3;
+
+    for (let i = 0; i < episodesList.length; i += EP_CONCURRENCY) {
+      const chunk = episodesList.slice(i, i + EP_CONCURRENCY);
+      await Promise.all(
+        chunk.map(async (ep) => {
+          const epPageUrl = ep.watchUrl || '';
+          const canonicalEp = canonicalizeCompareUrlBrowser(epPageUrl);
+
+          if (!canonicalEp || canonicalEp === canonicalMain || canonicalEp === canonicalWatch) {
+            ep.servers = filteredServers.map((s, sIdx) => ({
+              ...s,
+              id: `ep-${ep.number}-srv-${sIdx + 1}`,
+              name: `سيرفر ${sIdx + 1}`,
+            }));
+            ep.watchUrl = ep.servers[0]?.url || '';
+            return;
+          }
+
+          try {
+            const parsedEpUrl = new URL(epPageUrl);
+            if (isBlockedHost(parsedEpUrl.hostname)) {
+              ep.servers = [];
+              ep.watchUrl = '';
+              return;
+            }
+            const epRes = await fetchViaBrowserOrCorsRelay(epPageUrl, 8500);
+            if (epRes.ok && epRes.text.length > 100) {
+              const epData = await scrapeFullItemInBrowser(epPageUrl, epRes.text, {
+                skipEpisodeCrawl: true,
+              });
+              ep.servers = epData.servers.map((s, sIdx) => ({
+                ...s,
+                id: `ep-${ep.number}-srv-${sIdx + 1}`,
+                name: `سيرفر ${sIdx + 1}`,
+              }));
+              ep.watchUrl = ep.servers[0]?.url || '';
+              return;
+            }
+          } catch {
+            // Fall through cleanly
+          }
+          ep.servers = [];
+          ep.watchUrl = '';
+        })
+      );
+    }
+
+    if (media.servers.length === 0) {
+      const firstPopulatedEp = episodesList.find((e) => e.servers && e.servers.length > 0);
+      if (firstPopulatedEp?.servers) {
+        media.servers = firstPopulatedEp.servers.map((s, sIdx) => ({
+          ...s,
+          id: `srv-ext-${sIdx + 1}`,
+          name: `سيرفر ${sIdx + 1}`,
+        }));
+      }
+    }
+  }
+
   return media;
 }
 
@@ -1754,6 +1985,7 @@ export async function scrapeSingleInBrowser(params: {
       '';
     const effectiveUrl = (url && url.trim()) || canonicalInHtml || '';
     const extracted = parseHtmlToMediaWithHintsBrowser(rawHtml, effectiveUrl).media;
+    extracted.servers = extracted.servers.filter((s) => s.url && !isLikelyNonVideoWebsiteUrl(s.url));
     if (!extracted.trailerUrl) {
       extracted.trailerUrl = await findTrailerInBrowser({
         title: extracted.title,
@@ -2025,7 +2257,8 @@ function buildFallbackCardItem(card: { url: string; title: string; poster: strin
     backdrop: card.poster,
     tagline: card.title,
     story: card.title,
-    shortUrl: card.url,
+    sourceUrl: card.url,
+    shortUrl: '',
     trailerUrl: '',
     cast: [],
     servers: [],
@@ -2042,35 +2275,205 @@ export async function checkServerUrlsInBrowser(
     { status: 'working' | 'warning' | 'broken'; label: string; detail: string }
   > = {};
 
-  await Promise.all(
-    urls.map(async (u) => {
-      try {
-        const parsed = new URL(u);
-        if (!['http:', 'https:'].includes(parsed.protocol) || isBlockedHost(parsed.hostname)) {
-          results[u] = { status: 'broken', label: 'رابط غير مسموح', detail: 'بروتوكول أو نطاق غير صالح' };
-          return;
-        }
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 5000);
-        try {
-          await fetch(u, { mode: 'no-cors', signal: controller.signal });
-          results[u] = {
-            status: 'working',
-            label: 'متاح (فحص متصفح)',
-            detail: 'النطاق يستجيب للاتصال عبر المتصفح (بدون فحص HTTP عميق)',
-          };
-        } finally {
-          clearTimeout(timer);
-        }
-      } catch {
-        results[u] = {
-          status: 'warning',
-          label: 'تعذر التحقق',
-          detail: 'النطاق لم يستجب أو محجوب عن المتصفح',
-        };
-      }
-    })
-  );
+  const filtered = await filterServersInBrowser(urls);
+  filtered.forEach((entry) => {
+    if (entry.ok) {
+      results[entry.url] = {
+        status: 'working',
+        label: 'يعمل بشكل سليم',
+        detail: entry.reason || 'السيرفر صالح للتشغيل',
+      };
+    } else if (entry.faultType === 'frame_blocked') {
+      results[entry.url] = {
+        status: 'warning',
+        label: 'تحذير تضمين',
+        detail: entry.reason,
+      };
+    } else {
+      results[entry.url] = {
+        status: 'broken',
+        label: entry.faultType === 'not_video' ? 'صفحة موقع وليست فيديو' : 'سيرفر معطل',
+        detail: entry.reason,
+      };
+    }
+  });
 
   return results;
+}
+
+function extractUrlFromServerCandidate(srv?: { url?: string; embedCode?: string; watchUrl?: string }): string {
+  if (!srv) return '';
+  if (srv.embedCode) {
+    const match = srv.embedCode.match(/src\s*=\s*["']([^"']+)["']/i);
+    if (match?.[1] && /^https?:\/\//i.test(match[1].trim())) return match[1].trim();
+    if (/^https?:\/\//i.test(srv.embedCode.trim())) return srv.embedCode.trim();
+  }
+  if (srv.url && /^https?:\/\//i.test(srv.url.trim())) return srv.url.trim();
+  if (srv.watchUrl && /^https?:\/\//i.test(srv.watchUrl.trim())) return srv.watchUrl.trim();
+  return '';
+}
+
+async function runFilterServersUnified(urls: string[]): Promise<Record<string, ServerFilterEntryResult>> {
+  const uniqueUrls = Array.from(new Set(urls.map((u) => u.trim()).filter((u) => /^https?:\/\//i.test(u))));
+  const resultMap: Record<string, ServerFilterEntryResult> = {};
+  if (uniqueUrls.length === 0) return resultMap;
+
+  for (let i = 0; i < uniqueUrls.length; i += 45) {
+    const chunk = uniqueUrls.slice(i, i + 45);
+    let backendResults: ServerFilterEntryResult[] | null = null;
+    try {
+      const response = await fetch(resolveApiEndpoint('/api/filter-servers'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls: chunk }),
+      });
+      const ct = response.headers.get('content-type') || '';
+      if (response.ok && ct.includes('application/json')) {
+        const json = (await response.json()) as {
+          ok?: boolean;
+          results?: ServerFilterEntryResult[];
+        };
+        if (json.ok && Array.isArray(json.results)) {
+          backendResults = json.results;
+        }
+      }
+    } catch {
+      // Static hosting -> fall back to browser/Worker filter
+    }
+
+    const entries = backendResults || (await filterServersInBrowser(chunk));
+    entries.forEach((entry) => {
+      if (entry && entry.url) {
+        resultMap[entry.url] = entry;
+      }
+    });
+  }
+
+  return resultMap;
+}
+
+export async function verifyAndFilterItemServers(item: MediaItem): Promise<{
+  cleanedItem: MediaItem;
+  removedCount: number;
+  removedReasons: string[];
+  totalValidServers: number;
+}> {
+  const allUrls: string[] = [];
+
+  (item.servers || []).forEach((s) => {
+    const u = extractUrlFromServerCandidate(s);
+    if (u) allUrls.push(u);
+  });
+
+  (item.seasons || []).forEach((season) => {
+    (season.episodes || []).forEach((ep) => {
+      (ep.servers || []).forEach((s) => {
+        const u = extractUrlFromServerCandidate(s);
+        if (u) allUrls.push(u);
+      });
+      const epU = extractUrlFromServerCandidate(ep);
+      if (epU) allUrls.push(epU);
+    });
+  });
+
+  const filterMap = await runFilterServersUnified(allUrls);
+  let removedCount = 0;
+  const removedReasons: string[] = [];
+
+  const isHealthyServer = (srv: { url?: string; embedCode?: string; watchUrl?: string }): boolean => {
+    const u = extractUrlFromServerCandidate(srv);
+    if (!u || isLikelyNonVideoWebsiteUrl(u)) {
+      if (u || srv.url || srv.embedCode || srv.watchUrl) {
+        removedCount++;
+        removedReasons.push('رابط موقع أو فارغ');
+      }
+      return false;
+    }
+    const status = filterMap[u];
+    if (status && !status.ok) {
+      removedCount++;
+      if (status.reason && !removedReasons.includes(status.reason)) {
+        removedReasons.push(status.reason);
+      }
+      return false;
+    }
+    return true;
+  };
+
+  let cleanedRootServers = (item.servers || [])
+    .filter((s) => isHealthyServer(s))
+    .map((s, idx) => ({
+      ...s,
+      id: s.id || `srv-${Date.now()}-${idx + 1}`,
+      name: `سيرفر ${idx + 1}`,
+    }));
+
+  const cleanedSeasons = (item.seasons || []).map((season) => ({
+    ...season,
+    episodes: (season.episodes || []).map((ep) => {
+      const validEpServers = (ep.servers || [])
+        .filter((s) => isHealthyServer(s))
+        .map((s, idx) => ({
+          ...s,
+          id: s.id || `ep-${ep.number}-srv-${idx + 1}`,
+          name: `سيرفر ${idx + 1}`,
+        }));
+
+      let validWatchUrl = ep.watchUrl || '';
+      let validEmbedCode = ep.embedCode || '';
+      const epSingleUrl = extractUrlFromServerCandidate({ watchUrl: validWatchUrl, embedCode: validEmbedCode });
+      if (epSingleUrl && (isLikelyNonVideoWebsiteUrl(epSingleUrl) || (filterMap[epSingleUrl] && !filterMap[epSingleUrl].ok))) {
+        if (validEpServers.length === 0) {
+          removedCount++;
+        }
+        validWatchUrl = '';
+        validEmbedCode = '';
+      }
+
+      if (!validWatchUrl && validEpServers[0]?.url) {
+        validWatchUrl = validEpServers[0].url;
+      }
+
+      return {
+        ...ep,
+        watchUrl: validWatchUrl,
+        embedCode: validEmbedCode,
+        servers: validEpServers,
+      };
+    }),
+  }));
+
+  if (cleanedRootServers.length === 0 && cleanedSeasons.length > 0) {
+    const firstValidEp = cleanedSeasons[0].episodes.find((ep) => ep.servers && ep.servers.length > 0);
+    if (firstValidEp?.servers) {
+      cleanedRootServers = firstValidEp.servers.map((s, idx) => ({
+        ...s,
+        id: `srv-${Date.now()}-${idx + 1}`,
+        name: `سيرفر ${idx + 1}`,
+      }));
+    }
+  }
+
+  const totalEpServers = cleanedSeasons.reduce(
+    (sum, season) =>
+      sum +
+      season.episodes.reduce(
+        (eSum, ep) =>
+          eSum +
+          (ep.servers?.length || (extractUrlFromServerCandidate({ watchUrl: ep.watchUrl, embedCode: ep.embedCode }) ? 1 : 0)),
+        0
+      ),
+    0
+  );
+
+  return {
+    cleanedItem: {
+      ...item,
+      servers: cleanedRootServers,
+      seasons: cleanedSeasons,
+    },
+    removedCount,
+    removedReasons,
+    totalValidServers: cleanedRootServers.length + totalEpServers,
+  };
 }

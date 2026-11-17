@@ -21,6 +21,11 @@ import { CATALOG_ITEMS } from './data/catalog';
 import { FALLBACK_BACKDROP, FALLBACK_POSTER, resolveMediaAssetUrl } from './lib/mediaFilters';
 import { loadStoredPlayerTheme, saveStoredPlayerTheme } from './lib/playerTheme';
 import {
+  findMediaByRouteKey,
+  getAppBasePrefix,
+  readWatchRouteFromLocation,
+} from './lib/permalink';
+import {
   auth,
   checkIsAdminUser,
   db,
@@ -69,25 +74,25 @@ const STORAGE_WATCHLIST = 'moov_watchlist_ids';
 const STORAGE_DISMISSED_STARTERS = 'rahaltv_dismissed_starters';
 const STORAGE_STARTER_CLEARED = 'rahaltv_starter_cleared';
 
-const getBasePrefix = () => {
-  const base = import.meta.env.BASE_URL || '/';
-  return base === '/' ? '' : base.replace(/\/+$/, '');
-};
-
 const isAdminPath = () => {
   if (typeof window === 'undefined') return false;
   const { pathname, hash } = window.location;
   if (hash.startsWith('#/admin')) return true;
-  const basePrefix = getBasePrefix();
+  const basePrefix = getAppBasePrefix();
   const normalizedPath = pathname.replace(/\/+$/, '');
   return normalizedPath === '/admin' || normalizedPath === `${basePrefix}/admin`;
 };
 
 export default function App() {
-  const [view, setView] = useState<'home' | 'archive' | 'single' | 'admin'>(() =>
-    isAdminPath() ? 'admin' : 'home'
-  );
+  const [view, setView] = useState<'home' | 'archive' | 'single' | 'admin'>(() => {
+    if (isAdminPath()) return 'admin';
+    if (readWatchRouteFromLocation().watchKey) return 'single';
+    return 'home';
+  });
   const [selectedMediaId, setSelectedMediaId] = useState<string>(CATALOG_ITEMS[0].id);
+  const [routeEpisode, setRouteEpisode] = useState<number | undefined>(() => {
+    return readWatchRouteFromLocation().episode || undefined;
+  });
   const [openDownloadsOnSingle, setOpenDownloadsOnSingle] = useState(false);
   const [filters, setFilters] = useState<CatalogFilterState>(DEFAULT_FILTERS);
 
@@ -149,22 +154,50 @@ export default function App() {
     activeCatalog.find((item) => item.id === selectedMediaId) || activeCatalog[0] || null;
   const hasDismissedStarters = starterCleared || dismissedStarterIds.length > 0;
 
-  // Sync browser Back/Forward & hash navigation with /admin standalone route
+  // Sync browser Back/Forward, deep-linked ?watch=<slug> URLs & /admin route
   useEffect(() => {
-    const handleRouteChange = () => {
+    const syncFromLocation = () => {
       if (isAdminPath()) {
         setView('admin');
-      } else {
-        setView((curr) => (curr === 'admin' ? 'home' : curr));
+        return;
       }
+      const { watchKey, episode } = readWatchRouteFromLocation();
+      if (watchKey) {
+        const matched = findMediaByRouteKey(activeCatalog, watchKey);
+        if (matched) {
+          setSelectedMediaId(matched.id);
+          setRouteEpisode(episode || undefined);
+          setView('single');
+          return;
+        }
+        if (firestoreCatalog.length > 0) {
+          // URL points to an unknown slug after catalog loaded
+          setView('home');
+        }
+        return;
+      }
+      setView((curr) => (curr === 'admin' || curr === 'single' ? 'home' : curr));
     };
-    window.addEventListener('popstate', handleRouteChange);
-    window.addEventListener('hashchange', handleRouteChange);
+
+    syncFromLocation();
+    window.addEventListener('popstate', syncFromLocation);
+    window.addEventListener('hashchange', syncFromLocation);
     return () => {
-      window.removeEventListener('popstate', handleRouteChange);
-      window.removeEventListener('hashchange', handleRouteChange);
+      window.removeEventListener('popstate', syncFromLocation);
+      window.removeEventListener('hashchange', syncFromLocation);
     };
-  }, []);
+  }, [activeCatalog, firestoreCatalog.length]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (view === 'admin') {
+      document.title = `إدارة ${siteSettings.siteName} — لوحة التحكم`;
+    } else if (view === 'single' && selectedMedia) {
+      document.title = `${selectedMedia.title} — ${siteSettings.siteName}`;
+    } else {
+      document.title = `${siteSettings.siteName} — افلام ومسلسلات بجودة عالية بدون تقطيع`;
+    }
+  }, [view, selectedMedia, siteSettings.siteName]);
 
   useEffect(() => {
     try {
@@ -394,18 +427,30 @@ export default function App() {
 
   const pushPathIfNeeded = (targetPath: '/' | '/admin') => {
     if (typeof window === 'undefined') return;
-    const basePrefix = getBasePrefix();
+    const basePrefix = getAppBasePrefix();
     if (basePrefix) {
-      // Under subpath hosting (e.g. GitHub Pages /RahaalTV-v1/), use hash route for /admin so reloads never 404
       const desiredUrl = targetPath === '/admin' ? `${basePrefix}/#/admin` : `${basePrefix}/`;
-      const currentUrl = `${window.location.pathname}${window.location.hash}`;
+      const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
       if (currentUrl !== desiredUrl) {
         window.history.pushState({}, '', desiredUrl);
       }
       return;
     }
-    if (window.location.pathname !== targetPath || window.location.hash) {
+    const currentFull = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (currentFull !== targetPath) {
       window.history.pushState({}, '', targetPath);
+    }
+  };
+
+  const pushWatchRoute = (item: MediaItem, episodeNumber?: number) => {
+    if (typeof window === 'undefined') return;
+    const basePrefix = getAppBasePrefix();
+    const watchSlug = encodeURIComponent((item.slug || item.id).trim());
+    const epPart = episodeNumber && episodeNumber > 1 ? `&ep=${episodeNumber}` : '';
+    const desiredUrl = `${basePrefix}/?watch=${watchSlug}${epPart}`;
+    const currentFull = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (currentFull !== desiredUrl) {
+      window.history.pushState({}, '', desiredUrl);
     }
   };
 
@@ -417,14 +462,16 @@ export default function App() {
 
   const navigateHome = () => {
     pushPathIfNeeded('/');
+    setRouteEpisode(undefined);
     setFilters(DEFAULT_FILTERS);
     setView('home');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleSelectMedia = (item: MediaItem, openDownloads = false) => {
-    pushPathIfNeeded('/');
+    pushWatchRoute(item);
     setSelectedMediaId(item.id);
+    setRouteEpisode(undefined);
     setOpenDownloadsOnSingle(openDownloads);
     setView('single');
     if (!openDownloads) {
@@ -434,6 +481,7 @@ export default function App() {
 
   const handleApplyFilter = (partial: Partial<CatalogFilterState>) => {
     pushPathIfNeeded('/');
+    setRouteEpisode(undefined);
     setFilters({ ...DEFAULT_FILTERS, ...partial });
     setView('archive');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -623,6 +671,7 @@ export default function App() {
           <SingleDetailView
             catalog={activeCatalog}
             item={selectedMedia}
+            initialEpisode={routeEpisode}
             initialOpenDownloads={openDownloadsOnSingle}
             onSelectMedia={handleSelectMedia}
             onApplyFilter={handleApplyFilter}

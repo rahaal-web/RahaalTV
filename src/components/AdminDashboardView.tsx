@@ -60,6 +60,11 @@ import {
   updateVisitorRequestInFirestore,
 } from '../lib/firebase';
 import {
+  buildDedicatedMediaUrl,
+  generateCleanSlug,
+  resolveDisplayShortUrl,
+} from '../lib/permalink';
+import {
   checkServerUrlsInBrowser,
   CLOUDFLARE_WORKER_SOURCE,
   findTrailerInBrowser,
@@ -70,6 +75,7 @@ import {
   scrapeSingleInBrowser,
   scrapeSiteInBrowser,
   setCustomApiBaseUrl,
+  verifyAndFilterItemServers,
 } from '../lib/clientScraper';
 import {
   DEFAULT_PLAYER_THEME,
@@ -209,7 +215,7 @@ function createEmptyMedia(): MediaItem {
     backdrop: ASSETS.heroBackdrop,
     tagline: '',
     story: '',
-    shortUrl: `https://rahaltv.com/${id}`,
+    shortUrl: buildDedicatedMediaUrl({ id, slug: id }),
     trailerUrl: '',
     trailerLabel: 'الإعلان الرسمي المترجم',
     trailerDuration: '02:15',
@@ -241,11 +247,56 @@ function createEmptyMedia(): MediaItem {
   };
 }
 
+function sanitizeImportedEpisode(ep: EpisodeItem, fallbackQuality: string): EpisodeItem {
+  const cleanEpServers = renumberServers(
+    (ep.servers || []).filter((srv) => {
+      const resolved = resolveWatchServerUrl(srv);
+      return Boolean(resolved && !isLikelyNonVideoWebsiteUrl(resolved));
+    })
+  );
+  const rawWatch = (ep.watchUrl || '').trim();
+  const safeWatch =
+    rawWatch && !isLikelyNonVideoWebsiteUrl(rawWatch)
+      ? rawWatch
+      : cleanEpServers[0]?.url || '';
+  return {
+    ...ep,
+    quality: ep.quality || fallbackQuality || 'WEB-DL',
+    watchUrl: safeWatch,
+    embedCode: (ep.embedCode || cleanEpServers[0]?.embedCode || '').trim(),
+    servers: cleanEpServers,
+  };
+}
+
 function scrapedToMediaItem(scraped: ScrapedPayload, indexOffset = 0): MediaItem {
   const id = `imported-${Date.now()}-${indexOffset}-${Math.random().toString(36).slice(2, 6)}`;
+  const slug = generateCleanSlug(scraped.englishTitle, scraped.title, id);
+  const cleanSeasons: SeasonItem[] = (scraped.seasons || []).map((season) => ({
+    ...season,
+    episodes: (season.episodes || []).map((ep) =>
+      sanitizeImportedEpisode(ep, scraped.quality || 'WEB-DL')
+    ),
+  }));
+
+  let cleanRootServers = renumberServers(
+    (scraped.servers || []).filter((srv) => {
+      const resolved = resolveWatchServerUrl(srv);
+      return Boolean(resolved && !isLikelyNonVideoWebsiteUrl(resolved));
+    })
+  );
+
+  if (cleanRootServers.length === 0 && cleanSeasons[0]?.episodes?.[0]?.servers?.length) {
+    cleanRootServers = renumberServers(
+      cleanSeasons[0].episodes[0].servers.map((srv, idx) => ({
+        ...srv,
+        id: srv.id || `srv-ep1-${Date.now()}-${idx}`,
+      }))
+    );
+  }
+
   return {
     id,
-    slug: id,
+    slug,
     title: scraped.title || 'عمل مستورد جديد',
     englishTitle: scraped.englishTitle || scraped.title || 'Imported Title',
     kind: scraped.kind || 'movie',
@@ -267,28 +318,14 @@ function scrapedToMediaItem(scraped: ScrapedPayload, indexOffset = 0): MediaItem
     backdrop: scraped.backdrop || scraped.poster || ASSETS.heroBackdrop,
     tagline: scraped.tagline || scraped.story?.slice(0, 120) || '',
     story: scraped.story || scraped.title,
-    shortUrl: scraped.shortUrl || `https://rahaltv.com/${id}`,
+    shortUrl: buildDedicatedMediaUrl({ id, slug }),
     trailerUrl: scraped.trailerUrl || '',
     trailerLabel: `إعلان ${scraped.title}`,
     trailerDuration: '02:00',
     cast: scraped.cast?.length ? scraped.cast : [{ name: 'طاقم العمل', role: 'تمثيل', initials: 'RT' }],
-    seasons: scraped.seasons || [],
+    seasons: cleanSeasons,
     franchiseIds: [],
-    servers:
-      scraped.servers?.length > 0
-        ? renumberServers(scraped.servers)
-        : [
-            {
-              id: `srv-${Date.now()}`,
-              name: 'سيرفر 1',
-              mode: 'url',
-              url: '',
-              embedCode: '',
-              quality: scraped.quality || '1080p',
-              speed: 'سريع',
-              tag: 'HD',
-            },
-          ],
+    servers: cleanRootServers,
     downloads:
       scraped.downloads?.length > 0
         ? scraped.downloads
@@ -344,6 +381,7 @@ export function AdminDashboardView({
   const [categoriesText, setCategoriesText] = useState('');
   const [genresText, setGenresText] = useState('');
   const [quickGenCount, setQuickGenCount] = useState(10);
+  const [expandedEpisodeKey, setExpandedEpisodeKey] = useState<string | null>(null);
 
   // External Content Scraper states (Single Item)
   const [scrapeMode, setScrapeMode] = useState<'url' | 'html'>('url');
@@ -507,9 +545,13 @@ export function AdminDashboardView({
       (se.episodes || []).forEach((ep) => {
         const u = resolveWatchServerUrl(ep);
         if (/^https?:\/\//i.test(u)) urls.push(u);
+        (ep.servers || []).forEach((es) => {
+          const eu = resolveWatchServerUrl(es);
+          if (/^https?:\/\//i.test(eu)) urls.push(eu);
+        });
       });
     });
-    return urls.join('|');
+    return Array.from(new Set(urls)).slice(0, 45).join('|');
   }, [editingItem]);
 
   useEffect(() => {
@@ -677,15 +719,56 @@ export function AdminDashboardView({
       .map((s) => s.trim())
       .filter(Boolean);
 
-    const cleanedServers: StreamServer[] = (editingItem.servers || []).map((srv, idx) => ({
-      id: srv.id || `srv-${Date.now()}-${idx}`,
-      name: `سيرفر ${idx + 1}`,
-      mode: srv.mode || (srv.embedCode ? 'embed' : 'url'),
-      url: (srv.url || '').trim(),
-      embedCode: (srv.embedCode || '').trim(),
-      quality: (srv.quality || editingItem.quality || '1080p').trim(),
-      speed: (srv.speed || 'سريع').trim(),
-      tag: (srv.tag || 'HD').trim(),
+    const slug = generateCleanSlug(
+      editingItem.slug || editingItem.englishTitle,
+      editingItem.title,
+      editingItem.id
+    );
+
+    const cleanedServers: StreamServer[] = renumberServers(
+      (editingItem.servers || [])
+        .map((srv, idx) => ({
+          id: srv.id || `srv-${Date.now()}-${idx}`,
+          name: `سيرفر ${idx + 1}`,
+          mode: srv.mode || (srv.embedCode ? 'embed' : 'url'),
+          url: (srv.url || '').trim(),
+          embedCode: (srv.embedCode || '').trim(),
+          quality: (srv.quality || editingItem.quality || '1080p').trim(),
+          speed: (srv.speed || 'سريع').trim(),
+          tag: (srv.tag || 'HD').trim(),
+        }))
+        .filter((srv) => Boolean(resolveWatchServerUrl(srv)))
+    );
+
+    const cleanedSeasons: SeasonItem[] = (editingItem.seasons || []).map((season) => ({
+      ...season,
+      episodes: (season.episodes || []).map((ep) => {
+        const cleanEpServers = renumberServers(
+          (ep.servers || [])
+            .map((srv, idx) => ({
+              id: srv.id || `epsrv-${Date.now()}-${ep.number}-${idx}`,
+              name: `سيرفر ${idx + 1}`,
+              mode: srv.mode || (srv.embedCode ? 'embed' : 'url'),
+              url: (srv.url || '').trim(),
+              embedCode: (srv.embedCode || '').trim(),
+              quality: (srv.quality || ep.quality || editingItem.quality || '1080p').trim(),
+              speed: (srv.speed || 'سريع').trim(),
+              tag: (srv.tag || 'HD').trim(),
+            }))
+            .filter((srv) => Boolean(resolveWatchServerUrl(srv)))
+        );
+        const rawWatch = (ep.watchUrl || '').trim();
+        const safeWatch =
+          rawWatch && !isLikelyNonVideoWebsiteUrl(rawWatch)
+            ? rawWatch
+            : cleanEpServers[0]?.url || '';
+        return {
+          ...ep,
+          watchUrl: safeWatch,
+          embedCode: (ep.embedCode || '').trim(),
+          servers: cleanEpServers,
+        };
+      }),
     }));
 
     const cleanedDownloads: DownloadMirror[] = (editingItem.downloads || []).map((dl, idx) => ({
@@ -716,10 +799,13 @@ export function AdminDashboardView({
 
     return {
       ...editingItem,
+      slug,
+      shortUrl: buildDedicatedMediaUrl({ id: editingItem.id, slug }),
       categories: parsedCats.length ? parsedCats : ['افلام'],
       genres: parsedGenres.length ? parsedGenres : ['دراما'],
       tagline: editingItem.tagline || editingItem.story.slice(0, 120),
       servers: cleanedServers,
+      seasons: cleanedSeasons,
       downloads: cleanedDownloads,
       cast: cleanedCast,
     };
@@ -730,12 +816,26 @@ export function AdminDashboardView({
     if (!user || !finalItem) return;
     setBusyAction(true);
     try {
+      const verification = await verifyAndFilterItemServers(finalItem);
+      if (!verification.cleanedItem.comingSoon && verification.totalValidServers === 0) {
+        setEditingItem(verification.cleanedItem);
+        setPreviewModalState(null);
+        onNotify(
+          'تعذر النشر: جميع السيرفرات المضافة تفتح صفحات مواقع أو معطلة — أضف سيرفر فيديو شغالاً أو فعّل خيار قريباً'
+        );
+        return;
+      }
+
       const existsInDb = isFirestoreSeeded && !isCreatingNew;
-      await saveMediaToFirestore(finalItem, user.uid, !existsInDb);
+      await saveMediaToFirestore(verification.cleanedItem, user.uid, !existsInDb);
+      const removedNote =
+        verification.removedCount > 0
+          ? ` (تم منع واستبعاد ${verification.removedCount} سيرفر معطل أو صفحة موقع تلقائياً)`
+          : '';
       onNotify(
-        isCreatingNew
+        (isCreatingNew
           ? 'تم نشر العمل الجديد وحفظ جميع السيرفرات والحلقات في قاعدة البيانات'
-          : 'تم تحديث بيانات العمل في قاعدة البيانات بنجاح'
+          : 'تم تحديث بيانات العمل في قاعدة البيانات بنجاح') + removedNote
       );
       setPreviewModalState(null);
       setEditingItem(null);
@@ -825,12 +925,24 @@ export function AdminDashboardView({
 
       setScrapedResult({
         ...data.extracted,
+        shortUrl: '',
         servers: renumberServers(data.extracted.servers || []),
       });
       setEditingScrapedServerIdx(null);
-      const extractedUrls = (data.extracted.servers || [])
-        .map((s) => resolveWatchServerUrl(s))
-        .filter((u) => /^https?:\/\//i.test(u));
+      const extractedUrlsSet = new Set<string>();
+      (data.extracted.servers || []).forEach((s) => {
+        const u = resolveWatchServerUrl(s);
+        if (/^https?:\/\//i.test(u)) extractedUrlsSet.add(u);
+      });
+      (data.extracted.seasons || []).forEach((se) => {
+        (se.episodes || []).forEach((ep) => {
+          (ep.servers || []).forEach((es) => {
+            const eu = resolveWatchServerUrl(es);
+            if (/^https?:\/\//i.test(eu)) extractedUrlsSet.add(eu);
+          });
+        });
+      });
+      const extractedUrls = Array.from(extractedUrlsSet).slice(0, 40);
       if (extractedUrls.length > 0) {
         void checkServerUrls(extractedUrls, true);
       }
@@ -847,8 +959,30 @@ export function AdminDashboardView({
     setBusyAction(true);
     try {
       const item = scrapedToMediaItem(scrapedResult);
-      await saveMediaToFirestore(item, user.uid, true);
-      onNotify(`تم نشر "${item.title}" مباشرة في قاعدة البيانات!`);
+      const verification = await verifyAndFilterItemServers(item);
+
+      if (verification.totalValidServers === 0) {
+        setScrapedResult((prev) =>
+          prev
+            ? {
+                ...prev,
+                servers: verification.cleanedItem.servers,
+                seasons: verification.cleanedItem.seasons || prev.seasons || [],
+              }
+            : prev
+        );
+        onNotify(
+          'تعذر النشر: جميع السيرفرات المستخرجة تفتح مواقع وليست فيديو أو لا تعمل حالياً — أضف سيرفراً شغالاً أولاً'
+        );
+        return;
+      }
+
+      await saveMediaToFirestore(verification.cleanedItem, user.uid, true);
+      const removedNote =
+        verification.removedCount > 0
+          ? ` (تم حظر ${verification.removedCount} سيرفر معطل أو صفحة موقع)`
+          : '';
+      onNotify(`تم نشر "${verification.cleanedItem.title}" برابط مخصص في قاعدة البيانات!${removedNote}`);
       setActiveTab('catalog');
     } catch {
       onNotify('تعذر الحفظ المباشر — جرّب فتح العمل في المحرر ومراجعة الحقول.');
@@ -977,11 +1111,59 @@ export function AdminDashboardView({
 
     setBusyAction(true);
     try {
-      const prepared = chosen.map((item, idx) => scrapedToMediaItem(item, idx));
-      const count = await bulkSaveMediaToFirestore(prepared, user.uid);
-      onNotify(`تم نشر وحفظ ${count} عملًا في قاعدة بيانات Firestore دفعة واحدة!`);
-      setSiteScrapedItems((prev) => prev.filter((i) => !i.selected));
-      setActiveTab('catalog');
+      const prepared = chosen.map((item, idx) => ({
+        tempKey: item.tempKey,
+        media: scrapedToMediaItem(item, idx),
+      }));
+
+      const readyItems: MediaItem[] = [];
+      const publishedKeys = new Set<string>();
+      let skippedCount = 0;
+      let strippedServersCount = 0;
+
+      for (let i = 0; i < prepared.length; i += 4) {
+        const batch = prepared.slice(i, i + 4);
+        const results = await Promise.all(
+          batch.map(async (entry) => ({
+            tempKey: entry.tempKey,
+            verification: await verifyAndFilterItemServers(entry.media),
+          }))
+        );
+        for (const res of results) {
+          strippedServersCount += res.verification.removedCount;
+          if (
+            res.verification.totalValidServers > 0 ||
+            res.verification.cleanedItem.comingSoon
+          ) {
+            readyItems.push(res.verification.cleanedItem);
+            publishedKeys.add(res.tempKey);
+          } else {
+            skippedCount++;
+          }
+        }
+      }
+
+      if (readyItems.length === 0) {
+        onNotify(
+          'تعذر النشر: جميع الأعمال المحددة لا تحتوي على سيرفرات فيديو شغالة (تم حظر صفحات المواقع والسيرفرات المعطلة)'
+        );
+        return;
+      }
+
+      const count = await bulkSaveMediaToFirestore(readyItems, user.uid);
+      const extraNotes: string[] = [];
+      if (strippedServersCount > 0) {
+        extraNotes.push(`استُبعد ${strippedServersCount} سيرفر معطل/موقع`);
+      }
+      if (skippedCount > 0) {
+        extraNotes.push(`تُخطي ${skippedCount} عمل بدون سيرفرات شغالة`);
+      }
+      const noteSuffix = extraNotes.length > 0 ? ` (${extraNotes.join('، ')})` : '';
+      onNotify(`تم نشر وحفظ ${count} عملًا في قاعدة بيانات Firestore دفعة واحدة!${noteSuffix}`);
+      setSiteScrapedItems((prev) => prev.filter((i) => !publishedKeys.has(i.tempKey)));
+      if (skippedCount === 0) {
+        setActiveTab('catalog');
+      }
     } catch {
       onNotify('حدث خطأ أثناء الحفظ الجماعي في Firestore');
     } finally {
@@ -1295,6 +1477,76 @@ export function AdminDashboardView({
     });
   };
 
+  const handleStripBrokenScrapedServers = () => {
+    if (!scrapedResult) return;
+    const keepServer = (srv: StreamServer) => {
+      const url = resolveWatchServerUrl(srv);
+      if (!url || isLikelyNonVideoWebsiteUrl(url)) return false;
+      const st = serverStatuses[url];
+      if (st?.status === 'broken') return false;
+      return true;
+    };
+
+    const nextRoot = renumberServers((scrapedResult.servers || []).filter(keepServer));
+    const nextSeasons = (scrapedResult.seasons || []).map((se) => ({
+      ...se,
+      episodes: (se.episodes || []).map((ep) => {
+        const filteredEpServers = renumberServers((ep.servers || []).filter(keepServer));
+        return {
+          ...ep,
+          servers: filteredEpServers,
+          watchUrl:
+            ep.watchUrl && !isLikelyNonVideoWebsiteUrl(ep.watchUrl) && serverStatuses[ep.watchUrl]?.status !== 'broken'
+              ? ep.watchUrl
+              : filteredEpServers[0]?.url || '',
+        };
+      }),
+    }));
+
+    const removedRoot = (scrapedResult.servers || []).length - nextRoot.length;
+    setScrapedResult({
+      ...scrapedResult,
+      servers: nextRoot,
+      seasons: nextSeasons,
+    });
+    setEditingScrapedServerIdx(null);
+    onNotify(
+      removedRoot > 0
+        ? `تم حذف ${removedRoot} سيرفر معطل أو صفحة موقع وتحديث الترقيم تلقائياً`
+        : 'تمت تنقية السيرفرات وتنظيف الحلقات'
+    );
+  };
+
+  const handleStripBrokenEditorServers = () => {
+    if (!editingItem) return;
+    const keepServer = (srv: StreamServer) => {
+      const url = resolveWatchServerUrl(srv);
+      if (!url || isLikelyNonVideoWebsiteUrl(url)) return false;
+      const st = serverStatuses[url];
+      if (st?.status === 'broken') return false;
+      return true;
+    };
+    const nextRoot = renumberServers((editingItem.servers || []).filter(keepServer));
+    const nextSeasons = (editingItem.seasons || []).map((se) => ({
+      ...se,
+      episodes: (se.episodes || []).map((ep) => ({
+        ...ep,
+        servers: renumberServers((ep.servers || []).filter(keepServer)),
+      })),
+    }));
+    const removedCount = (editingItem.servers || []).length - nextRoot.length;
+    setEditingItem({
+      ...editingItem,
+      servers: nextRoot,
+      seasons: nextSeasons,
+    });
+    onNotify(
+      removedCount > 0
+        ? `تم حذف ${removedCount} سيرفر معطل أو صفحة موقع`
+        : 'تم تنظيف السيرفرات وإعادة ترقيمها'
+    );
+  };
+
   const handleAutoFetchTrailerForScraped = async () => {
     if (!scrapedResult || fetchingTrailer) return;
     setFetchingTrailer(true);
@@ -1457,6 +1709,48 @@ export function AdminDashboardView({
       episodes: seasons[seasonIdx].episodes.filter((_, i) => i !== epIdx),
     };
     setEditingItem({ ...editingItem, seasons });
+  };
+
+  const addEpisodeServerRow = (seasonIdx: number, epIdx: number) => {
+    if (!editingItem) return;
+    const seasons = [...(editingItem.seasons || [])];
+    const ep = seasons[seasonIdx].episodes[epIdx];
+    const current = ep.servers || [];
+    const nextSrv: StreamServer = {
+      id: `epsrv-${Date.now()}-${current.length + 1}`,
+      name: `سيرفر ${current.length + 1}`,
+      mode: 'url',
+      url: '',
+      embedCode: '',
+      quality: ep.quality || editingItem.quality || '1080p',
+      speed: 'سريع',
+      tag: 'HD',
+    };
+    updateEpisode(seasonIdx, epIdx, {
+      servers: renumberServers([...current, nextSrv]),
+    });
+  };
+
+  const updateEpisodeServerRow = (
+    seasonIdx: number,
+    epIdx: number,
+    srvIdx: number,
+    patch: Partial<StreamServer>
+  ) => {
+    if (!editingItem) return;
+    const ep = editingItem.seasons?.[seasonIdx]?.episodes[epIdx];
+    if (!ep) return;
+    const current = [...(ep.servers || [])];
+    current[srvIdx] = { ...current[srvIdx], ...patch, name: `سيرفر ${srvIdx + 1}` };
+    updateEpisode(seasonIdx, epIdx, { servers: current });
+  };
+
+  const removeEpisodeServerRow = (seasonIdx: number, epIdx: number, srvIdx: number) => {
+    if (!editingItem) return;
+    const ep = editingItem.seasons?.[seasonIdx]?.episodes[epIdx];
+    if (!ep) return;
+    const remaining = (ep.servers || []).filter((_, i) => i !== srvIdx);
+    updateEpisode(seasonIdx, epIdx, { servers: renumberServers(remaining) });
   };
 
   const addCastMember = () => {
@@ -2444,6 +2738,22 @@ export function AdminDashboardView({
                         </h3>
                         <p className="font-latin text-xs text-[#b7c9ef]">{scrapedResult.englishTitle}</p>
 
+                        <div className="rounded-xl bg-[#1a242e]/85 border border-white/10 px-3 py-2 flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[11px] font-bold text-[#f9c400]">
+                            الرابط المخصص للعمل بعد النشر:
+                          </span>
+                          <span className="font-latin text-[11px] text-[#4CAF50] truncate" dir="ltr">
+                            {buildDedicatedMediaUrl({
+                              id: 'preview',
+                              slug: generateCleanSlug(
+                                scrapedResult.englishTitle,
+                                scrapedResult.title,
+                                'work'
+                              ),
+                            })}
+                          </span>
+                        </div>
+
                         <p className="text-xs leading-relaxed text-[#b7c9ef] line-clamp-4">
                           {scrapedResult.story}
                         </p>
@@ -2535,21 +2845,31 @@ export function AdminDashboardView({
                             <Server className="w-4 h-4 text-[#D92321]" />
                             <span>إدارة سيرفرات المشاهدة ({scrapedResult.servers.length})</span>
                           </p>
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
                             {scrapedResult.servers.length > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const urls = scrapedResult.servers
-                                    .map((s) => resolveWatchServerUrl(s))
-                                    .filter((u) => /^https?:\/\//i.test(u));
-                                  void checkServerUrls(urls, true);
-                                }}
-                                className="inline-flex items-center gap-1 rounded-lg bg-[#0c1821] border border-sky-400/30 px-2.5 py-1 text-[11px] font-bold text-sky-300 hover:bg-sky-500/15 cursor-pointer"
-                              >
-                                <RefreshCw className="w-3 h-3" />
-                                <span>فحص</span>
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const urls = scrapedResult.servers
+                                      .map((s) => resolveWatchServerUrl(s))
+                                      .filter((u) => /^https?:\/\//i.test(u));
+                                    void checkServerUrls(urls, true);
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-lg bg-[#0c1821] border border-sky-400/30 px-2.5 py-1 text-[11px] font-bold text-sky-300 hover:bg-sky-500/15 cursor-pointer"
+                                >
+                                  <RefreshCw className="w-3 h-3" />
+                                  <span>فحص</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleStripBrokenScrapedServers}
+                                  className="inline-flex items-center gap-1 rounded-lg bg-[#0c1821] border border-[#D92321]/40 px-2.5 py-1 text-[11px] font-bold text-[#ff8a88] hover:bg-[#D92321]/20 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  <span>حذف المعطل والمواقع</span>
+                                </button>
+                              </>
                             )}
                             <button
                               type="button"
@@ -2755,20 +3075,37 @@ export function AdminDashboardView({
                           )}
                         </div>
 
-                        <div className="rounded-2xl bg-[#1a242e]/80 p-3.5">
-                          <p className="text-xs font-extrabold text-white flex items-center gap-1.5 mb-2">
+                        <div className="rounded-2xl bg-[#1a242e]/80 p-3.5 space-y-2">
+                          <p className="text-xs font-extrabold text-white flex items-center gap-1.5">
                             <Layers className="w-4 h-4 text-[#f9c400]" />
-                            الحلقات وطاقم العمل
+                            <span>الحلقات وطاقم العمل</span>
                           </p>
                           <p className="text-[11px] text-[#b7c9ef]">
                             حلقات مستخرجة:{' '}
                             <strong className="text-white">
                               {scrapedResult.seasons?.[0]?.episodes.length || 0}
                             </strong>
-                            <br />
-                            ممثلون مستخرجون:{' '}
+                            {' • '}
+                            ممثلون:{' '}
                             <strong className="text-white">{scrapedResult.cast.length}</strong>
                           </p>
+                          {(scrapedResult.seasons?.[0]?.episodes.length || 0) > 0 && (
+                            <div className="max-h-32 overflow-y-auto space-y-1 pt-1 border-t border-white/10">
+                              {scrapedResult.seasons![0].episodes.map((ep) => (
+                                <div
+                                  key={ep.number}
+                                  className="flex items-center justify-between text-[10px] text-[#b7c9ef] bg-[#0c1821]/70 rounded-lg px-2 py-1"
+                                >
+                                  <span className="truncate font-bold text-white">
+                                    {ep.title || `الحلقة ${ep.number}`}
+                                  </span>
+                                  <span className="shrink-0 font-bold text-[#4CAF50]">
+                                    {ep.servers?.length || (ep.watchUrl ? 1 : 0)} سيرفر
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -4275,6 +4612,53 @@ export function AdminDashboardView({
                     </div>
                   </div>
 
+                  {/* Dedicated Permalink / Slug Editor */}
+                  <div className="rounded-2xl bg-[#1a242e]/70 border border-white/10 p-3.5 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="text-xs font-bold text-[#f9c400] flex items-center gap-1.5">
+                        <Link2 className="w-3.5 h-3.5" />
+                        <span>الرابط المخصص للفيلم/المسلسل (Slug)</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextSlug = generateCleanSlug(
+                            editingItem.englishTitle,
+                            editingItem.title,
+                            editingItem.id
+                          );
+                          setEditingItem({
+                            ...editingItem,
+                            slug: nextSlug,
+                            shortUrl: buildDedicatedMediaUrl({ id: editingItem.id, slug: nextSlug }),
+                          });
+                        }}
+                        className="inline-flex items-center gap-1 rounded-lg bg-[#0c1821] hover:bg-white/10 border border-white/10 px-2.5 py-1 text-[10px] font-bold text-[#b7c9ef] hover:text-white cursor-pointer"
+                      >
+                        <Wand2 className="w-3 h-3" />
+                        <span>توليد من العنوان تلقائياً</span>
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      dir="ltr"
+                      value={editingItem.slug || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setEditingItem({
+                          ...editingItem,
+                          slug: val,
+                          shortUrl: buildDedicatedMediaUrl({ id: editingItem.id, slug: val }),
+                        });
+                      }}
+                      placeholder="gladiator-ii-2026"
+                      className="font-latin w-full rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-xs text-white focus:border-[#f9c400] focus:outline-none"
+                    />
+                    <p className="font-latin text-[11px] text-[#4CAF50] truncate" dir="ltr">
+                      {resolveDisplayShortUrl(editingItem)}
+                    </p>
+                  </div>
+
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div>
                       <label className="block text-xs font-bold text-[#b7c9ef] mb-1">النوع</label>
@@ -4560,19 +4944,29 @@ export function AdminDashboardView({
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       {(editingItem.servers || []).length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const urls = (editingItem.servers || [])
-                              .map((s) => resolveWatchServerUrl(s))
-                              .filter((u) => /^https?:\/\//i.test(u));
-                            void checkServerUrls(urls, true);
-                          }}
-                          className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-sky-500/20 border border-sky-400/30 px-3.5 py-2 text-xs font-extrabold text-sky-300 cursor-pointer"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5" />
-                          <span>فحص كل السيرفرات الآن</span>
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const urls = (editingItem.servers || [])
+                                .map((s) => resolveWatchServerUrl(s))
+                                .filter((u) => /^https?:\/\//i.test(u));
+                              void checkServerUrls(urls, true);
+                            }}
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-sky-500/20 border border-sky-400/30 px-3.5 py-2 text-xs font-extrabold text-sky-300 cursor-pointer"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            <span>فحص كل السيرفرات الآن</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleStripBrokenEditorServers}
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-[#D92321]/20 border border-[#D92321]/40 px-3.5 py-2 text-xs font-extrabold text-[#ff8a88] cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>حذف السيرفرات المعطلة والمواقع</span>
+                          </button>
+                        </>
                       )}
                       <button
                         type="button"
@@ -4943,70 +5337,167 @@ export function AdminDashboardView({
                               </div>
                             </div>
 
-                            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                              {season.episodes.map((ep, epIdx) => (
-                                <div
-                                  key={epIdx}
-                                  className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center rounded-xl bg-[#0c1821] p-2.5 border border-white/[0.06]"
-                                >
-                                  <input
-                                    type="number"
-                                    min={1}
-                                    value={ep.number}
-                                    onChange={(e) =>
-                                      updateEpisode(sIdx, epIdx, {
-                                        number: Number(e.target.value) || 1,
-                                      })
-                                    }
-                                    className="sm:col-span-1 rounded-lg bg-[#1a242e] px-2 py-1.5 text-center text-xs font-bold text-[#f9c400]"
-                                    aria-label="رقم الحلقة"
-                                  />
-                                  <input
-                                    type="text"
-                                    value={ep.title}
-                                    onChange={(e) =>
-                                      updateEpisode(sIdx, epIdx, { title: e.target.value })
-                                    }
-                                    placeholder="عنوان الحلقة"
-                                    className="sm:col-span-3 rounded-lg bg-[#1a242e] px-2.5 py-1.5 text-xs text-white"
-                                  />
-                                  <input
-                                    type="text"
-                                    value={ep.duration}
-                                    onChange={(e) =>
-                                      updateEpisode(sIdx, epIdx, { duration: e.target.value })
-                                    }
-                                    placeholder="المدة"
-                                    className="sm:col-span-2 rounded-lg bg-[#1a242e] px-2.5 py-1.5 text-xs text-white"
-                                  />
-                                  <div className="sm:col-span-5 flex flex-wrap items-center gap-2">
-                                    <input
-                                      type="text"
-                                      dir="ltr"
-                                      value={ep.embedCode || ep.watchUrl || ''}
-                                      onChange={(e) => {
-                                        const val = e.target.value;
-                                        if (val.includes('<iframe')) {
-                                          updateEpisode(sIdx, epIdx, { embedCode: val, watchUrl: '' });
-                                        } else {
-                                          updateEpisode(sIdx, epIdx, { watchUrl: val, embedCode: '' });
-                                        }
-                                      }}
-                                      placeholder="رابط المشاهدة أو كود <iframe> للحلقة"
-                                      className="font-latin flex-1 min-w-[180px] rounded-lg bg-[#1a242e] px-2.5 py-1.5 text-xs text-white"
-                                    />
-                                    {resolveWatchServerUrl(ep) && renderServerStatusBadge(resolveWatchServerUrl(ep), true)}
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => removeEpisode(sIdx, epIdx)}
-                                    className="sm:col-span-1 inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#D92321] hover:bg-[#D92321] hover:text-white cursor-pointer justify-self-end"
-                                    aria-label="حذف الحلقة"
+                            <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
+                              {season.episodes.map((ep, epIdx) => {
+                                const epKey = `${sIdx}-${epIdx}`;
+                                const isExpanded = expandedEpisodeKey === epKey;
+                                const epServers = ep.servers || [];
+                                return (
+                                  <div
+                                    key={epIdx}
+                                    className="rounded-xl bg-[#0c1821] p-2.5 border border-white/[0.06] space-y-2"
                                   >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              ))}
+                                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center">
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        value={ep.number}
+                                        onChange={(e) =>
+                                          updateEpisode(sIdx, epIdx, {
+                                            number: Number(e.target.value) || 1,
+                                          })
+                                        }
+                                        className="sm:col-span-1 rounded-lg bg-[#1a242e] px-2 py-1.5 text-center text-xs font-bold text-[#f9c400]"
+                                        aria-label="رقم الحلقة"
+                                      />
+                                      <input
+                                        type="text"
+                                        value={ep.title}
+                                        onChange={(e) =>
+                                          updateEpisode(sIdx, epIdx, { title: e.target.value })
+                                        }
+                                        placeholder="عنوان الحلقة"
+                                        className="sm:col-span-3 rounded-lg bg-[#1a242e] px-2.5 py-1.5 text-xs text-white"
+                                      />
+                                      <input
+                                        type="text"
+                                        value={ep.duration}
+                                        onChange={(e) =>
+                                          updateEpisode(sIdx, epIdx, { duration: e.target.value })
+                                        }
+                                        placeholder="المدة"
+                                        className="sm:col-span-2 rounded-lg bg-[#1a242e] px-2.5 py-1.5 text-xs text-white"
+                                      />
+                                      <div className="sm:col-span-4 flex flex-wrap items-center gap-1.5">
+                                        <input
+                                          type="text"
+                                          dir="ltr"
+                                          value={ep.embedCode || ep.watchUrl || ''}
+                                          onChange={(e) => {
+                                            const val = e.target.value;
+                                            if (val.includes('<iframe')) {
+                                              updateEpisode(sIdx, epIdx, { embedCode: val, watchUrl: '' });
+                                            } else {
+                                              updateEpisode(sIdx, epIdx, { watchUrl: val, embedCode: '' });
+                                            }
+                                          }}
+                                          placeholder="رابط الفيديو الأساسي للحلقة"
+                                          className="font-latin flex-1 min-w-[140px] rounded-lg bg-[#1a242e] px-2.5 py-1.5 text-xs text-white"
+                                        />
+                                        {resolveWatchServerUrl(ep) &&
+                                          renderServerStatusBadge(resolveWatchServerUrl(ep), true)}
+                                      </div>
+                                      <div className="sm:col-span-2 flex items-center justify-end gap-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setExpandedEpisodeKey(isExpanded ? null : epKey)
+                                          }
+                                          className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-extrabold cursor-pointer ${
+                                            isExpanded
+                                              ? 'bg-[#D92321] text-white'
+                                              : 'bg-[#1a242e] text-[#4CAF50] hover:bg-[#4CAF50]/20'
+                                          }`}
+                                          title="إدارة سيرفرات هذه الحلقة"
+                                        >
+                                          <Server className="w-3 h-3" />
+                                          <span>سيرفرات ({epServers.length})</span>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => removeEpisode(sIdx, epIdx)}
+                                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[#D92321] hover:bg-[#D92321] hover:text-white cursor-pointer"
+                                          aria-label="حذف الحلقة"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    {isExpanded && (
+                                      <div className="rounded-xl bg-[#1a242e]/85 border border-white/10 p-3 space-y-2">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                          <span className="text-[11px] font-extrabold text-white">
+                                            سيرفرات مشاهدة {ep.title || `الحلقة ${ep.number}`} ({epServers.length})
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={() => addEpisodeServerRow(sIdx, epIdx)}
+                                            className="inline-flex items-center gap-1 rounded-lg bg-[#4CAF50] px-2.5 py-1 text-[10px] font-extrabold text-white cursor-pointer"
+                                          >
+                                            <Plus className="w-3 h-3" />
+                                            <span>إضافة سيرفر للحلقة</span>
+                                          </button>
+                                        </div>
+
+                                        {epServers.length === 0 ? (
+                                          <p className="text-[10px] text-[#b7c9ef]">
+                                            لا توجد سيرفرات منفصلة لهذه الحلقة. اضغط &quot;إضافة سيرفر للحلقة&quot; لإضافة روابط خاصة بها.
+                                          </p>
+                                        ) : (
+                                          <div className="space-y-1.5">
+                                            {epServers.map((esrv, esIdx) => {
+                                              const esUrl = resolveWatchServerUrl(esrv);
+                                              return (
+                                                <div
+                                                  key={esrv.id || esIdx}
+                                                  className="flex flex-wrap items-center gap-2 rounded-lg bg-[#0c1821] p-2 border border-white/5"
+                                                >
+                                                  <span className="rounded bg-[#D92321] px-2 py-0.5 text-[10px] font-black text-white">
+                                                    سيرفر {esIdx + 1}
+                                                  </span>
+                                                  <input
+                                                    type="text"
+                                                    dir="ltr"
+                                                    value={esrv.embedCode || esrv.url || ''}
+                                                    onChange={(e) => {
+                                                      const val = e.target.value;
+                                                      if (val.includes('<iframe')) {
+                                                        updateEpisodeServerRow(sIdx, epIdx, esIdx, {
+                                                          mode: 'embed',
+                                                          embedCode: val,
+                                                          url: '',
+                                                        });
+                                                      } else {
+                                                        updateEpisodeServerRow(sIdx, epIdx, esIdx, {
+                                                          mode: 'url',
+                                                          url: val,
+                                                          embedCode: '',
+                                                        });
+                                                      }
+                                                    }}
+                                                    placeholder="رابط الفيديو أو كود <iframe>"
+                                                    className="font-latin flex-1 min-w-[180px] rounded-md bg-[#1a242e] px-2.5 py-1 text-[11px] text-white"
+                                                  />
+                                                  {esUrl && renderServerStatusBadge(esUrl, true)}
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => removeEpisodeServerRow(sIdx, epIdx, esIdx)}
+                                                    className="rounded p-1 text-[#D92321] hover:bg-[#D92321] hover:text-white cursor-pointer"
+                                                    aria-label="حذف سيرفر الحلقة"
+                                                  >
+                                                    <Trash2 className="w-3 h-3" />
+                                                  </button>
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         ))}

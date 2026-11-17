@@ -13,6 +13,7 @@ export interface EpisodeItem {
   quality: string;
   watchUrl?: string;
   embedCode?: string;
+  servers?: StreamServer[];
 }
 
 export interface SeasonItem {

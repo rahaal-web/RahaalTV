@@ -19,12 +19,14 @@ import {
   Users,
 } from 'lucide-react';
 import { FALLBACK_BACKDROP, FALLBACK_POSTER, handleBackdropError, handlePosterError } from '../lib/mediaFilters';
+import { resolveDisplayShortUrl } from '../lib/permalink';
 import { MediaItem, CatalogFilterState } from '../types/media';
 import { MovieCard } from './MovieCard';
 
 interface SingleDetailViewProps {
   catalog: MediaItem[];
   item: MediaItem;
+  initialEpisode?: number;
   initialOpenDownloads?: boolean;
   onSelectMedia: (item: MediaItem, openDownloads?: boolean) => void;
   onApplyFilter: (partial: Partial<CatalogFilterState>) => void;
@@ -42,6 +44,7 @@ type DetailTab = 'watch' | 'seasons' | 'franchise' | 'cast';
 export function SingleDetailView({
   catalog,
   item,
+  initialEpisode,
   initialOpenDownloads = false,
   onSelectMedia,
   onApplyFilter,
@@ -56,20 +59,36 @@ export function SingleDetailView({
   const [activeTab, setActiveTab] = useState<DetailTab>('watch');
   const [showDownloads, setShowDownloads] = useState(initialOpenDownloads);
   const [selectedSeasonIdx, setSelectedSeasonIdx] = useState(0);
+  const [selectedEpisodeNumber, setSelectedEpisodeNumber] = useState<number>(
+    initialEpisode || item.seasons?.[0]?.episodes?.[0]?.number || 1
+  );
   const [copiedUrl, setCopiedUrl] = useState(false);
 
   useEffect(() => {
     setActiveTab('watch');
     setShowDownloads(initialOpenDownloads);
+    setSelectedSeasonIdx(0);
+    setSelectedEpisodeNumber(initialEpisode || item.seasons?.[0]?.episodes?.[0]?.number || 1);
     if (initialOpenDownloads) {
       setTimeout(() => {
         document.getElementById('watch-download-tabs')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 120);
     }
-  }, [item.id, initialOpenDownloads]);
+  }, [item.id, initialEpisode, initialOpenDownloads]);
 
   const seasons = item.seasons || [];
   const activeSeason = seasons[selectedSeasonIdx];
+  const allEpisodes = activeSeason?.episodes || seasons[0]?.episodes || [];
+  const activeEpisodeObj = allEpisodes.find((e) => e.number === selectedEpisodeNumber);
+  const activeServers =
+    activeEpisodeObj?.servers && activeEpisodeObj.servers.length > 0
+      ? activeEpisodeObj.servers
+      : item.servers;
+  const dedicatedShortUrl = resolveDisplayShortUrl(
+    item,
+    allEpisodes.length > 0 ? selectedEpisodeNumber : undefined
+  );
+
   const franchiseItems = (item.franchiseIds || [])
     .map((id) => catalog.find((c) => c.id === id))
     .filter((c): c is MediaItem => Boolean(c));
@@ -84,17 +103,17 @@ export function SingleDetailView({
 
   const handleCopyShortUrl = async () => {
     try {
-      await navigator.clipboard.writeText(item.shortUrl);
+      await navigator.clipboard.writeText(dedicatedShortUrl);
     } catch {
       // Clipboard fallback ignored cleanly in sandboxed frames
     }
     setCopiedUrl(true);
-    onNotify('تم نسخ الرابط المختصر بنجاح');
+    onNotify('تم نسخ الرابط المخصص بنجاح');
     setTimeout(() => setCopiedUrl(false), 2400);
   };
 
   const handleSocialShare = async (platform: string) => {
-    const shareText = `${item.title} — شاهد الآن على RahaL TV: ${item.shortUrl}`;
+    const shareText = `${item.title} — شاهد الآن على RahaL TV: ${dedicatedShortUrl}`;
     try {
       await navigator.clipboard.writeText(shareText);
     } catch {
@@ -426,11 +445,15 @@ export function SingleDetailView({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <button
                     type="button"
-                    onClick={() => onOpenPlayer(item, 1)}
+                    onClick={() => onOpenPlayer(item, selectedEpisodeNumber)}
                     className="flex items-center justify-center gap-3 rounded-2xl bg-[#D92321] hover:bg-[#dc0e30] py-4 px-6 text-base font-extrabold text-white shadow-[0_12px_30px_rgba(217,35,33,0.4)] transition-transform hover:-translate-y-0.5 cursor-pointer"
                   >
                     <Play className="w-5 h-5 fill-current" />
-                    <span>مشاهدة الآن (سيرفرات متعددة)</span>
+                    <span>
+                      {allEpisodes.length > 0
+                        ? `مشاهدة الحلقة ${String(selectedEpisodeNumber).padStart(2, '0')} الآن`
+                        : 'مشاهدة الآن (سيرفرات متعددة)'}
+                    </span>
                   </button>
 
                   <button
@@ -443,19 +466,69 @@ export function SingleDetailView({
                   </button>
                 </div>
 
+                {/* Per-Episode Quick Selector Strip for Series */}
+                {allEpisodes.length > 0 && (
+                  <div className="rounded-2xl bg-[#101e29] border border-white/[0.08] p-3.5 sm:p-4 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-xs sm:text-sm font-extrabold text-white flex items-center gap-2">
+                        <Tv className="w-4 h-4 text-[#f9c400]" />
+                        <span>الحلقات المتاحة ({allEpisodes.length})</span>
+                      </h3>
+                      <span className="text-[11px] font-bold text-[#b7c9ef]">
+                        اختر الحلقة لعرض سيرفرات المشاهدة الخاصة بها
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {allEpisodes.map((ep) => {
+                        const isEpActive = ep.number === selectedEpisodeNumber;
+                        const epSrvCount = ep.servers?.length || 0;
+                        return (
+                          <button
+                            key={ep.number}
+                            type="button"
+                            onClick={() => setSelectedEpisodeNumber(ep.number)}
+                            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-extrabold transition-all cursor-pointer ${
+                              isEpActive
+                                ? 'bg-[#D92321] border-[#ff5a58] text-white shadow-md'
+                                : 'bg-[#1a242e] border-white/[0.08] text-[#b7c9ef] hover:text-white hover:border-[#D92321]/60'
+                            }`}
+                          >
+                            <span>الحلقة {String(ep.number).padStart(2, '0')}</span>
+                            {epSrvCount > 0 && (
+                              <span
+                                className={`font-latin rounded px-1.5 py-0.5 text-[10px] font-black tabular-nums ${
+                                  isEpActive ? 'bg-black/25 text-white' : 'bg-[#0c1821] text-[#f9c400]'
+                                }`}
+                              >
+                                {epSrvCount}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {/* Compact Number + Quality Server Strip */}
-                {item.servers.length > 0 && (
+                {activeServers.length > 0 && (
                   <div className="rounded-2xl bg-[#101e29] border border-white/[0.08] p-3.5 sm:p-4 space-y-2.5">
                     <div className="flex items-center justify-between gap-2">
                       <h3 className="text-xs sm:text-sm font-extrabold text-white flex items-center gap-2">
                         <Server className="w-4 h-4 text-[#D92321]" />
-                        <span>سيرفرات المشاهدة ({item.servers.length})</span>
+                        <span>
+                          سيرفرات المشاهدة
+                          {allEpisodes.length > 0
+                            ? ` — الحلقة ${String(selectedEpisodeNumber).padStart(2, '0')}`
+                            : ''}{' '}
+                          ({activeServers.length})
+                        </span>
                       </h3>
                       <span className="text-[11px] font-bold text-[#b7c9ef]">اختر السيرفر للتشغيل</span>
                     </div>
 
                     <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2">
-                      {item.servers.map((srv, idx) => {
+                      {activeServers.map((srv, idx) => {
                         const cleanQ =
                           String(srv.quality || item.quality || 'HD')
                             .replace(/مستورد|embed/gi, '')
@@ -464,7 +537,7 @@ export function SingleDetailView({
                           <button
                             key={srv.id || idx}
                             type="button"
-                            onClick={() => onOpenPlayer(item, 1, idx)}
+                            onClick={() => onOpenPlayer(item, selectedEpisodeNumber, idx)}
                             style={{ animationDelay: `${idx * 35}ms` }}
                             className="moov-server-card moov-server-enter group flex items-center justify-between gap-2 rounded-xl bg-[#1a242e]/90 border border-white/[0.08] px-3 py-2.5 transition-all duration-300 hover:border-[#D92321]/80 hover:bg-gradient-to-l hover:from-[#D92321]/25 hover:to-[#1a242e] hover:-translate-y-0.5 cursor-pointer"
                           >
@@ -558,7 +631,7 @@ export function SingleDetailView({
                         type="text"
                         readOnly
                         dir="ltr"
-                        value={item.shortUrl}
+                        value={dedicatedShortUrl}
                         aria-label="الرابط المختصر للعرض"
                         className="font-latin w-full bg-transparent text-xs text-white/90 focus:outline-none text-left"
                       />
@@ -617,26 +690,33 @@ export function SingleDetailView({
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-                  {activeSeason.episodes.map((ep) => (
-                    <button
-                      key={ep.number}
-                      type="button"
-                      onClick={() => onOpenPlayer(item, ep.number)}
-                      className="group flex items-center justify-between rounded-2xl bg-[#1a242e] border border-white/[0.08] p-4 text-right hover:border-[#D92321] transition-all cursor-pointer"
-                    >
-                      <div>
-                        <p className="text-sm font-extrabold text-white group-hover:text-[#D92321]">
-                          الحلقة {String(ep.number).padStart(2, '0')}
-                        </p>
-                        <p className="text-[11px] text-[#b7c9ef] mt-0.5">
-                          {ep.duration} • {ep.quality}
-                        </p>
-                      </div>
-                      <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#0c1821] text-[#D92321] group-hover:bg-[#D92321] group-hover:text-white transition-colors">
-                        <Play className="w-4 h-4 fill-current" />
-                      </span>
-                    </button>
-                  ))}
+                  {activeSeason.episodes.map((ep) => {
+                    const epSrvCount = ep.servers?.length || 0;
+                    return (
+                      <button
+                        key={ep.number}
+                        type="button"
+                        onClick={() => {
+                          setSelectedEpisodeNumber(ep.number);
+                          onOpenPlayer(item, ep.number, 0);
+                        }}
+                        className="group flex items-center justify-between rounded-2xl bg-[#1a242e] border border-white/[0.08] p-4 text-right hover:border-[#D92321] transition-all cursor-pointer"
+                      >
+                        <div>
+                          <p className="text-sm font-extrabold text-white group-hover:text-[#D92321]">
+                            الحلقة {String(ep.number).padStart(2, '0')}
+                          </p>
+                          <p className="text-[11px] text-[#b7c9ef] mt-0.5">
+                            {ep.duration} • {ep.quality}
+                            {epSrvCount > 0 ? ` • ${epSrvCount} سيرفر` : ''}
+                          </p>
+                        </div>
+                        <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#0c1821] text-[#D92321] group-hover:bg-[#D92321] group-hover:text-white transition-colors">
+                          <Play className="w-4 h-4 fill-current" />
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}

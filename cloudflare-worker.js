@@ -28,7 +28,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Expose-Headers': 'X-Final-Url',
+  'Access-Control-Expose-Headers': 'X-Final-Url, X-Upstream-X-Frame-Options, X-Upstream-CSP',
 };
 
 export default {
@@ -78,12 +78,16 @@ export default {
 
       const body = await upstream.arrayBuffer();
       const contentType = upstream.headers.get('content-type') || 'text/html; charset=utf-8';
+      const xFrame = upstream.headers.get('x-frame-options') || '';
+      const csp = upstream.headers.get('content-security-policy') || '';
       return new Response(body, {
         status: upstream.status,
         headers: {
           ...CORS_HEADERS,
           'Content-Type': contentType,
           'X-Final-Url': upstream.url || parsedTarget.toString(),
+          ...(xFrame ? { 'X-Upstream-X-Frame-Options': xFrame } : {}),
+          ...(csp ? { 'X-Upstream-CSP': csp } : {}),
         },
       });
     } catch (err) {

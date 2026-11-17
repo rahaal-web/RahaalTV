@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   AlertTriangle,
   Calendar,
@@ -12,6 +12,7 @@ import {
   Languages,
   Layers,
   LayoutGrid,
+  Link2,
   Play,
   Server,
   Star,
@@ -26,6 +27,7 @@ import {
   handleBackdropError,
   handlePosterError,
 } from '../lib/mediaFilters';
+import { resolveDisplayShortUrl } from '../lib/permalink';
 import {
   buildPlayerThemeVars,
   loadStoredPlayerTheme,
@@ -69,13 +71,30 @@ export function MediaPreviewModal({
 }: MediaPreviewModalProps) {
   const [previewMode, setPreviewMode] = useState<'page' | 'card'>('page');
   const [testServerIdx, setTestServerIdx] = useState<number | null>(null);
+  const [selectedEpNum, setSelectedEpNum] = useState<number>(
+    item?.seasons?.[0]?.episodes?.[0]?.number || 1
+  );
+
+  useEffect(() => {
+    setTestServerIdx(null);
+    setSelectedEpNum(item?.seasons?.[0]?.episodes?.[0]?.number || 1);
+  }, [item?.id]);
 
   if (!item) return null;
 
   const activeTheme = normalizePlayerTheme(playerTheme || loadStoredPlayerTheme());
   const themeVars = buildPlayerThemeVars(activeTheme);
 
-  const activeTestServer = testServerIdx !== null ? item.servers[testServerIdx] : null;
+  const episodes = item.seasons?.[0]?.episodes || [];
+  const activeEp = episodes.find((e) => e.number === selectedEpNum);
+  const displayedServers =
+    activeEp?.servers && activeEp.servers.length > 0 ? activeEp.servers : item.servers;
+  const dedicatedUrl = resolveDisplayShortUrl(
+    item,
+    episodes.length > 0 ? selectedEpNum : undefined
+  );
+
+  const activeTestServer = testServerIdx !== null ? displayedServers[testServerIdx] : null;
   const activeTestSrc = activeTestServer
     ? extractSafePreviewSrc(activeTestServer.embedCode, activeTestServer.url)
     : null;
@@ -292,21 +311,54 @@ export function MediaPreviewModal({
                     </div>
                   </div>
 
-                  {/* Watch Servers Preview (Compact Number + Quality) */}
+                  {/* Watch Servers Preview (Compact Number + Quality + Per-Episode Switcher) */}
                   <div className="rounded-2xl bg-[#0c1821] border border-white/[0.08] p-4 space-y-3">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <h4 className="text-xs sm:text-sm font-extrabold text-white flex items-center gap-2">
                         <Server className="w-4 h-4 text-[#D92321]" />
-                        <span>سيرفرات المشاهدة ({item.servers.length})</span>
+                        <span>
+                          سيرفرات المشاهدة
+                          {episodes.length > 0 ? ` — الحلقة ${String(selectedEpNum).padStart(2, '0')}` : ''} ({displayedServers.length})
+                        </span>
                       </h4>
                       <span className="text-[11px] text-[#b7c9ef]">اضغط على رقم السيرفر لتجربة تشغيله الآن</span>
                     </div>
 
-                    {item.servers.length === 0 ? (
-                      <p className="text-xs text-[#f9c400]">لم تُضف سيرفرات مشاهدة بعد.</p>
+                    {episodes.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 pb-1">
+                        {episodes.map((ep) => {
+                          const isEp = ep.number === selectedEpNum;
+                          return (
+                            <button
+                              key={ep.number}
+                              type="button"
+                              onClick={() => {
+                                setSelectedEpNum(ep.number);
+                                setTestServerIdx(null);
+                              }}
+                              className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-extrabold cursor-pointer ${
+                                isEp
+                                  ? 'bg-[#D92321] border-[#ff5a58] text-white'
+                                  : 'bg-[#1a242e] border-white/10 text-[#b7c9ef] hover:text-white'
+                              }`}
+                            >
+                              <span>الحلقة {String(ep.number).padStart(2, '0')}</span>
+                              {ep.servers && ep.servers.length > 0 && (
+                                <span className="font-latin rounded bg-black/25 px-1 text-[10px] text-[#f9c400]">
+                                  {ep.servers.length}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {displayedServers.length === 0 ? (
+                      <p className="text-xs text-[#f9c400]">لم تُضف سيرفرات مشاهدة صالحة لهذه الحلقة/العمل بعد.</p>
                     ) : (
                       <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-2">
-                        {item.servers.map((srv, idx) => {
+                        {displayedServers.map((srv, idx) => {
                           const cleanQ =
                             String(srv.quality || item.quality || 'HD')
                               .replace(/مستورد|embed/gi, '')
@@ -416,7 +468,17 @@ export function MediaPreviewModal({
                     )}
                   </div>
 
-                  {/* Downloads, Episodes & Cast summary */}
+                  {/* Dedicated Permalink & Downloads/Episodes/Cast summary */}
+                  <div className="rounded-xl bg-[#0c1821] border border-white/[0.08] px-4 py-2.5 flex items-center justify-between gap-3 text-xs">
+                    <span className="text-[#b7c9ef] flex items-center gap-1.5 shrink-0">
+                      <Link2 className="w-3.5 h-3.5 text-[#4CAF50]" />
+                      <span>الرابط المخصص للنشر:</span>
+                    </span>
+                    <span className="font-latin text-[#4CAF50] font-bold truncate" dir="ltr">
+                      {dedicatedUrl}
+                    </span>
+                  </div>
+
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                     <div className="rounded-xl bg-[#0c1821] border border-white/[0.08] p-3.5">
                       <p className="font-extrabold text-white flex items-center gap-1.5 mb-1">

@@ -29,8 +29,15 @@ import {
   MediaItem,
   RequestStatus,
   SiteSettings,
+  StreamServer,
   VisitorRequest,
 } from '../types/media';
+import { isLikelyNonVideoWebsiteUrl } from './clientScraper';
+import {
+  buildDedicatedMediaUrl,
+  generateCleanSlug,
+  isDedicatedAppShortUrl,
+} from './permalink';
 import { DEFAULT_PLAYER_THEME, saveStoredPlayerTheme } from './playerTheme';
 
 const app = initializeApp(firebaseConfig);
@@ -196,11 +203,74 @@ export async function checkIsAdminUser(user: User | null): Promise<boolean> {
 const FALLBACK_POSTER_URL = fallbackPosterImg;
 const FALLBACK_BACKDROP_URL = fallbackBackdropImg;
 
+function extractServerTargetUrl(srv?: { url?: string; embedCode?: string }): string {
+  if (!srv) return '';
+  const embed = String(srv.embedCode || '').trim();
+  if (embed) {
+    const m = embed.match(/src\s*=\s*["']([^"']+)["']/i);
+    if (m?.[1]) return m[1].trim();
+    if (/^https?:\/\//i.test(embed)) return embed;
+  }
+  return String(srv.url || '').trim();
+}
+
+function sanitizeServerList(
+  rawList: StreamServer[] | undefined,
+  fallbackQuality: string,
+  maxItems = 15,
+  idPrefix = 'srv'
+) {
+  return (rawList || [])
+    .filter((srv) => {
+      if (!srv) return false;
+      const targetUrl = extractServerTargetUrl(srv);
+      if (!targetUrl) return false;
+      return !isLikelyNonVideoWebsiteUrl(targetUrl);
+    })
+    .slice(0, maxItems)
+    .map((srv, idx) => {
+      const cleanUrl = String(srv.url || '').trim().slice(0, 600);
+      const rawEmbed = String(srv.embedCode || '').trim().slice(0, 1200);
+      const mode: 'url' | 'embed' =
+        srv.mode === 'url' || (!rawEmbed && cleanUrl && !/embed/i.test(cleanUrl)) ? 'url' : 'embed';
+      const embedCode =
+        rawEmbed || (mode === 'embed' && cleanUrl ? `<iframe src="${cleanUrl}" frameborder="0" allowfullscreen></iframe>` : '');
+      const rawSpeed = String(srv.speed || '').trim();
+      const rawTag = String(srv.tag || '').trim();
+      const cleanQuality = String(srv.quality || fallbackQuality || '1080p').trim().slice(0, 40) || '1080p';
+      return {
+        id: String(srv.id || `${idPrefix}-${Date.now()}-${idx + 1}`).slice(0, 80),
+        name: `سيرفر ${idx + 1}`,
+        mode,
+        url: cleanUrl,
+        embedCode,
+        quality: cleanQuality,
+        speed: !rawSpeed || /مستورد/i.test(rawSpeed) ? 'سريع' : rawSpeed.slice(0, 40),
+        tag: !rawTag || /^embed$/i.test(rawTag) ? cleanQuality : rawTag.slice(0, 30),
+      };
+    });
+}
+
 function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
   const cleanId =
     item.id.replace(/[^a-zA-Z0-9_\-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 128) ||
     `media-${Date.now()}`;
   const safeTitle = (item.title || 'عمل مستورد').trim().slice(0, 200) || 'عمل مستورد';
+  const safeEnglishTitle = (item.englishTitle || safeTitle).trim().slice(0, 200) || safeTitle;
+  const rawSlugCandidate = String(item.slug || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_\-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 128);
+  const safeSlug =
+    rawSlugCandidate && rawSlugCandidate.length >= 2
+      ? rawSlugCandidate
+      : generateCleanSlug(safeEnglishTitle, safeTitle, cleanId);
+  const dedicatedShortUrl = isDedicatedAppShortUrl(item.shortUrl)
+    ? item.shortUrl.trim().slice(0, 300)
+    : buildDedicatedMediaUrl({ id: cleanId, slug: safeSlug }).slice(0, 300);
+
   const safePoster = (item.poster || '').trim().slice(0, 500) || FALLBACK_POSTER_URL;
   const safeBackdrop = (item.backdrop || safePoster || '').trim().slice(0, 500) || FALLBACK_BACKDROP_URL;
   const safeYear = (item.year || '2026').trim().slice(0, 10);
@@ -215,29 +285,7 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
     .filter(Boolean)
     .slice(0, 10);
 
-  const normalizedServers = (item.servers || [])
-    .filter((srv) => srv && (String(srv.url || '').trim() || String(srv.embedCode || '').trim()))
-    .slice(0, 15)
-    .map((srv, idx) => {
-      const cleanUrl = String(srv.url || '').trim().slice(0, 600);
-      const rawEmbed = String(srv.embedCode || '').trim().slice(0, 1200);
-      const mode: 'url' | 'embed' = srv.mode === 'url' || (!rawEmbed && cleanUrl && !/embed/i.test(cleanUrl)) ? 'url' : 'embed';
-      const embedCode =
-        rawEmbed || (mode === 'embed' && cleanUrl ? `<iframe src="${cleanUrl}" frameborder="0" allowfullscreen></iframe>` : '');
-      const rawSpeed = String(srv.speed || '').trim();
-      const rawTag = String(srv.tag || '').trim();
-      const cleanQuality = String(srv.quality || item.quality || '1080p').trim().slice(0, 40) || '1080p';
-      return {
-        id: String(srv.id || `srv-${Date.now()}-${idx}`).slice(0, 80),
-        name: String(srv.name || `سيرفر ${idx + 1}`).trim().slice(0, 80) || `سيرفر ${idx + 1}`,
-        mode,
-        url: cleanUrl,
-        embedCode,
-        quality: cleanQuality,
-        speed: !rawSpeed || /مستورد/i.test(rawSpeed) ? 'سريع' : rawSpeed.slice(0, 40),
-        tag: !rawTag || /^embed$/i.test(rawTag) ? cleanQuality : rawTag.slice(0, 30),
-      };
-    });
+  let normalizedServers = sanitizeServerList(item.servers, item.quality || '1080p', 15, 'srv');
 
   const normalizedDownloads = (item.downloads || [])
     .filter((dl) => dl && String(dl.url || '').trim())
@@ -267,21 +315,49 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
     seasonNumber: Number(season.seasonNumber) || sIdx + 1,
     label: String(season.label || `الموسم ${String(sIdx + 1).padStart(2, '0')}`).trim().slice(0, 80),
     year: String(season.year || normalizedYear).trim().slice(0, 10),
-    episodes: (season.episodes || []).slice(0, 120).map((ep, eIdx) => ({
-      number: Number(ep.number) || eIdx + 1,
-      title: String(ep.title || `الحلقة ${eIdx + 1}`).trim().slice(0, 120),
-      duration: String(ep.duration || '45 دقيقة').trim().slice(0, 40),
-      quality: String(ep.quality || item.quality || 'WEB-DL').trim().slice(0, 40),
-      watchUrl: String(ep.watchUrl || '').trim().slice(0, 600),
-      embedCode: String(ep.embedCode || '').trim().slice(0, 1200),
-    })),
+    episodes: (season.episodes || []).slice(0, 120).map((ep, eIdx) => {
+      const epNum = Number(ep.number) || eIdx + 1;
+      const epQual = String(ep.quality || item.quality || 'WEB-DL').trim().slice(0, 40);
+      const epServers = sanitizeServerList(ep.servers, epQual, 12, `ep-${epNum}-srv`);
+      let cleanWatchUrl = String(ep.watchUrl || '').trim().slice(0, 600);
+      if (cleanWatchUrl && isLikelyNonVideoWebsiteUrl(cleanWatchUrl)) {
+        cleanWatchUrl = epServers[0]?.url || '';
+      }
+      let cleanEmbedCode = String(ep.embedCode || '').trim().slice(0, 1200);
+      if (cleanEmbedCode) {
+        const emSrc = extractServerTargetUrl({ embedCode: cleanEmbedCode });
+        if (!emSrc || isLikelyNonVideoWebsiteUrl(emSrc)) {
+          cleanEmbedCode = '';
+        }
+      }
+      return {
+        number: epNum,
+        title: String(ep.title || `الحلقة ${epNum}`).trim().slice(0, 120),
+        duration: String(ep.duration || '45 دقيقة').trim().slice(0, 40),
+        quality: epQual,
+        watchUrl: cleanWatchUrl || epServers[0]?.url || '',
+        embedCode: cleanEmbedCode,
+        servers: epServers,
+      };
+    }),
   }));
+
+  if (normalizedServers.length === 0 && normalizedSeasons.length > 0) {
+    const ep1Servers = normalizedSeasons[0].episodes.find((ep) => ep.servers && ep.servers.length > 0)?.servers;
+    if (ep1Servers && ep1Servers.length > 0) {
+      normalizedServers = ep1Servers.map((s, idx) => ({
+        ...s,
+        id: `srv-${Date.now()}-${idx + 1}`,
+        name: `سيرفر ${idx + 1}`,
+      }));
+    }
+  }
 
   const base: Record<string, unknown> = {
     id: cleanId,
-    slug: (item.slug || cleanId).replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 128) || cleanId,
+    slug: safeSlug,
     title: safeTitle,
-    englishTitle: (item.englishTitle || safeTitle).trim().slice(0, 200) || safeTitle,
+    englishTitle: safeEnglishTitle,
     kind: item.kind || 'movie',
     categories: normalizedCategories.length ? normalizedCategories : ['افلام'],
     genres: normalizedGenres.length ? normalizedGenres : ['دراما'],
@@ -301,7 +377,7 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
     backdrop: safeBackdrop,
     tagline: (item.tagline || '').slice(0, 400),
     story: (item.story || safeTitle).trim().slice(0, 3000) || safeTitle,
-    shortUrl: (item.shortUrl || `https://rahaltv.com/${cleanId}`).slice(0, 300),
+    shortUrl: dedicatedShortUrl,
     trailerUrl: (item.trailerUrl || '').slice(0, 500),
     trailerLabel: (item.trailerLabel || safeTitle).slice(0, 200),
     trailerDuration: (item.trailerDuration || '02:00').slice(0, 30),
