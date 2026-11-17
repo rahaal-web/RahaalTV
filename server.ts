@@ -1181,6 +1181,15 @@ async function trySitemapDiscovery(origin: string, maxItems: number): Promise<st
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: '6mb' }));
+  app.use('/api', (_req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (_req.method === 'OPTIONS') {
+      return res.status(204).end();
+    }
+    return next();
+  });
 
   // Single Item Content Scraper Endpoint (URL or Raw HTML)
   app.post('/api/scrape', async (req, res) => {

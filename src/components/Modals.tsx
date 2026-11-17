@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
+import { resolveApiEndpoint } from '../lib/clientScraper';
 import {
   getFirebaseAuthErrorMessage,
   registerMemberWithEmailPassword,
@@ -393,7 +394,7 @@ export function PlayerModal({
 
     (async () => {
       try {
-        const res = await fetch('/api/filter-servers', {
+        const res = await fetch(resolveApiEndpoint('/api/filter-servers'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ urls: allUrls }),

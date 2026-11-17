@@ -54,6 +54,15 @@ import {
   updateVisitorRequestInFirestore,
 } from '../lib/firebase';
 import {
+  checkServerUrlsInBrowser,
+  getCustomApiBaseUrl,
+  resolveApiEndpoint,
+  ScrapedPayload,
+  scrapeSingleInBrowser,
+  scrapeSiteInBrowser,
+  setCustomApiBaseUrl,
+} from '../lib/clientScraper';
+import {
   AdminRoleRecord,
   CastMember,
   DownloadMirror,
@@ -96,30 +105,6 @@ type AdminTab =
   | 'users'
   | 'settings';
 type EditorSubTab = 'basic' | 'servers' | 'downloads' | 'seasons_cast';
-
-interface ScrapedPayload {
-  title: string;
-  englishTitle: string;
-  kind: MediaKind;
-  categories: string[];
-  genres: string[];
-  year: string;
-  country: string;
-  language: string;
-  quality: string;
-  duration: string;
-  imdb: number;
-  votes: string;
-  poster: string;
-  backdrop: string;
-  tagline: string;
-  story: string;
-  shortUrl: string;
-  cast: CastMember[];
-  servers: StreamServer[];
-  downloads: DownloadMirror[];
-  seasons: SeasonItem[];
-}
 
 const POSTER_CHOICES = [
   { label: 'أكشن مستقبلي (Running Man)', url: ASSETS.runningMan },
@@ -379,6 +364,7 @@ export function AdminDashboardView({
 
   // Settings tab state
   const [settingsForm, setSettingsForm] = useState<SiteSettings>(siteSettings);
+  const [customApiUrl, setCustomApiUrl] = useState<string>(() => getCustomApiBaseUrl());
   useEffect(() => {
     setSettingsForm(siteSettings);
   }, [siteSettings]);
@@ -423,38 +409,39 @@ export function AdminDashboardView({
     try {
       for (let i = 0; i < targetsToCheck.length; i += 35) {
         const chunk = targetsToCheck.slice(i, i + 35);
-        const response = await fetch('/api/check-servers', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ urls: chunk }),
-        });
-        const contentType = response.headers.get('content-type') || '';
-        const data = contentType.includes('application/json')
-          ? ((await response.json()) as {
-              ok?: boolean;
-              results?: Record<string, ServerStatusEntry>;
-            })
-          : null;
-        if (response.ok && data?.ok && data.results) {
-          serverStatusesRef.current = { ...serverStatusesRef.current, ...data.results };
-          setServerStatuses(serverStatusesRef.current);
-        } else {
-          const failPatch: Record<string, ServerStatusEntry> = {};
-          for (const u of chunk) {
-            failPatch[u] = {
-              status: 'broken',
-              label: 'يتطلب خادم Node',
-              detail: 'فحص الروابط غير متاح على الاستضافة الثابتة (GitHub Pages)',
-            };
+        let handledByApi = false;
+        try {
+          const response = await fetch(resolveApiEndpoint('/api/check-servers'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ urls: chunk }),
+          });
+          const contentType = response.headers.get('content-type') || '';
+          const data = contentType.includes('application/json')
+            ? ((await response.json()) as {
+                ok?: boolean;
+                results?: Record<string, ServerStatusEntry>;
+              })
+            : null;
+          if (response.ok && data?.ok && data.results) {
+            serverStatusesRef.current = { ...serverStatusesRef.current, ...data.results };
+            setServerStatuses(serverStatusesRef.current);
+            handledByApi = true;
           }
-          serverStatusesRef.current = { ...serverStatusesRef.current, ...failPatch };
+        } catch {
+          // Fall through to browser check when static hosting is active
+        }
+
+        if (!handledByApi) {
+          const browserResults = await checkServerUrlsInBrowser(chunk);
+          serverStatusesRef.current = { ...serverStatusesRef.current, ...browserResults };
           setServerStatuses(serverStatusesRef.current);
         }
       }
     } catch {
       const errPatch: Record<string, ServerStatusEntry> = {};
       for (const u of targetsToCheck) {
-        errPatch[u] = { status: 'broken', label: 'خطأ في الاتصال', detail: 'تعذر الاتصال بخادم الفحص' };
+        errPatch[u] = { status: 'warning', label: 'تعذر الفحص', detail: 'تعذر التحقق من الرابط' };
       }
       serverStatusesRef.current = { ...serverStatusesRef.current, ...errPatch };
       setServerStatuses(serverStatusesRef.current);
@@ -739,31 +726,42 @@ export function AdminDashboardView({
 
     setScraping(true);
     try {
-      const response = await fetch('/api/scrape', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(
-          scrapeMode === 'url'
-            ? { url: scrapeUrl.trim() }
-            : { rawHtml: scrapeRawHtml, url: scrapeUrl.trim() || undefined }
-        ),
-      });
+      const payload =
+        scrapeMode === 'url'
+          ? { url: scrapeUrl.trim() }
+          : { rawHtml: scrapeRawHtml, url: scrapeUrl.trim() || undefined };
 
-      const contentType = response.headers.get('content-type') || '';
-      if (!contentType.includes('application/json')) {
-        setScrapeError(
-          'أداة الجلب التلقائي (/api/scrape) تتطلب تشغيل خادم Node.js ولا تعمل على الاستضافة الثابتة (GitHub Pages).'
-        );
-        return;
+      let data: { ok?: boolean; error?: string; extracted?: ScrapedPayload } | null = null;
+      let usedBackend = false;
+
+      try {
+        const response = await fetch(resolveApiEndpoint('/api/scrape'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          data = (await response.json()) as {
+            ok?: boolean;
+            error?: string;
+            extracted?: ScrapedPayload;
+          };
+          usedBackend = true;
+          if (!response.ok && data.error) {
+            setScrapeError(data.error);
+            return;
+          }
+        }
+      } catch {
+        // Static hosting or unreachable backend -> fall back seamlessly to browser engine
       }
 
-      const data = (await response.json()) as {
-        ok?: boolean;
-        error?: string;
-        extracted?: ScrapedPayload;
-      };
+      if (!usedBackend || !data) {
+        data = await scrapeSingleInBrowser(payload);
+      }
 
-      if (!response.ok || !data.ok || !data.extracted) {
+      if (!data.ok || !data.extracted) {
         setScrapeError(
           data.error || 'تعذر سحب البيانات من الموقع المستهدف. جرّب وضع لصق HTML.'
         );
@@ -779,7 +777,7 @@ export function AdminDashboardView({
       }
       onNotify(`تم استخراج "${data.extracted.title}" بنجاح!`);
     } catch {
-      setScrapeError('تعذر الاتصال بخادم الجلب (/api/scrape). تأكد من تشغيل السيرفر.');
+      setScrapeError('تعذر تحليل الصفحة المستهدفة. جرّب استخدام وضع لصق كود HTML.');
     } finally {
       setScraping(false);
     }
@@ -817,36 +815,55 @@ export function AdminDashboardView({
 
     setSiteCrawling(true);
     try {
-      const response = await fetch('/api/scrape-site', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          siteUrl: siteCrawlUrl.trim() || undefined,
-          rawHtml: siteScrapeMode === 'html' ? siteCrawlHtml : undefined,
-          maxItems: siteMaxItems,
-          maxPages: siteMaxPages,
-          deepScrape: siteDeepScrape,
-        }),
-      });
+      const payload = {
+        siteUrl: siteCrawlUrl.trim() || undefined,
+        rawHtml: siteScrapeMode === 'html' ? siteCrawlHtml : undefined,
+        maxItems: siteMaxItems,
+        maxPages: siteMaxPages,
+        deepScrape: siteDeepScrape,
+      };
 
-      const contentType = response.headers.get('content-type') || '';
-      if (!contentType.includes('application/json')) {
-        setSiteCrawlError(
-          'أداة سحب المواقع (/api/scrape-site) تتطلب تشغيل خادم Node.js ولا تعمل على الاستضافة الثابتة (GitHub Pages).'
-        );
-        return;
-      }
-
-      const data = (await response.json()) as {
+      let data: {
         ok?: boolean;
         error?: string;
         strategy?: string;
         siteTitle?: string;
         totalDiscovered?: number;
         items?: ScrapedPayload[];
-      };
+      } | null = null;
+      let usedBackend = false;
 
-      if (!response.ok || !data.ok || !Array.isArray(data.items)) {
+      try {
+        const response = await fetch(resolveApiEndpoint('/api/scrape-site'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          data = (await response.json()) as {
+            ok?: boolean;
+            error?: string;
+            strategy?: string;
+            siteTitle?: string;
+            totalDiscovered?: number;
+            items?: ScrapedPayload[];
+          };
+          usedBackend = true;
+          if (!response.ok && data.error) {
+            setSiteCrawlError(data.error);
+            return;
+          }
+        }
+      } catch {
+        // Static hosting or unreachable backend -> fall back seamlessly to browser engine
+      }
+
+      if (!usedBackend || !data) {
+        data = await scrapeSiteInBrowser(payload);
+      }
+
+      if (!data.ok || !Array.isArray(data.items)) {
         setSiteCrawlError(
           data.error || 'تعذر سحب محتوى الموقع. جرّب استخدام وضع لصق كود HTML للصفحة الرئيسية.'
         );
@@ -867,7 +884,7 @@ export function AdminDashboardView({
       );
       onNotify(`تم جلب ${data.items.length} عملًا من الموقع بنجاح!`);
     } catch {
-      setSiteCrawlError('تعذر الاتصال بخادم الجلب (/api/scrape-site).');
+      setSiteCrawlError('تعذر سحب الموقع. جرّب وضع "لصق HTML الموقع".');
     } finally {
       setSiteCrawling(false);
     }
@@ -2382,6 +2399,20 @@ export function AdminDashboardView({
                     </div>
                   </div>
 
+                  <div className="rounded-2xl bg-[#4CAF50]/10 border border-[#4CAF50]/30 px-4 py-3 text-xs text-[#b7c9ef] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <span>
+                      <strong className="text-[#4CAF50]">وضع التشغيل المدمج (متوافق مع GitHub Pages):</strong>{' '}
+                      يعمل السحب مباشرة من المتصفح لمواقع Blogger/WordPress/HTML ووضع لصق HTML دون الحاجة لخادم Node.js، ويمكنك اختياريًا ربط رابط خادم خارجي من تبويب الإعدادات.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('settings')}
+                      className="shrink-0 rounded-lg bg-[#1a242e] hover:bg-white/10 border border-white/10 px-3 py-1.5 text-[11px] font-bold text-white cursor-pointer"
+                    >
+                      ربط خادم Node.js (اختياري)
+                    </button>
+                  </div>
+
                   <form onSubmit={handleSiteScrapeSubmit} className="space-y-4">
                     <div>
                       <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
@@ -3165,6 +3196,44 @@ export function AdminDashboardView({
                       placeholder="اكتب الرسالة التي ستظهر للزوار أثناء وضع الصيانة..."
                       className="w-full rounded-xl bg-[#0c1821] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
                     />
+                  </div>
+                </div>
+
+                <div className="rounded-2xl bg-[#1a242e]/65 border border-white/10 p-5 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-extrabold text-white">
+                        رابط خادم السحب الخارجي Node.js (اختياري للاستضافة الثابتة)
+                      </h3>
+                      <p className="text-[11px] text-[#b7c9ef] mt-0.5">
+                        تعمل أداة السحب تلقائيًا من المتصفح على GitHub Pages بدون خادم. إذا رفعت ملف الخادم على Render أو Railway أو VPS، ضع رابطه هنا للاستفادة من الفحص العميق وتجاوز قيود المتصفح.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2.5">
+                    <input
+                      type="url"
+                      dir="ltr"
+                      value={customApiUrl}
+                      onChange={(e) => setCustomApiUrl(e.target.value)}
+                      placeholder="https://your-rahaltv-api.onrender.com"
+                      className="font-latin flex-1 rounded-xl bg-[#0c1821] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:border-[#f9c400] focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const saved = setCustomApiBaseUrl(customApiUrl);
+                        setCustomApiUrl(saved);
+                        onNotify(
+                          saved
+                            ? `تم حفظ رابط خادم السحب: ${saved}`
+                            : 'تم مسح الرابط — سيعمل السحب بالوضع المدمج في المتصفح'
+                        );
+                      }}
+                      className="rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] px-4 py-2.5 text-xs font-black text-[#06131c] cursor-pointer shrink-0"
+                    >
+                      حفظ رابط الخادم
+                    </button>
                   </div>
                 </div>
 
