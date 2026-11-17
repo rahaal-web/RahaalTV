@@ -128,24 +128,24 @@ export function SingleDetailView({
 
   return (
     <div className="pb-10">
-      {/* 1. Single Hero Head (.single-head with hex texture, spotlight & IMDb card) */}
-      <section className="relative min-h-[340px] sm:min-h-[390px] overflow-hidden border-b border-white/[0.08] bg-[#0c1821]">
+      {/* 1. Compact Single Hero Head */}
+      <section className="relative overflow-hidden border-b border-white/[0.08] bg-[#0c1821]">
         <img
           src={item.backdrop || item.poster || FALLBACK_BACKDROP}
           alt={item.title}
           referrerPolicy="no-referrer"
           onError={handleBackdropError}
-          className="absolute inset-0 h-full w-full object-cover opacity-35"
+          className="absolute inset-0 h-full w-full object-cover opacity-30"
         />
-        <div className="absolute inset-0 bg-[#06131c]/75" />
+        <div className="absolute inset-0 bg-[#06131c]/80" />
         <div className="moov-hex-pattern absolute inset-0" />
         <div className="moov-spotlight absolute inset-0" />
 
-        <div className="relative z-10 mx-auto flex max-w-[1440px] flex-col justify-end px-4 sm:px-6 lg:px-8 pt-28 pb-10 md:pb-14 min-h-[340px] sm:min-h-[380px]">
-          <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+        <div className="relative z-10 mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 pt-24 pb-7">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
             {/* Breadcrumb & Page Title */}
-            <div className="md:pr-[35%] lg:pr-[27%] min-w-0 flex-1">
-              <nav className="mb-3 flex flex-wrap items-center gap-1.5 text-xs font-bold text-[#b7c9ef]">
+            <div className="min-w-0 flex-1">
+              <nav className="mb-2.5 flex flex-wrap items-center gap-1.5 text-xs font-bold text-[#b7c9ef]">
                 <button
                   type="button"
                   onClick={onNavigateHome}
@@ -177,18 +177,18 @@ export function SingleDetailView({
                 <span className="text-white">{item.title}</span>
               </nav>
 
-              <h1 className="font-display text-2xl sm:text-4xl font-extrabold text-white leading-tight">
+              <h1 className="font-display text-2xl sm:text-3xl lg:text-4xl font-extrabold text-white leading-tight">
                 {item.title} بجودة عالية
               </h1>
               {item.tagline && (
-                <p className="mt-2 max-w-2xl text-sm font-medium text-[#b7c9ef] line-clamp-2 leading-relaxed">
+                <p className="mt-1.5 max-w-3xl text-xs sm:text-sm font-medium text-[#b7c9ef] line-clamp-2 leading-relaxed">
                   {item.tagline}
                 </p>
               )}
             </div>
 
-            {/* Overlapping IMDb Card (.single-imdb) */}
-            <div className="inline-flex shrink-0 items-center gap-3.5 self-start md:self-end rounded-2xl bg-[#1a242e]/95 border border-[#f9c400]/35 px-4 py-3 shadow-xl backdrop-blur-md">
+            {/* IMDb Card (.single-imdb) */}
+            <div className="inline-flex shrink-0 items-center gap-3.5 self-start md:self-center rounded-2xl bg-[#1a242e]/95 border border-[#f9c400]/35 px-4 py-3 shadow-xl backdrop-blur-md">
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#f9c400] text-[#06131c]">
                 <Star className="w-6 h-6 fill-current" />
               </div>
@@ -208,12 +208,12 @@ export function SingleDetailView({
         </div>
       </section>
 
-      {/* 2. Single Inner Split (.single-inner: Poster Column + Info Column) */}
-      <section className="relative z-20 mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 -mt-8 md:-mt-20">
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
-          {/* Poster Column (.single-right overlapping header) */}
-          <div className="md:col-span-4 lg:col-span-3 space-y-3.5">
-            <div className="relative aspect-[2/3] w-full max-w-[270px] mx-auto md:max-w-none overflow-hidden rounded-3xl border-[3px] border-[#1a242e] ring-1 ring-white/10 bg-[#0c1821] shadow-[0_24px_60px_rgba(0,0,0,0.65)]">
+      {/* 2. Single Inner Split (.single-inner: Poster + Side Actions Column + Info Column) */}
+      <section className="relative z-20 mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 mt-6">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-6 lg:gap-8 items-start">
+          {/* Side Column: Poster Rectangle + Watch & Download Buttons (visible without scrolling) */}
+          <div className="md:col-span-4 lg:col-span-3 space-y-3">
+            <div className="relative aspect-[2/3] w-full max-w-[260px] mx-auto md:max-w-none overflow-hidden rounded-2xl border border-white/15 bg-[#0c1821] shadow-[0_20px_50px_rgba(0,0,0,0.65)]">
               {/* Diagonal Quality Ribbon */}
               <div className="moov-ribbon bg-[#D92321] py-1 text-[11px] font-black tracking-wider text-white font-latin uppercase">
                 {item.quality}
@@ -232,42 +232,119 @@ export function SingleDetailView({
               <button
                 type="button"
                 onClick={() => onOpenTrailer(item)}
-                className="group absolute inset-0 m-auto flex h-16 w-16 flex-col items-center justify-center rounded-full bg-white/20 border border-white/40 text-white backdrop-blur-md shadow-2xl hover:bg-[#D92321] hover:border-[#D92321] hover:scale-110 transition-all cursor-pointer"
+                className="group absolute inset-0 m-auto flex h-14 w-14 flex-col items-center justify-center rounded-full bg-white/20 border border-white/40 text-white backdrop-blur-md shadow-2xl hover:bg-[#D92321] hover:border-[#D92321] hover:scale-110 transition-all cursor-pointer"
                 aria-label="تشغيل الإعلان الرسمي"
               >
-                <Play className="w-7 h-7 fill-current translate-x-0.5" />
+                <Play className="w-6 h-6 fill-current translate-x-0.5" />
               </button>
 
               <button
                 type="button"
                 onClick={() => onOpenTrailer(item)}
-                className="absolute bottom-3.5 left-1/2 -translate-x-1/2 inline-flex items-center gap-1.5 rounded-full bg-black/70 backdrop-blur-md border border-white/15 px-3.5 py-1.5 text-xs font-bold text-white/95 hover:bg-[#D92321] hover:border-[#D92321] transition-colors whitespace-nowrap cursor-pointer"
+                className="absolute bottom-3 left-1/2 -translate-x-1/2 inline-flex items-center gap-1.5 rounded-full bg-black/75 backdrop-blur-md border border-white/15 px-3.5 py-1.5 text-xs font-bold text-white/95 hover:bg-[#D92321] hover:border-[#D92321] transition-colors whitespace-nowrap cursor-pointer"
               >
                 <Play className="w-3 h-3 fill-current" />
                 <span>تشغيل الإعلان</span>
               </button>
             </div>
 
-            {/* Watchlist Toggle Button (.single-playlist-button) */}
-            <button
-              type="button"
-              onClick={() => onToggleWatchlist(item)}
-              className={`w-full max-w-[270px] mx-auto md:max-w-none flex items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-sm font-extrabold border transition-all cursor-pointer ${
-                isInWatchlist
-                  ? 'bg-[#4CAF50] border-[#4CAF50] text-white shadow-[0_8px_22px_rgba(76,175,80,0.35)]'
-                  : 'bg-[#1a242e] border-white/10 text-white hover:border-[#4CAF50] hover:text-[#4CAF50]'
-              }`}
-            >
-              {isInWatchlist ? <Check className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
-              <span>{isInWatchlist ? 'مُضاف إلى قائمتي' : 'أضافة الي قائمتي'}</span>
-            </button>
+            {/* Side Watch & Download CTAs (No scroll required) */}
+            <div className="w-full max-w-[260px] mx-auto md:max-w-none space-y-2.5">
+              <button
+                type="button"
+                onClick={() => onOpenPlayer(item, selectedEpisodeNumber)}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#D92321] hover:bg-[#dc0e30] px-4 py-3.5 text-sm font-extrabold text-white shadow-[0_10px_25px_rgba(217,35,33,0.4)] transition-all hover:-translate-y-0.5 cursor-pointer"
+              >
+                <Play className="w-4 h-4 fill-current shrink-0" />
+                <span>
+                  {allEpisodes.length > 0
+                    ? `مشاهدة الحلقة ${String(selectedEpisodeNumber).padStart(2, '0')} الآن`
+                    : 'مشاهدة الآن (سيرفرات متعددة)'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowDownloads((prev) => !prev)}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#4CAF50] hover:bg-[#43a047] px-4 py-3.5 text-sm font-extrabold text-white shadow-[0_10px_25px_rgba(76,175,80,0.3)] transition-all hover:-translate-y-0.5 cursor-pointer"
+              >
+                <Download className="w-4 h-4 shrink-0" />
+                <span>{showDownloads ? 'إخفاء روابط التحميل' : 'تحميل الآن (روابط مباشرة)'}</span>
+              </button>
+
+              {/* Inline Side Download Links Panel (opens directly in sidebar without scrolling) */}
+              {showDownloads && (
+                <div className="rounded-2xl bg-[#1a242e] border border-[#4CAF50]/35 p-3 space-y-2">
+                  <p className="text-xs font-extrabold text-white">روابط التحميل المباشرة:</p>
+                  {item.downloads.length === 0 ? (
+                    <p className="text-[11px] text-[#b7c9ef]">لا توجد روابط تحميل متاحة حاليًا.</p>
+                  ) : (
+                    <div className="space-y-1.5 max-h-52 overflow-y-auto pl-0.5">
+                      {item.downloads.map((dl) =>
+                        dl.url && /^https?:\/\//i.test(dl.url) ? (
+                          <a
+                            key={dl.id}
+                            href={dl.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() => handleDownload(dl.quality, dl.host)}
+                            className="flex items-center justify-between gap-2 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-right hover:border-[#4CAF50] transition-colors cursor-pointer"
+                          >
+                            <div className="min-w-0">
+                              <p className="font-latin text-xs font-extrabold text-white truncate">
+                                {dl.quality}
+                              </p>
+                              <p className="text-[10px] text-[#b7c9ef] truncate">
+                                {dl.host} • {dl.format}
+                              </p>
+                            </div>
+                            <Download className="w-3.5 h-3.5 text-[#4CAF50] shrink-0" />
+                          </a>
+                        ) : (
+                          <button
+                            key={dl.id}
+                            type="button"
+                            onClick={() => handleDownload(dl.quality, dl.host)}
+                            className="flex w-full items-center justify-between gap-2 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-right hover:border-[#4CAF50] transition-colors cursor-pointer"
+                          >
+                            <div className="min-w-0">
+                              <p className="font-latin text-xs font-extrabold text-white truncate">
+                                {dl.quality}
+                              </p>
+                              <p className="text-[10px] text-[#b7c9ef] truncate">
+                                {dl.host} • {dl.format}
+                              </p>
+                            </div>
+                            <Download className="w-3.5 h-3.5 text-[#4CAF50] shrink-0" />
+                          </button>
+                        )
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Watchlist Toggle Button (.single-playlist-button) */}
+              <button
+                type="button"
+                onClick={() => onToggleWatchlist(item)}
+                className={`w-full flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-extrabold border transition-all cursor-pointer ${
+                  isInWatchlist
+                    ? 'bg-[#4CAF50]/20 border-[#4CAF50] text-[#4CAF50]'
+                    : 'bg-[#1a242e] border-white/10 text-white hover:border-[#4CAF50] hover:text-[#4CAF50]'
+                }`}
+              >
+                {isInWatchlist ? <Check className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
+                <span>{isInWatchlist ? 'مُضاف إلى قائمتي' : 'أضافة الي قائمتي'}</span>
+              </button>
+            </div>
           </div>
 
           {/* Info Column (.single-left) */}
-          <div className="md:col-span-8 lg:col-span-9 md:pt-24 space-y-6">
+          <div className="md:col-span-8 lg:col-span-9 space-y-5">
             {/* Story Block (.single-story) */}
-            <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6">
-              <h2 className="font-display text-lg font-extrabold text-white mb-2.5 flex items-center gap-2">
+            <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5">
+              <h2 className="font-display text-lg font-extrabold text-white mb-2 flex items-center gap-2">
                 <span className="h-5 w-1.5 rounded-full bg-[#D92321]" />
                 قصة العرض
               </h2>
@@ -275,8 +352,8 @@ export function SingleDetailView({
             </div>
 
             {/* Clickable Details Grid (.single-details) */}
-            <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6">
-              <h2 className="font-display text-lg font-extrabold text-white mb-4 flex items-center gap-2">
+            <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5">
+              <h2 className="font-display text-lg font-extrabold text-white mb-3.5 flex items-center gap-2">
                 <span className="h-5 w-1.5 rounded-full bg-[#f9c400]" />
                 تفاصيل العرض
               </h2>
@@ -447,34 +524,9 @@ export function SingleDetailView({
           </div>
 
           {/* Tab Panel Content */}
-          <div className="p-6">
+          <div className="p-5 sm:p-6">
             {activeTab === 'watch' && (
-              <div className="space-y-6">
-                {/* Watch & Download Primary CTAs */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <button
-                    type="button"
-                    onClick={() => onOpenPlayer(item, selectedEpisodeNumber)}
-                    className="flex items-center justify-center gap-3 rounded-2xl bg-[#D92321] hover:bg-[#dc0e30] py-4 px-6 text-base font-extrabold text-white shadow-[0_12px_30px_rgba(217,35,33,0.4)] transition-transform hover:-translate-y-0.5 cursor-pointer"
-                  >
-                    <Play className="w-5 h-5 fill-current" />
-                    <span>
-                      {allEpisodes.length > 0
-                        ? `مشاهدة الحلقة ${String(selectedEpisodeNumber).padStart(2, '0')} الآن`
-                        : 'مشاهدة الآن (سيرفرات متعددة)'}
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setShowDownloads((prev) => !prev)}
-                    className="flex items-center justify-center gap-3 rounded-2xl bg-[#4CAF50] hover:bg-[#43a047] py-4 px-6 text-base font-extrabold text-white shadow-[0_12px_30px_rgba(76,175,80,0.3)] transition-transform hover:-translate-y-0.5 cursor-pointer"
-                  >
-                    <Download className="w-5 h-5" />
-                    <span>{showDownloads ? 'إخفاء روابط التحميل' : 'تحميل الآن (روابط مباشرة)'}</span>
-                  </button>
-                </div>
-
+              <div className="space-y-5">
                 {/* Per-Episode Quick Selector Strip for Series */}
                 {allEpisodes.length > 0 && (
                   <div className="rounded-2xl bg-[#101e29] border border-white/[0.08] p-3.5 sm:p-4 space-y-2.5">
