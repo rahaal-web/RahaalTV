@@ -1,6 +1,9 @@
+import 'dotenv/config';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import express from 'express';
 import * as cheerio from 'cheerio';
 import fs from 'fs';
+import http from 'http';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 
@@ -2486,9 +2489,326 @@ async function startServer() {
     }
   });
 
+  // AI Bulk Catalog Editor Endpoint (Server-Side Gemini API)
+  app.post('/api/ai-bulk-edit', async (req, res) => {
+    try {
+      const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+      if (!apiKey) {
+        return res.status(500).json({
+          ok: false,
+          error:
+            'مفتاح GEMINI_API_KEY غير متوفر على الخادم. يرجى التأكد من إضافته في إعدادات Secrets.',
+        });
+      }
+
+      const { instruction, items } = req.body as {
+        instruction?: unknown;
+        items?: unknown;
+      };
+
+      const cleanInstruction = typeof instruction === 'string' ? instruction.trim() : '';
+      if (!cleanInstruction || cleanInstruction.length < 3) {
+        return res.status(400).json({
+          ok: false,
+          error: 'يرجى كتابة أمر واضح للتعديل الشامل على المحتوى.',
+        });
+      }
+      if (cleanInstruction.length > 2000) {
+        return res.status(400).json({
+          ok: false,
+          error: 'نص التعليمات طويل جداً (الحد الأقصى 2000 حرف).',
+        });
+      }
+
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({
+          ok: false,
+          error: 'لا توجد أعمال محددة لتطبيق التعديل عليها.',
+        });
+      }
+
+      interface AiInputItem {
+        id: string;
+        title: string;
+        englishTitle: string;
+        kind: 'movie' | 'series' | 'tv' | 'wrestling';
+        categories: string[];
+        genres: string[];
+        year: string;
+        country: string;
+        language: string;
+        quality: string;
+        duration: string;
+        tagline: string;
+        story: string;
+        pinned: boolean;
+        isNew: boolean;
+        comingSoon: boolean;
+      }
+
+      interface AiPatchItem {
+        id: string;
+        title?: string;
+        englishTitle?: string;
+        kind?: 'movie' | 'series' | 'tv' | 'wrestling';
+        categories?: string[];
+        genres?: string[];
+        year?: string;
+        country?: string;
+        language?: string;
+        quality?: string;
+        duration?: string;
+        tagline?: string;
+        story?: string;
+        pinned?: boolean;
+        isNew?: boolean;
+        comingSoon?: boolean;
+      }
+
+      const sanitizedItems: AiInputItem[] = items.slice(0, 400).map((raw: Record<string, unknown>) => ({
+        id: String(raw.id || '').trim(),
+        title: String(raw.title || '').slice(0, 200),
+        englishTitle: String(raw.englishTitle || '').slice(0, 200),
+        kind: (['movie', 'series', 'tv', 'wrestling'].includes(String(raw.kind))
+          ? String(raw.kind)
+          : 'movie') as AiInputItem['kind'],
+        categories: Array.isArray(raw.categories)
+          ? raw.categories.map((c) => String(c || '').trim()).filter(Boolean).slice(0, 10)
+          : [],
+        genres: Array.isArray(raw.genres)
+          ? raw.genres.map((g) => String(g || '').trim()).filter(Boolean).slice(0, 10)
+          : [],
+        year: String(raw.year || '').slice(0, 10),
+        country: String(raw.country || '').slice(0, 80),
+        language: String(raw.language || '').slice(0, 80),
+        quality: String(raw.quality || '').slice(0, 40),
+        duration: String(raw.duration || '').slice(0, 40),
+        tagline: String(raw.tagline || '').slice(0, 400),
+        story: String(raw.story || '').slice(0, 2000),
+        pinned: Boolean(raw.pinned),
+        isNew: Boolean(raw.isNew),
+        comingSoon: Boolean(raw.comingSoon),
+      })).filter((it) => it.id.length > 0);
+
+      if (sanitizedItems.length === 0) {
+        return res.status(400).json({
+          ok: false,
+          error: 'لم يتم العثور على معرفات صالحة للأعمال.',
+        });
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
+      const BATCH_SIZE = 25;
+      const chunks: AiInputItem[][] = [];
+      for (let i = 0; i < sanitizedItems.length; i += BATCH_SIZE) {
+        chunks.push(sanitizedItems.slice(i, i + BATCH_SIZE));
+      }
+
+      const systemInstruction = [
+        'أنت محرر محتوى متخصص لمنصة RahaL TV للأفلام والمسلسلات.',
+        'مهمتك تنفيذ أمر التعديل الشامل الذي يطلبه المشرف بدقة متناهية على قائمة الأعمال المرسلة.',
+        'القواعد الصارمة:',
+        '1. أرجع في مصفوفة updates فقط الأعمال التي تحتاج تعديلاً فعلياً بناءً على الأمر، واحتفظ بنفس حقل id لكل عمل.',
+        '2. في كل عنصر داخل updates، أدرج فقط الحقول التي تغيرت قيمتها فعلياً (لا تعيد الحقول غير المعدلة إلا إذا لزم، ولا تخترع أعمالاً جديدة).',
+        '3. إذا طُلب حذف كلمة أو بادئة مثل "فيلم" أو "مسلسل" أو عبارات مثل "مترجم اون لاين بجودة عالية"، أزلها بدقة ونظّف المسافات الزائدة دون إتلاف اسم العمل الأساسي أو السنة.',
+        '4. القيم المسموحة لحقل kind إن تم تغييره هي فقط: movie, series, tv, wrestling.',
+        '5. حافظ على اللغة العربية سليمة وجذابة، واجعل summary ملخصاً عربياً واضحاً لما تم تعديله.',
+      ].join('\n');
+
+      const processChunkWithRetry = async (chunk: AiInputItem[]) => {
+        const chunkIds = new Set(chunk.map((c) => c.id));
+        const userPrompt = JSON.stringify({
+          instruction: cleanInstruction,
+          items: chunk,
+        });
+
+        let lastErr: unknown = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const response = await ai.models.generateContent({
+              model: 'gemini-4-hydrogen',
+              contents: userPrompt,
+              config: {
+                systemInstruction,
+                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                responseMimeType: 'application/json',
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    summary: {
+                      type: Type.STRING,
+                      description: 'ملخص عربي مختصر للتعديلات التي طُبقت على هذه المجموعة.',
+                    },
+                    updates: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          id: { type: Type.STRING },
+                          title: { type: Type.STRING },
+                          englishTitle: { type: Type.STRING },
+                          kind: { type: Type.STRING },
+                          categories: { type: Type.ARRAY, items: { type: Type.STRING } },
+                          genres: { type: Type.ARRAY, items: { type: Type.STRING } },
+                          year: { type: Type.STRING },
+                          country: { type: Type.STRING },
+                          language: { type: Type.STRING },
+                          quality: { type: Type.STRING },
+                          duration: { type: Type.STRING },
+                          tagline: { type: Type.STRING },
+                          story: { type: Type.STRING },
+                          pinned: { type: Type.BOOLEAN },
+                          isNew: { type: Type.BOOLEAN },
+                          comingSoon: { type: Type.BOOLEAN },
+                        },
+                        required: ['id'],
+                      },
+                    },
+                  },
+                  required: ['summary', 'updates'],
+                },
+              },
+            });
+
+            const parsed = JSON.parse((response.text ?? '{}').trim()) as {
+              summary?: string;
+              updates?: AiPatchItem[];
+            };
+
+            const validUpdates: AiPatchItem[] = [];
+            if (Array.isArray(parsed.updates)) {
+              for (const rawUpd of parsed.updates) {
+                if (!rawUpd || typeof rawUpd.id !== 'string' || !chunkIds.has(rawUpd.id)) continue;
+                const cleanUpd: AiPatchItem = { id: rawUpd.id };
+                if (typeof rawUpd.title === 'string' && rawUpd.title.trim()) {
+                  cleanUpd.title = rawUpd.title.trim().slice(0, 200);
+                }
+                if (typeof rawUpd.englishTitle === 'string' && rawUpd.englishTitle.trim()) {
+                  cleanUpd.englishTitle = rawUpd.englishTitle.trim().slice(0, 200);
+                }
+                if (
+                  typeof rawUpd.kind === 'string' &&
+                  ['movie', 'series', 'tv', 'wrestling'].includes(rawUpd.kind)
+                ) {
+                  cleanUpd.kind = rawUpd.kind;
+                }
+                if (Array.isArray(rawUpd.categories) && rawUpd.categories.length > 0) {
+                  const cats = rawUpd.categories
+                    .map((c) => String(c || '').trim().slice(0, 60))
+                    .filter(Boolean)
+                    .slice(0, 10);
+                  if (cats.length > 0) cleanUpd.categories = cats;
+                }
+                if (Array.isArray(rawUpd.genres) && rawUpd.genres.length > 0) {
+                  const gns = rawUpd.genres
+                    .map((g) => String(g || '').trim().slice(0, 60))
+                    .filter(Boolean)
+                    .slice(0, 10);
+                  if (gns.length > 0) cleanUpd.genres = gns;
+                }
+                if (typeof rawUpd.year === 'string' && rawUpd.year.trim().length >= 4) {
+                  cleanUpd.year = rawUpd.year.trim().slice(0, 10);
+                }
+                if (typeof rawUpd.country === 'string' && rawUpd.country.trim()) {
+                  cleanUpd.country = rawUpd.country.trim().slice(0, 80);
+                }
+                if (typeof rawUpd.language === 'string' && rawUpd.language.trim()) {
+                  cleanUpd.language = rawUpd.language.trim().slice(0, 80);
+                }
+                if (typeof rawUpd.quality === 'string' && rawUpd.quality.trim()) {
+                  cleanUpd.quality = rawUpd.quality.trim().slice(0, 40);
+                }
+                if (typeof rawUpd.duration === 'string' && rawUpd.duration.trim()) {
+                  cleanUpd.duration = rawUpd.duration.trim().slice(0, 40);
+                }
+                if (typeof rawUpd.tagline === 'string') {
+                  cleanUpd.tagline = rawUpd.tagline.trim().slice(0, 400);
+                }
+                if (typeof rawUpd.story === 'string' && rawUpd.story.trim()) {
+                  cleanUpd.story = rawUpd.story.trim().slice(0, 3000);
+                }
+                if (typeof rawUpd.pinned === 'boolean') cleanUpd.pinned = rawUpd.pinned;
+                if (typeof rawUpd.isNew === 'boolean') cleanUpd.isNew = rawUpd.isNew;
+                if (typeof rawUpd.comingSoon === 'boolean') cleanUpd.comingSoon = rawUpd.comingSoon;
+
+                if (Object.keys(cleanUpd).length > 1) {
+                  validUpdates.push(cleanUpd);
+                }
+              }
+            }
+
+            return {
+              summary: typeof parsed.summary === 'string' ? parsed.summary.trim() : '',
+              updates: validUpdates,
+            };
+          } catch (err) {
+            lastErr = err;
+            const errStr = err instanceof Error ? err.message : String(err);
+            const isPermanent =
+              /API_KEY_INVALID|PERMISSION_DENIED|NOT_FOUND|400|403|404/.test(errStr) &&
+              !/429|500|503|UNAVAILABLE|RESOURCE_EXHAUSTED/i.test(errStr);
+            if (isPermanent || attempt === 2) {
+              throw err;
+            }
+            await new Promise((r) => setTimeout(r, 700 * Math.pow(2, attempt)));
+          }
+        }
+        throw lastErr;
+      };
+
+      const allUpdates: AiPatchItem[] = [];
+      const summaries: string[] = [];
+
+      // Process up to 3 batches concurrently for speed across large catalogs
+      for (let i = 0; i < chunks.length; i += 3) {
+        const wave = chunks.slice(i, i + 3);
+        const results = await Promise.all(wave.map((c) => processChunkWithRetry(c)));
+        for (const r of results) {
+          if (r.summary) summaries.push(r.summary);
+          allUpdates.push(...r.updates);
+        }
+      }
+
+      return res.json({
+        ok: true,
+        model: 'gemini-4-hydrogen',
+        processedCount: sanitizedItems.length,
+        batchesCount: chunks.length,
+        summary: summaries[0] || `تم تحليل ${sanitizedItems.length} عملًا وتجهيز التعديلات المقترحة.`,
+        updates: allUpdates,
+      });
+    } catch (err) {
+      const rawMsg = err instanceof Error ? err.message : 'تعذر تنفيذ المعالجة بالذكاء الاصطناعي.';
+      let friendlyMsg = `تعذر تنفيذ التعديل عبر Gemini AI: ${rawMsg}`;
+      if (/API_KEY_INVALID|PERMISSION_DENIED|403/.test(rawMsg)) {
+        friendlyMsg =
+          'مفتاح Gemini API غير صالح أو يفتقر للصلاحية. يرجى مراجعة المفتاح في Settings > Secrets.';
+      } else if (/RESOURCE_EXHAUSTED|429/.test(rawMsg)) {
+        friendlyMsg =
+          'تم تجاوز حد الطلبات المؤقت لـ Gemini API. يرجى الانتظار قليلاً أو تقليل نطاق العناصر ثم المحاولة مجدداً.';
+      }
+      return res.status(500).json({ ok: false, error: friendlyMsg });
+    }
+  });
+
+  const httpServer = http.createServer(app);
+
   if (process.env.NODE_ENV !== 'production') {
+    const disableHmr = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: disableHmr ? false : { server: httpServer },
+        ws: { server: httpServer },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -2505,7 +2825,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`RahaL TV server running on http://0.0.0.0:${PORT}`);
   });
 }

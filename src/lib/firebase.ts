@@ -432,6 +432,27 @@ export async function bulkSaveMediaToFirestore(items: MediaItem[], uid: string):
   }
 }
 
+export async function bulkUpdateMediaInFirestore(items: MediaItem[], uid: string): Promise<number> {
+  const path = 'media';
+  const CHUNK_SIZE = 35;
+  let updatedCount = 0;
+  try {
+    for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+      const chunk = items.slice(i, i + CHUNK_SIZE);
+      const batch = writeBatch(db);
+      for (const item of chunk) {
+        const { cleanId, payload } = sanitizeMediaPayload(item, uid, false);
+        batch.update(doc(db, 'media', cleanId), payload);
+      }
+      await batch.commit();
+      updatedCount += chunk.length;
+    }
+    return updatedCount;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
 export async function saveMediaToFirestore(
   item: MediaItem,
   uid: string,

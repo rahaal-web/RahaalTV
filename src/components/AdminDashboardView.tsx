@@ -43,6 +43,7 @@ import {
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 import { ASSETS, CATALOG_ITEMS } from '../data/catalog';
+import { AdminAiBulkEditor } from './AdminAiBulkEditor';
 import { HomeBuilderPanel } from './HomeBuilderPanel';
 import { MediaPreviewModal } from './MediaPreviewModal';
 import {
@@ -113,6 +114,7 @@ export type AdminTab =
   | 'overview'
   | 'home_builder'
   | 'catalog'
+  | 'ai_editor'
   | 'scraper'
   | 'site_scraper'
   | 'requests'
@@ -2023,6 +2025,15 @@ export function AdminDashboardView({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
+              onClick={() => setActiveTab('ai_editor')}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-[#f9c400]/20 border border-[#f9c400]/45 px-3.5 py-2 text-xs font-extrabold text-[#f9c400] cursor-pointer"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span className="hidden md:inline">تعديل شامل AI</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setActiveTab('site_scraper')}
               className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-[#f9c400]/20 border border-[#f9c400]/40 px-3.5 py-2 text-xs font-extrabold text-[#f9c400] cursor-pointer"
             >
@@ -2102,6 +2113,12 @@ export function AdminDashboardView({
                   badge: 'تحكم كامل',
                 },
                 { id: 'catalog', label: `الأفلام والمسلسلات (${catalog.length})`, icon: Film },
+                {
+                  id: 'ai_editor',
+                  label: 'تعديل شامل بالذكاء الاصطناعي',
+                  icon: Sparkles,
+                  badge: 'AI',
+                },
                 { id: 'scraper', label: 'جلب عمل واحد (رابط)', icon: Wand2 },
                 {
                   id: 'site_scraper',
@@ -2335,6 +2352,18 @@ export function AdminDashboardView({
                 onSaveHomeConfig={handleSaveHomeConfig}
                 onPreviewHome={onExitDashboard}
                 onNotify={onNotify}
+              />
+            )}
+
+            {/* TAB 1C: AI BULK CONTENT EDITOR */}
+            {activeTab === 'ai_editor' && (
+              <AdminAiBulkEditor
+                user={user}
+                catalog={catalog}
+                isFirestoreSeeded={isFirestoreSeeded}
+                onNotify={onNotify}
+                onPreviewMedia={onPreviewMedia}
+                onSavedToCatalog={() => setActiveTab('catalog')}
               />
             )}
 
