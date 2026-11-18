@@ -134,6 +134,10 @@
   .moov-ticker-track {
     animation: none !important;
   }
+  .rtv-hero-cinematic-in,
+  .rtv-hero-content-in {
+    animation: none !important;
+  }
 }
 
 /* Classic Optional 3D Card Flip */
@@ -292,6 +296,36 @@
 .rtv-slider-progress-fill {
   transform-origin: right center;
   will-change: transform;
+}
+
+@keyframes rtv-hero-cinematic-in {
+  from {
+    opacity: 0.4;
+    transform: scale(1.025);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.rtv-hero-cinematic-in {
+  animation: rtv-hero-cinematic-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes rtv-hero-content-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rtv-hero-content-in {
+  animation: rtv-hero-content-in 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* Mobile Watch Experience (< 1024px) — Preserves Desktop & TV layouts untouched */

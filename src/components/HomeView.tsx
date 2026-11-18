@@ -335,6 +335,7 @@ export function HomeView({
   const [heroHovered, setHeroHovered] = useState(false);
   const [heroPausedManual, setHeroPausedManual] = useState(false);
   const [dismissedBanner, setDismissedBanner] = useState(false);
+  const heroTouchStartRef = useRef<{ x: number; y: number } | null>(null);
 
   // Full Paginated Library (optional when toggled on by admin)
   const [libraryFilter, setLibraryFilter] = useState<'all' | 'movie' | 'series' | 'other'>('all');
@@ -409,7 +410,7 @@ export function HomeView({
   if (loading && catalog.length === 0) {
     return (
       <div className="space-y-10 pb-16">
-        <div className="h-[480px] sm:h-[540px] w-full rtv-skeleton" />
+        <div className="h-[430px] sm:h-[470px] md:h-[600px] lg:h-[660px] w-full rtv-skeleton" />
         <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 space-y-8">
           <div className="h-12 w-full rounded-2xl rtv-skeleton" />
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-4">
@@ -464,7 +465,7 @@ export function HomeView({
   const enabledSections = homeConfig.sections.filter((sec) => sec.enabled);
 
   return (
-    <div className="space-y-10 sm:space-y-12 pb-16">
+    <div className="space-y-6 sm:space-y-8 md:space-y-12 pb-16">
       {/* Optional Admin Announcement Bar */}
       {siteSettings.announcementText && !dismissedBanner && (
         <div className="bg-[#E50914] pt-20 pb-2.5 px-4 text-center text-xs font-extrabold text-white relative">
@@ -496,8 +497,29 @@ export function HomeView({
             className="relative overflow-hidden bg-[#0f0f0f]"
             onMouseEnter={() => setHeroHovered(true)}
             onMouseLeave={() => setHeroHovered(false)}
+            onTouchStart={(e) => {
+              const t = e.touches[0];
+              if (!t) return;
+              heroTouchStartRef.current = { x: t.clientX, y: t.clientY };
+            }}
+            onTouchEnd={(e) => {
+              const start = heroTouchStartRef.current;
+              heroTouchStartRef.current = null;
+              if (!start || heroSlides.length <= 1) return;
+              const t = e.changedTouches[0];
+              if (!t) return;
+              const dx = t.clientX - start.x;
+              const dy = t.clientY - start.y;
+              if (Math.abs(dx) > 42 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+                if (dx < 0) {
+                  setHeroIndex((prev) => (prev + 1) % heroSlides.length);
+                } else {
+                  setHeroIndex((prev) => (prev - 1 + heroSlides.length) % heroSlides.length);
+                }
+              }
+            }}
           >
-            <div className="relative min-h-[540px] sm:min-h-[600px] lg:min-h-[660px] flex flex-col justify-end">
+            <div className="relative min-h-[430px] sm:min-h-[470px] max-md:landscape:min-h-[330px] md:min-h-[600px] lg:min-h-[660px] flex flex-col justify-end">
               {/* Background Visual Layer */}
               <img
                 key={activeHero.id}
@@ -508,7 +530,7 @@ export function HomeView({
                 fetchPriority="high"
                 referrerPolicy="no-referrer"
                 onError={handleBackdropError}
-                className="absolute inset-0 h-full w-full object-cover object-center transition-opacity duration-700"
+                className="rtv-hero-cinematic-in absolute inset-0 h-full w-full object-cover object-center transition-opacity duration-700"
               />
 
               {/* Subtle blurred poster accent overlay only when item lacks a genuine 16:9 backdrop */}
@@ -523,12 +545,123 @@ export function HomeView({
                 />
               )}
 
-              {/* Light Edge Scrims Keeping Widescreen Backdrop Crisp & Clearly Visible */}
-              <div className="absolute inset-0 bg-gradient-to-b from-black/25 via-transparent via-20% to-transparent" />
-              <div className="absolute inset-0 bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/20 via-30% to-transparent" />
-              <div className="absolute inset-0 bg-gradient-to-l from-[#0f0f0f]/65 via-[#0f0f0f]/15 via-38% to-transparent" />
+              {/* Mobile Cinematic Edge Vignette & Clean Bottom Scrim (< 768px) */}
+              <div className="md:hidden pointer-events-none absolute inset-0 bg-gradient-to-b from-[#0f0f0f]/55 via-transparent via-28% to-transparent" />
+              <div className="md:hidden pointer-events-none absolute inset-0 bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/80 via-42% to-transparent" />
 
-              <div className="relative z-10 mx-auto w-full max-w-[1440px] px-4 sm:px-6 lg:px-10 pt-28 pb-6 sm:pb-8 flex flex-col gap-6 sm:gap-7">
+              {/* Desktop & Tablet Original Edge Scrims (>= 768px — Preserved Untouched) */}
+              <div className="hidden md:block absolute inset-0 bg-gradient-to-b from-black/25 via-transparent via-20% to-transparent" />
+              <div className="hidden md:block absolute inset-0 bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/20 via-30% to-transparent" />
+              <div className="hidden md:block absolute inset-0 bg-gradient-to-l from-[#0f0f0f]/65 via-[#0f0f0f]/15 via-38% to-transparent" />
+
+              {/* Mobile Cinematic Hero Foreground (< 768px): Minimalist Netflix/Shahid Style */}
+              <div
+                key={`mobile-hero-${activeHero.id}`}
+                className="md:hidden rtv-hero-content-in relative z-10 mx-auto w-full px-4 pt-20 pb-4 flex flex-col gap-3 text-right"
+              >
+                <div className="space-y-1.5">
+                  <h1 className="font-display text-[21px] sm:text-2xl font-extrabold text-white leading-tight line-clamp-2 drop-shadow-[0_2px_8px_rgba(0,0,0,0.85)]">
+                    {heroTitle}
+                  </h1>
+
+                  <div className="flex items-center gap-2 text-xs font-bold text-[#e5e5e5] tabular-nums">
+                    <span className="inline-flex items-center gap-1 text-[#f9c400] font-extrabold font-latin">
+                      <Star className="w-3.5 h-3.5 fill-current" />
+                      <span>{Number(activeHero.imdb || 7.5).toFixed(1)}</span>
+                    </span>
+                    <span aria-hidden="true" className="text-white/30">•</span>
+                    <span className="font-latin text-white/90">{activeHero.year || '2026'}</span>
+                    <span aria-hidden="true" className="text-white/30">•</span>
+                    <span className="font-latin text-white/95 truncate">{activeHero.quality || 'WEB-DL'}</span>
+                  </div>
+                </div>
+
+                {/* Two Primary Actions Only: Watch Now + Details */}
+                <div className="grid grid-cols-2 gap-2.5 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={() => onPlayNow(activeHero)}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#E50914] hover:bg-[#f40612] active:scale-[0.98] min-h-[44px] px-4 py-2.5 text-xs sm:text-sm font-extrabold text-white transition-all cursor-pointer"
+                  >
+                    <Play className="w-4 h-4 fill-current shrink-0" />
+                    <span className="truncate">{homeConfig.heroPrimaryCta || 'مشاهدة الآن'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onSelectMedia(activeHero)}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#181818]/85 hover:bg-[#262626] active:scale-[0.98] border border-white/15 min-h-[44px] px-4 py-2.5 text-xs sm:text-sm font-bold text-white backdrop-blur-md transition-all cursor-pointer"
+                  >
+                    <Info className="w-4 h-4 shrink-0" />
+                    <span>التفاصيل</span>
+                  </button>
+                </div>
+
+                {/* Sleek Pagination Dots + Discreet Prev/Next Controls */}
+                {heroSlides.length > 1 && (
+                  <div className="flex items-center justify-between gap-2 pt-0.5">
+                    {showArrows ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setHeroIndex((prev) => (prev - 1 + heroSlides.length) % heroSlides.length)
+                        }
+                        aria-label="العرض السابق"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/35 text-white/80 hover:text-white active:scale-95 transition-all cursor-pointer shrink-0"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    ) : (
+                      <span className="w-8 shrink-0" />
+                    )}
+
+                    <div
+                      className="flex items-center justify-center gap-1 flex-1 min-w-0"
+                      role="tablist"
+                      aria-label="الأعمال المميزة في السلايدر"
+                    >
+                      {heroSlides.map((item, idx) => {
+                        const isActiveDot = idx === activeSlideIndex;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            role="tab"
+                            aria-selected={isActiveDot}
+                            aria-label={`عرض ${item.title}`}
+                            onClick={() => setHeroIndex(idx)}
+                            className="py-2 px-0.5 flex items-center justify-center cursor-pointer focus:outline-none"
+                          >
+                            <span
+                              className={`block h-1.5 rounded-full transition-all duration-300 ${
+                                isActiveDot
+                                  ? 'w-6 bg-[#E50914]'
+                                  : 'w-1.5 bg-white/35 hover:bg-white/60'
+                              }`}
+                            />
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {showArrows ? (
+                      <button
+                        type="button"
+                        onClick={() => setHeroIndex((prev) => (prev + 1) % heroSlides.length)}
+                        aria-label="العرض التالي"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/35 text-white/80 hover:text-white active:scale-95 transition-all cursor-pointer shrink-0"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                    ) : (
+                      <span className="w-8 shrink-0" />
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Desktop & Tablet Foreground (>= 768px — Preserved Untouched) */}
+              <div className="hidden md:flex relative z-10 mx-auto w-full max-w-[1440px] px-4 sm:px-6 lg:px-10 pt-28 pb-6 sm:pb-8 flex-col gap-6 sm:gap-7">
                 {/* Main Info (Right Side in RTL) + Arrows & Progress (Left Side) */}
                 <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
                   <div className="max-w-lg space-y-3 text-right drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)]">
