@@ -191,10 +191,14 @@ export function SingleDetailView({
   const activeSeason = seasons[selectedSeasonIdx];
   const allEpisodes = activeSeason?.episodes || seasons[0]?.episodes || [];
   const activeEpisodeObj = allEpisodes.find((e) => e.number === selectedEpisodeNumber);
+  const itemServers = Array.isArray(item.servers) ? item.servers : [];
+  const itemGenres = Array.isArray(item.genres) ? item.genres : [];
+  const itemCategories = Array.isArray(item.categories) ? item.categories : [];
+  const itemDownloads = Array.isArray(item.downloads) ? item.downloads : [];
   const activeServers =
     activeEpisodeObj?.servers && activeEpisodeObj.servers.length > 0
       ? activeEpisodeObj.servers
-      : item.servers;
+      : itemServers;
   const dedicatedShortUrl = resolveDisplayShortUrl(
     item,
     allEpisodes.length > 0 ? selectedEpisodeNumber : undefined
@@ -208,7 +212,7 @@ export function SingleDetailView({
     .filter(
       (c) =>
         c.id !== item.id &&
-        (c.kind === item.kind || c.genres.some((g) => item.genres.includes(g)))
+        (c.kind === item.kind || (c.genres || []).some((g) => itemGenres.includes(g)))
     )
     .slice(0, 6);
 
@@ -310,23 +314,27 @@ export function SingleDetailView({
                 >
                   RahaL TV
                 </button>
-                <ChevronLeft className="w-3.5 h-3.5 text-white/40" />
-                <button
-                  type="button"
-                  onClick={() => onApplyFilter({ category: item.categories[0] })}
-                  className="hover:text-white transition-colors cursor-pointer"
-                >
-                  {item.categories[0]}
-                </button>
-                {item.categories[1] && (
+                {itemCategories[0] && (
                   <>
                     <ChevronLeft className="w-3.5 h-3.5 text-white/40" />
                     <button
                       type="button"
-                      onClick={() => onApplyFilter({ category: item.categories[1] })}
+                      onClick={() => onApplyFilter({ category: itemCategories[0] })}
                       className="hover:text-white transition-colors cursor-pointer"
                     >
-                      {item.categories[1]}
+                      {itemCategories[0]}
+                    </button>
+                  </>
+                )}
+                {itemCategories[1] && (
+                  <>
+                    <ChevronLeft className="w-3.5 h-3.5 text-white/40" />
+                    <button
+                      type="button"
+                      onClick={() => onApplyFilter({ category: itemCategories[1] })}
+                      className="hover:text-white transition-colors cursor-pointer"
+                    >
+                      {itemCategories[1]}
                     </button>
                   </>
                 )}
@@ -383,7 +391,7 @@ export function SingleDetailView({
                 <div>
                   <div className="flex items-baseline gap-1">
                     <span className="font-latin text-2xl font-black text-white">
-                      {item.imdb.toFixed(1)}
+                      {Number(item.imdb || 7.5).toFixed(1)}
                     </span>
                     <span className="font-latin text-xs font-bold text-[#b7c9ef]">/ 10</span>
                   </div>
@@ -497,10 +505,12 @@ export function SingleDetailView({
                     </span>
                     <button
                       type="button"
-                      onClick={() => onApplyFilter({ category: item.categories[1] || item.categories[0] })}
+                      onClick={() =>
+                        onApplyFilter({ category: itemCategories[1] || itemCategories[0] || '' })
+                      }
                       className="font-bold text-xs sm:text-sm text-white hover:text-[#D92321] truncate cursor-pointer"
                     >
-                      {item.categories[1] || item.categories[0]}
+                      {itemCategories[1] || itemCategories[0] || 'غير محدد'}
                     </button>
                   </div>
 
@@ -510,7 +520,7 @@ export function SingleDetailView({
                       نوع العرض
                     </span>
                     <div className="flex flex-wrap gap-1.5 justify-end">
-                      {item.genres.slice(0, 3).map((g) => (
+                      {itemGenres.slice(0, 3).map((g) => (
                         <button
                           key={g}
                           type="button"
@@ -679,8 +689,8 @@ export function SingleDetailView({
                         {showDownloads ? 'إخفاء روابط التحميل' : 'تحميل الآن'}
                       </p>
                       <p className="text-[11px] font-bold text-white/85 truncate mt-0.5">
-                        {item.downloads.length > 0
-                          ? `${item.downloads.length} روابط مباشرة • HD`
+                        {itemDownloads.length > 0
+                          ? `${itemDownloads.length} روابط مباشرة • HD`
                           : 'روابط تحميل سريعة ومباشرة'}
                       </p>
                     </div>
@@ -697,11 +707,11 @@ export function SingleDetailView({
               {showDownloads && (
                 <div className="rounded-2xl bg-[#15222d] border border-[#10b981]/35 p-3 space-y-2">
                   <p className="text-xs font-extrabold text-white">روابط التحميل المباشرة:</p>
-                  {item.downloads.length === 0 ? (
+                  {itemDownloads.length === 0 ? (
                     <p className="text-[11px] text-[#b7c9ef]">لا توجد روابط تحميل متاحة حاليًا.</p>
                   ) : (
                     <div className="space-y-1.5 max-h-44 overflow-y-auto pl-0.5">
-                      {item.downloads.map((dl) =>
+                      {itemDownloads.map((dl) =>
                         dl.url && /^https?:\/\//i.test(dl.url) ? (
                           <a
                             key={dl.id}

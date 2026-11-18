@@ -183,8 +183,31 @@ export function loadStoredCustomFonts(): Partial<Record<CustomFontSlot, CustomFo
   try {
     const raw = localStorage.getItem(CUSTOM_FONTS_STORAGE_KEY);
     if (!raw) return {};
-    const parsed = JSON.parse(raw) as Partial<Record<CustomFontSlot, CustomFontRecord>>;
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const record = parsed as Record<string, unknown>;
+    const clean: Partial<Record<CustomFontSlot, CustomFontRecord>> = {};
+    (['arabic', 'english'] as const).forEach((slot) => {
+      const candidate = record[slot];
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return;
+      const c = candidate as Partial<CustomFontRecord>;
+      if (
+        typeof c.family === 'string' &&
+        c.family.trim() &&
+        typeof c.sourceUrl === 'string' &&
+        c.sourceUrl.trim() &&
+        typeof c.format === 'string'
+      ) {
+        clean[slot] = {
+          id: slot,
+          family: c.family,
+          fileName: typeof c.fileName === 'string' ? c.fileName : 'custom-font',
+          format: c.format as CustomFontFormat,
+          sourceUrl: c.sourceUrl,
+        };
+      }
+    });
+    return clean;
   } catch {
     return {};
   }
@@ -305,7 +328,12 @@ export function applyTypographyToDocument(
 
   const syncExternalCssLink = (id: string, font?: CustomFontRecord) => {
     let el = document.getElementById(id) as HTMLLinkElement | null;
-    if (font && font.format === 'css' && /^https?:\/\//i.test(font.sourceUrl)) {
+    if (
+      font &&
+      font.format === 'css' &&
+      typeof font.sourceUrl === 'string' &&
+      /^https?:\/\//i.test(font.sourceUrl)
+    ) {
       if (!el) {
         el = document.createElement('link');
         el.id = id;
@@ -321,7 +349,13 @@ export function applyTypographyToDocument(
   syncExternalCssLink(customLinkArId, arCustom);
   syncExternalCssLink(customLinkEnId, enCustom);
 
-  if (arCustom && arCustom.format !== 'css' && arCustom.sourceUrl) {
+  if (
+    arCustom &&
+    arCustom.format !== 'css' &&
+    typeof arCustom.sourceUrl === 'string' &&
+    arCustom.sourceUrl &&
+    typeof arCustom.family === 'string'
+  ) {
     const safeUrl = arCustom.sourceUrl.replace(/"/g, '\\"');
     customCssParts.push(`
 @font-face {
@@ -334,7 +368,13 @@ export function applyTypographyToDocument(
 }`);
   }
 
-  if (enCustom && enCustom.format !== 'css' && enCustom.sourceUrl) {
+  if (
+    enCustom &&
+    enCustom.format !== 'css' &&
+    typeof enCustom.sourceUrl === 'string' &&
+    enCustom.sourceUrl &&
+    typeof enCustom.family === 'string'
+  ) {
     const safeUrl = enCustom.sourceUrl.replace(/"/g, '\\"');
     customCssParts.push(`
 @font-face {

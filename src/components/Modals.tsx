@@ -656,8 +656,9 @@ export function PlayerModal({
       if (!item) return;
       const epList = item.seasons?.[seasonIdx]?.episodes || item.seasons?.[0]?.episodes || [];
       const activeEp = epList.find((e) => e.number === episodeNum);
+      const itemServers = Array.isArray(item.servers) ? item.servers : [];
       const effectiveServers =
-        activeEp?.servers && activeEp.servers.length > 0 ? activeEp.servers : item.servers;
+        activeEp?.servers && activeEp.servers.length > 0 ? activeEp.servers : itemServers;
       const total = effectiveServers.length;
       setFilterMap((prev) => {
         const next: Record<number, ServerFilterEntry> = {
@@ -727,7 +728,11 @@ export function PlayerModal({
     const episodesList = item.seasons?.[seasonIdx]?.episodes || item.seasons?.[0]?.episodes || [];
     const activeEp = episodesList.find((e) => e.number === episodeNum);
     const hasPerEpisodeServers = Boolean(activeEp?.servers && activeEp.servers.length > 0);
-    const targetServers = hasPerEpisodeServers ? activeEp!.servers! : item.servers;
+    const targetServers = hasPerEpisodeServers
+      ? activeEp!.servers!
+      : Array.isArray(item.servers)
+        ? item.servers
+        : [];
 
     const rawEpSrc = hasPerEpisodeServers
       ? null
@@ -1007,16 +1012,16 @@ export function PlayerModal({
     handleServerFaultFailover,
   ]);
 
-  if (!item) return null;
-
-  const seasons = item.seasons || [];
+  const seasons = item?.seasons || [];
   const episodes = activeMediaEpisodes;
   const activeEpisodeObj = episodes.find((e) => e.number === episodeNum);
+  const itemServersFallback = Array.isArray(item?.servers) ? item.servers : [];
   const perEpisodeServers =
     activeEpisodeObj?.servers && activeEpisodeObj.servers.length > 0
       ? activeEpisodeObj.servers
-      : item.servers;
+      : itemServersFallback;
 
+  const fallbackQuality = item?.quality || 'HD';
   const serversList =
     perEpisodeServers.length > 0
       ? perEpisodeServers
@@ -1024,15 +1029,15 @@ export function PlayerModal({
           {
             id: 'default',
             name: 'سيرفر 1',
-            quality: item.quality,
+            quality: fallbackQuality,
             speed: 'سريع',
-            tag: item.quality,
+            tag: fallbackQuality,
           },
         ];
 
   const safeServerIndex = selectedServer < serversList.length ? selectedServer : 0;
   const activeServer = serversList[safeServerIndex] || serversList[0];
-  const activeQuality = cleanQualityIdentifier(activeServer.quality, item.quality);
+  const activeQuality = cleanQualityIdentifier(activeServer.quality, fallbackQuality);
 
   const rawEpFallbackSrc =
     activeEpisodeObj?.servers && activeEpisodeObj.servers.length > 0
@@ -1220,6 +1225,8 @@ export function PlayerModal({
       videoElementRef.current.playbackRate = playbackRate;
     }
   }, [playbackRate, finalStreamSrc, playerReloadKey]);
+
+  if (!item) return null;
 
   const handleDirectDoubleTap = (side: 'left' | 'right') => {
     const vid = videoElementRef.current;
@@ -2277,7 +2284,7 @@ export function PlayerModal({
                     <span className="text-white/30">·</span>
                     <span className="inline-flex items-center gap-1 font-latin tabular-nums text-[#f9c400]">
                       <Star className="w-3.5 h-3.5 fill-current" />
-                      <span>{item.imdb.toFixed(1)}</span>
+                      <span>{Number(item.imdb || 7.5).toFixed(1)}</span>
                     </span>
                     <span className="text-white/30">·</span>
                     <span className="font-latin text-white/90">{item.quality}</span>
@@ -2433,11 +2440,11 @@ export function PlayerModal({
                     <div className="grid grid-cols-2 gap-2 text-[11px]">
                       <div className="rounded-xl bg-black/25 px-3 py-2">
                         <span className="block text-[#9fb2d4] mb-0.5">التصنيف</span>
-                        <span className="font-bold text-white">{item.categories[0]}</span>
+                        <span className="font-bold text-white">{(item.categories || [])[0] || 'غير محدد'}</span>
                       </div>
                       <div className="rounded-xl bg-black/25 px-3 py-2">
                         <span className="block text-[#9fb2d4] mb-0.5">النوع</span>
-                        <span className="font-bold text-white">{item.genres.slice(0, 2).join(' · ')}</span>
+                        <span className="font-bold text-white">{(item.genres || []).slice(0, 2).join(' · ') || 'عام'}</span>
                       </div>
                       <div className="rounded-xl bg-black/25 px-3 py-2">
                         <span className="block text-[#9fb2d4] mb-0.5">اللغة</span>

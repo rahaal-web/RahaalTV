@@ -805,35 +805,55 @@ export function installGlobalPopupShieldGuards(): () => void {
   }
   guardsInstalled = true;
 
-  const nativeWindowOpen = window.open.bind(window);
-  window.open = function shieldedWindowOpen(
-    url?: string | URL,
-    target?: string,
-    features?: string
-  ): Window | null {
-    const cfg = loadStoredPopupShieldConfig();
-    const ctx = activePlayerContext;
-    const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
-    const verdict = evaluateWindowOpenAttempt(url, cfg, ctx, activeEl);
+  const nativeWindowOpen = typeof window.open === 'function' ? window.open.bind(window) : null;
+  let windowOpenPatched = false;
 
-    if (!verdict.allow) {
-      appendPopupShieldLog({
-        kind: 'blocked_window_open',
-        prevented: true,
-        serverHost: ctx?.serverHost || extractServerHost(verdict.resolvedUrl) || 'الصفحة الرئيسية',
-        serverName: ctx?.serverName,
-        mediaTitle: ctx?.mediaTitle,
-        targetUrl: verdict.resolvedUrl || '(تبويب فارغ / إعلاني)',
-        detail:
-          verdict.reason === 'known_ad_domain'
-            ? 'تم اعتراض ومنع محاولة window.open نحو رابط إعلاني معروف.'
-            : 'تم اعتراض ومنع محاولة window.open غير مصرح بها أثناء فتح المشغل.',
-      });
-      return null;
+  if (nativeWindowOpen) {
+    const shieldedWindowOpen = function shieldedWindowOpen(
+      url?: string | URL,
+      target?: string,
+      features?: string
+    ): Window | null {
+      const cfg = loadStoredPopupShieldConfig();
+      const ctx = activePlayerContext;
+      const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
+      const verdict = evaluateWindowOpenAttempt(url, cfg, ctx, activeEl);
+
+      if (!verdict.allow) {
+        appendPopupShieldLog({
+          kind: 'blocked_window_open',
+          prevented: true,
+          serverHost: ctx?.serverHost || extractServerHost(verdict.resolvedUrl) || 'الصفحة الرئيسية',
+          serverName: ctx?.serverName,
+          mediaTitle: ctx?.mediaTitle,
+          targetUrl: verdict.resolvedUrl || '(تبويب فارغ / إعلاني)',
+          detail:
+            verdict.reason === 'known_ad_domain'
+              ? 'تم اعتراض ومنع محاولة window.open نحو رابط إعلاني معروف.'
+              : 'تم اعتراض ومنع محاولة window.open غير مصرح بها أثناء فتح المشغل.',
+        });
+        return null;
+      }
+
+      return nativeWindowOpen(url, target, features);
+    };
+
+    try {
+      window.open = shieldedWindowOpen;
+      windowOpenPatched = true;
+    } catch {
+      try {
+        Object.defineProperty(window, 'open', {
+          value: shieldedWindowOpen,
+          configurable: true,
+          writable: true,
+        });
+        windowOpenPatched = true;
+      } catch {
+        // Strict iframe/WebView defines window.open as non-configurable; keep click capture active
+      }
     }
-
-    return nativeWindowOpen(url, target, features);
-  };
+  }
 
   const onCaptureClick = (event: MouseEvent) => {
     const target = event.target instanceof Element ? event.target : null;
@@ -874,7 +894,13 @@ export function installGlobalPopupShieldGuards(): () => void {
   document.addEventListener('click', onCaptureClick, true);
 
   return () => {
-    window.open = nativeWindowOpen;
+    if (windowOpenPatched && nativeWindowOpen) {
+      try {
+        window.open = nativeWindowOpen;
+      } catch {
+        // Ignore read-only window.open during cleanup
+      }
+    }
     document.removeEventListener('click', onCaptureClick, true);
     guardsInstalled = false;
   };

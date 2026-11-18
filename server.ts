@@ -19,7 +19,7 @@ import {
 } from './src/lib/imageMatching.ts';
 import {
   analyzeSiteStructure,
-  BaselineScrapedMedia,
+  type BaselineScrapedMedia,
   executeAdapterScrape,
   getCachedAdapters,
   isBlockedHostEnhanced,

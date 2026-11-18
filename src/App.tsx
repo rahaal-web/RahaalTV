@@ -176,7 +176,9 @@ export default function App() {
   const [watchlistIds, setWatchlistIds] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_WATCHLIST);
-      return saved ? JSON.parse(saved) : ['running-man', 'ramadan-al-saraya'];
+      if (!saved) return ['running-man', 'ramadan-al-saraya'];
+      const parsed = JSON.parse(saved);
+      return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : ['running-man', 'ramadan-al-saraya'];
     } catch {
       return ['running-man'];
     }
@@ -185,7 +187,9 @@ export default function App() {
   const [dismissedStarterIds, setDismissedStarterIds] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_DISMISSED_STARTERS);
-      return saved ? (JSON.parse(saved) as string[]) : [];
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [];
     } catch {
       return [];
     }
@@ -348,7 +352,7 @@ export default function App() {
       collection(db, mediaPath),
       (snapshot) => {
         const docs = snapshot.docs.map((d) => {
-          const raw = d.data() as MediaItem & {
+          const raw = d.data() as Partial<MediaItem> & {
             createdAt?: { toMillis?: () => number };
             updatedAt?: { toMillis?: () => number };
           };
@@ -368,8 +372,29 @@ export default function App() {
           const backdropUrlNormalized =
             rawDistinctBackdrop && rawDistinctBackdrop !== poster ? rawDistinctBackdrop : '';
           const backdrop = rawDistinctBackdrop || FALLBACK_BACKDROP;
+          const parsedImdb = Number(raw.imdb);
           return {
             ...raw,
+            id: String(raw.id || d.id),
+            slug: raw.slug || String(raw.id || d.id),
+            title: raw.title || raw.englishTitle || 'عمل بدون عنوان',
+            englishTitle: raw.englishTitle || raw.title || 'Untitled',
+            kind: raw.kind || 'movie',
+            categories: Array.isArray(raw.categories) && raw.categories.length > 0 ? raw.categories : ['افلام'],
+            genres: Array.isArray(raw.genres) ? raw.genres : [],
+            year: String(raw.year || '2026'),
+            country: raw.country || 'غير محدد',
+            language: raw.language || 'مترجم للعربية',
+            quality: raw.quality || 'HD',
+            duration: raw.duration || '',
+            imdb: Number.isFinite(parsedImdb) ? parsedImdb : 7.5,
+            votes: raw.votes || '0',
+            story: raw.story || '',
+            cast: Array.isArray(raw.cast) ? raw.cast : [],
+            servers: Array.isArray(raw.servers) ? raw.servers : [],
+            downloads: Array.isArray(raw.downloads) ? raw.downloads : [],
+            seasons: Array.isArray(raw.seasons) ? raw.seasons : [],
+            franchiseIds: Array.isArray(raw.franchiseIds) ? raw.franchiseIds : [],
             poster,
             backdrop,
             poster_url: poster,
@@ -597,7 +622,11 @@ export default function App() {
         setVisitorRequests(list);
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, reqPath);
+        try {
+          handleFirestoreError(error, OperationType.LIST, reqPath);
+        } catch {
+          // Ignore background listener permission errors gracefully
+        }
       }
     );
 
@@ -611,7 +640,11 @@ export default function App() {
           setUsersList(snapshot.docs.map((d) => d.data() as UserProfileRecord));
         },
         (error) => {
-          handleFirestoreError(error, OperationType.LIST, 'users');
+          try {
+            handleFirestoreError(error, OperationType.LIST, 'users');
+          } catch {
+            // Ignore background listener permission errors gracefully
+          }
         }
       );
 
@@ -621,7 +654,11 @@ export default function App() {
           setAdminsList(snapshot.docs.map((d) => d.data() as AdminRoleRecord));
         },
         (error) => {
-          handleFirestoreError(error, OperationType.LIST, 'admins');
+          try {
+            handleFirestoreError(error, OperationType.LIST, 'admins');
+          } catch {
+            // Ignore background listener permission errors gracefully
+          }
         }
       );
     }

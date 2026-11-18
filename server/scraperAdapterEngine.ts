@@ -1,7 +1,7 @@
 import * as cheerio from 'cheerio';
 import fs from 'fs';
 import path from 'path';
-import {
+import type {
   AdapterContentTypeHint,
   AdapterDiagnosticCode,
   AdapterStatus,

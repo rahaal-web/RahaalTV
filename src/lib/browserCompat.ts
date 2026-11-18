@@ -391,7 +391,7 @@ export function detectClientCapabilities(): ClientCapabilities {
 
   const prefersReducedMotion =
     typeof window.matchMedia === 'function'
-      ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      ? Boolean(window.matchMedia('(prefers-reduced-motion: reduce)')?.matches)
       : false;
 
   const isTouchDevice =

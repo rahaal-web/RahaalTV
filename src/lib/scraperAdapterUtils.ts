@@ -1,4 +1,4 @@
-import {
+import type {
   AdapterContentTypeHint,
   AdapterStatus,
   AdapterVerifyMode,
@@ -9,7 +9,7 @@ import {
   ScraperAdapterServerRules,
   ScraperAdapterSiteSettings,
   ScraperAdapterTestSummary,
-} from '../types/scraperAdapter';
+} from '../types/scraperAdapter.ts';
 
 export function normalizeAdapterDomain(rawUrlOrDomain: string): string {
   const input = String(rawUrlOrDomain || '').trim();

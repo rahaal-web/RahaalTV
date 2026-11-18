@@ -214,7 +214,7 @@ export function SearchDrawer({
                       {item.title}
                     </h3>
                     <p className="text-[11px] text-[#b7c9ef] truncate mt-1">
-                      {item.genres.join(' • ')} — {item.country}
+                      {(item.genres || []).join(' • ')} — {item.country || ''}
                     </p>
                   </div>
                 </button>
