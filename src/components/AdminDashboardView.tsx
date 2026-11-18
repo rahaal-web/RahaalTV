@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowDown,
   ArrowRight,
   ArrowUp,
@@ -14,6 +15,7 @@ import {
   Eye,
   Film,
   Globe,
+  Image as ImageIcon,
   Layers,
   LayoutDashboard,
   Link2,
@@ -27,6 +29,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Ruler,
   Search,
   Server,
   Settings,
@@ -44,8 +47,20 @@ import {
 import { User } from 'firebase/auth';
 import { ASSETS, CATALOG_ITEMS } from '../data/catalog';
 import { AdminAiBulkEditor } from './AdminAiBulkEditor';
+import { AdminImageManagerPanel } from './AdminImageManagerPanel';
 import { HomeBuilderPanel } from './HomeBuilderPanel';
 import { MediaPreviewModal } from './MediaPreviewModal';
+import {
+  evaluateImageQuality,
+  getBackdropInfo,
+  getMediaImageQualityStatus,
+  getPosterUrl,
+  IMAGE_QUALITY_BADGE_MAP,
+  probeImageDimensionsInBrowser,
+  ResolvedImageBundle,
+  resolveHighResImagesClient,
+  upgradeKnownImageUrl,
+} from '../lib/mediaImages';
 import {
   bulkDeleteMediaFromFirestore,
   bulkSaveMediaToFirestore,
@@ -118,6 +133,7 @@ export type AdminTab =
   | 'overview'
   | 'home_builder'
   | 'catalog'
+  | 'images'
   | 'ai_editor'
   | 'scraper'
   | 'site_scraper'
@@ -125,7 +141,7 @@ export type AdminTab =
   | 'users'
   | 'settings';
 
-const MODERATOR_ALLOWED_TABS: AdminTab[] = ['catalog', 'scraper', 'site_scraper'];
+const MODERATOR_ALLOWED_TABS: AdminTab[] = ['catalog', 'images', 'scraper', 'site_scraper'];
 
 interface AdminDashboardViewProps {
   user: User | null;
@@ -232,7 +248,15 @@ function createEmptyMedia(): MediaItem {
     isNew: true,
     comingSoon: false,
     poster: ASSETS.runningMan,
+    poster_url: ASSETS.runningMan,
     backdrop: ASSETS.heroBackdrop,
+    backdrop_url: ASSETS.heroBackdrop,
+    poster_width: 0,
+    poster_height: 0,
+    backdrop_width: 0,
+    backdrop_height: 0,
+    image_source: 'manual',
+    image_quality_status: 'unknown',
     tagline: '',
     story: '',
     shortUrl: buildDedicatedMediaUrl({ id, slug: id }),
@@ -314,6 +338,25 @@ function scrapedToMediaItem(scraped: ScrapedPayload, indexOffset = 0): MediaItem
     );
   }
 
+  const posterCandidate =
+    upgradeKnownImageUrl(scraped.poster_url || scraped.poster || ASSETS.runningMan) ||
+    ASSETS.runningMan;
+  const rawBackdropCandidate = upgradeKnownImageUrl(scraped.backdrop_url || scraped.backdrop || '');
+  const isBackdropSameAsPoster =
+    Boolean(rawBackdropCandidate) && rawBackdropCandidate === posterCandidate;
+  const isBackdropPortrait =
+    Number(scraped.backdrop_width) > 0 &&
+    Number(scraped.backdrop_height) > 0 &&
+    Number(scraped.backdrop_width) <= Number(scraped.backdrop_height);
+  const cleanBackdropUrl =
+    rawBackdropCandidate && !isBackdropSameAsPoster && !isBackdropPortrait
+      ? rawBackdropCandidate
+      : '';
+  const pw = Number(scraped.poster_width) || 0;
+  const ph = Number(scraped.poster_height) || 0;
+  const bw = cleanBackdropUrl ? Number(scraped.backdrop_width) || 0 : 0;
+  const bh = cleanBackdropUrl ? Number(scraped.backdrop_height) || 0 : 0;
+
   return {
     id,
     slug,
@@ -334,8 +377,25 @@ function scrapedToMediaItem(scraped: ScrapedPayload, indexOffset = 0): MediaItem
     pinned: false,
     isNew: true,
     comingSoon: false,
-    poster: scraped.poster || ASSETS.runningMan,
-    backdrop: scraped.backdrop || scraped.poster || ASSETS.heroBackdrop,
+    poster: posterCandidate,
+    poster_url: posterCandidate,
+    backdrop: cleanBackdropUrl || ASSETS.heroBackdrop,
+    backdrop_url: cleanBackdropUrl,
+    poster_width: pw,
+    poster_height: ph,
+    backdrop_width: bw,
+    backdrop_height: bh,
+    image_source: scraped.image_source || 'scraper',
+    image_quality_status:
+      scraped.image_quality_status ||
+      evaluateImageQuality({
+        posterUrl: posterCandidate,
+        backdropUrl: cleanBackdropUrl,
+        posterWidth: pw,
+        posterHeight: ph,
+        backdropWidth: bw,
+        backdropHeight: bh,
+      }),
     tagline: scraped.tagline || scraped.story?.slice(0, 120) || '',
     story: scraped.story || scraped.title,
     shortUrl: buildDedicatedMediaUrl({ id, slug }),
@@ -442,6 +502,9 @@ export function AdminDashboardView({
   const [scrapedResult, setScrapedResult] = useState<ScrapedPayload | null>(null);
   const [editingScrapedServerIdx, setEditingScrapedServerIdx] = useState<number | null>(null);
   const [fetchingTrailer, setFetchingTrailer] = useState(false);
+  const [fetchingHqImages, setFetchingHqImages] = useState(false);
+  const [probingEditorImages, setProbingEditorImages] = useState(false);
+  const [editorImageProposal, setEditorImageProposal] = useState<ResolvedImageBundle | null>(null);
 
   // Site-Wide Bulk Crawler states (Entire Website)
   const [siteScrapeMode, setSiteScrapeMode] = useState<'url' | 'html'>('url');
@@ -726,6 +789,7 @@ export function AdminDashboardView({
     const fresh = createEmptyMedia();
     setIsCreatingNew(true);
     setEditingItem(fresh);
+    setEditorImageProposal(null);
     setEditorTab('basic');
     setCategoriesText(fresh.categories.join('، '));
     setGenresText(fresh.genres.join('، '));
@@ -733,8 +797,15 @@ export function AdminDashboardView({
 
   const openEditorForExisting = (item: MediaItem) => {
     setIsCreatingNew(false);
+    setEditorImageProposal(null);
+    const resolvedPoster = getPosterUrl(item);
+    const backdropInfo = getBackdropInfo(item);
     setEditingItem({
       ...item,
+      poster: resolvedPoster,
+      poster_url: resolvedPoster,
+      backdrop: backdropInfo.hasDedicatedBackdrop ? backdropInfo.url : item.backdrop || '',
+      backdrop_url: backdropInfo.hasDedicatedBackdrop ? backdropInfo.url : '',
       servers: item.servers ? item.servers.map((s) => ({ ...s })) : [],
       downloads: item.downloads ? item.downloads.map((d) => ({ ...d })) : [],
       seasons: item.seasons
@@ -754,6 +825,7 @@ export function AdminDashboardView({
     const draft = scrapedToMediaItem(scraped);
     setIsCreatingNew(true);
     setEditingItem(draft);
+    setEditorImageProposal(null);
     setEditorTab('basic');
     setCategoriesText(draft.categories.join('، '));
     setGenresText(draft.genres.join('، '));
@@ -862,10 +934,45 @@ export function AdminDashboardView({
           'RT',
       }));
 
+    const cleanPoster =
+      upgradeKnownImageUrl(editingItem.poster_url || editingItem.poster || ASSETS.runningMan) ||
+      ASSETS.runningMan;
+    const rawBackdrop = upgradeKnownImageUrl(
+      editingItem.backdrop_url !== undefined ? editingItem.backdrop_url : editingItem.backdrop || ''
+    );
+    const isBackdropSameOrPortrait =
+      !rawBackdrop ||
+      rawBackdrop === cleanPoster ||
+      (Number(editingItem.backdrop_width) > 0 &&
+        Number(editingItem.backdrop_height) > 0 &&
+        Number(editingItem.backdrop_width) <= Number(editingItem.backdrop_height));
+    const cleanBackdrop = isBackdropSameOrPortrait ? '' : rawBackdrop;
+    const finalPw = Number(editingItem.poster_width) || 0;
+    const finalPh = Number(editingItem.poster_height) || 0;
+    const finalBw = cleanBackdrop ? Number(editingItem.backdrop_width) || 0 : 0;
+    const finalBh = cleanBackdrop ? Number(editingItem.backdrop_height) || 0 : 0;
+
     return {
       ...editingItem,
       slug,
       shortUrl: buildDedicatedMediaUrl({ id: editingItem.id, slug }),
+      poster: cleanPoster,
+      poster_url: cleanPoster,
+      backdrop: cleanBackdrop || ASSETS.heroBackdrop,
+      backdrop_url: cleanBackdrop,
+      poster_width: finalPw,
+      poster_height: finalPh,
+      backdrop_width: finalBw,
+      backdrop_height: finalBh,
+      image_source: editingItem.image_source || 'manual',
+      image_quality_status: evaluateImageQuality({
+        posterUrl: cleanPoster,
+        backdropUrl: cleanBackdrop,
+        posterWidth: finalPw,
+        posterHeight: finalPh,
+        backdropWidth: finalBw,
+        backdropHeight: finalBh,
+      }),
       categories: parsedCats.length ? parsedCats : ['افلام'],
       genres: parsedGenres.length ? parsedGenres : ['دراما'],
       tagline: editingItem.tagline || editingItem.story.slice(0, 120),
@@ -1726,6 +1833,90 @@ export function AdminDashboardView({
     }
   };
 
+  const handleFetchHqImagesForEditor = async () => {
+    if (!editingItem || fetchingHqImages) return;
+    if (!editingItem.title.trim() && !editingItem.englishTitle.trim()) {
+      onNotify('أدخل اسم الفيلم أو المسلسل أولاً للبحث عن صوره عالية الجودة');
+      return;
+    }
+    setFetchingHqImages(true);
+    try {
+      const currentPoster = editingItem.poster_url || editingItem.poster;
+      const currentBackdrop =
+        editingItem.backdrop_url !== undefined ? editingItem.backdrop_url : editingItem.backdrop;
+      const resolved = await resolveHighResImagesClient({
+        title: editingItem.title,
+        englishTitle: editingItem.englishTitle,
+        year: editingItem.year,
+        kind: editingItem.kind,
+        currentPoster,
+        currentBackdrop,
+      });
+      setEditorImageProposal(resolved);
+      onNotify('تم فحص وإحضار أفضل الصور المقترحة — راجع المعاينة قبل الاعتماد');
+    } catch {
+      onNotify('تعذر البحث عن صور عالية الجودة الآن');
+    } finally {
+      setFetchingHqImages(false);
+    }
+  };
+
+  const handleProbeEditorImageDimensions = async () => {
+    if (!editingItem || probingEditorImages) return;
+    setProbingEditorImages(true);
+    try {
+      const posterTarget = upgradeKnownImageUrl(editingItem.poster_url || editingItem.poster);
+      const backdropTarget = upgradeKnownImageUrl(
+        editingItem.backdrop_url !== undefined ? editingItem.backdrop_url : editingItem.backdrop
+      );
+      const [pDims, bDims] = await Promise.all([
+        posterTarget ? probeImageDimensionsInBrowser(posterTarget) : Promise.resolve(null),
+        backdropTarget && backdropTarget !== posterTarget
+          ? probeImageDimensionsInBrowser(backdropTarget)
+          : Promise.resolve(null),
+      ]);
+      const isBackdropPortrait = Boolean(bDims && bDims.width <= bDims.height);
+      const validBackdrop = !isBackdropPortrait && backdropTarget && backdropTarget !== posterTarget
+        ? backdropTarget
+        : '';
+      const nextPw = pDims?.width || 0;
+      const nextPh = pDims?.height || 0;
+      const nextBw = validBackdrop && bDims ? bDims.width : 0;
+      const nextBh = validBackdrop && bDims ? bDims.height : 0;
+
+      setEditingItem((prev) =>
+        prev
+          ? {
+              ...prev,
+              poster: posterTarget || prev.poster,
+              poster_url: posterTarget || prev.poster,
+              backdrop: validBackdrop || prev.backdrop,
+              backdrop_url: validBackdrop,
+              poster_width: nextPw,
+              poster_height: nextPh,
+              backdrop_width: nextBw,
+              backdrop_height: nextBh,
+              image_quality_status: evaluateImageQuality({
+                posterUrl: posterTarget || prev.poster,
+                backdropUrl: validBackdrop,
+                posterWidth: nextPw,
+                posterHeight: nextPh,
+                backdropWidth: nextBw,
+                backdropHeight: nextBh,
+              }),
+            }
+          : prev
+      );
+      if (isBackdropPortrait) {
+        onNotify('تنبيه: رابط الخلفية المُدخل عمودي (Portrait) وليس عريضاً 16:9 — تم فصله عن الخلفية العريضة');
+      } else {
+        onNotify('تم قياس الأبعاد الفعلية للصور وتحديث تقييم الجودة');
+      }
+    } finally {
+      setProbingEditorImages(false);
+    }
+  };
+
   const addDownloadRow = () => {
     if (!editingItem) return;
     const next: DownloadMirror = {
@@ -2205,6 +2396,12 @@ export function AdminDashboardView({
                 },
                 { id: 'catalog', label: `الأفلام والمسلسلات (${catalog.length})`, icon: Film },
                 {
+                  id: 'images',
+                  label: 'جودة وإدارة الصور',
+                  icon: ImageIcon,
+                  badge: 'HQ',
+                },
+                {
                   id: 'ai_editor',
                   label: 'المساعد الذكي المحلي',
                   icon: Sparkles,
@@ -2385,9 +2582,9 @@ export function AdminDashboardView({
                           >
                             <div className="flex items-center gap-3 min-w-0">
                               <img
-                                src={item.poster}
+                                src={getPosterUrl(item)}
                                 alt={item.title}
-                                className="h-12 w-9 rounded-lg object-cover shrink-0"
+                                className="h-12 w-9 rounded-lg object-cover object-top shrink-0"
                               />
                               <div className="min-w-0">
                                 <p className="text-xs font-extrabold text-white truncate">
@@ -2448,7 +2645,17 @@ export function AdminDashboardView({
               />
             )}
 
-            {/* TAB 1C: AI BULK CONTENT EDITOR (OWNER ONLY) */}
+            {/* TAB 1C: DUAL HIGH-RES IMAGE MANAGER */}
+            {activeTab === 'images' && user && (
+              <AdminImageManagerPanel
+                user={user}
+                catalog={catalog}
+                isFirestoreSeeded={isFirestoreSeeded}
+                onNotify={onNotify}
+              />
+            )}
+
+            {/* TAB 1D: AI BULK CONTENT EDITOR (OWNER ONLY) */}
             {isOwner && activeTab === 'ai_editor' && (
               <AdminAiBulkEditor
                 user={user}
@@ -2682,9 +2889,9 @@ export function AdminDashboardView({
                           <td className="py-3 px-2">
                             <div className="flex items-center gap-3">
                               <img
-                                src={item.poster}
+                                src={getPosterUrl(item)}
                                 alt={item.title}
-                                className="h-14 w-10 rounded-lg object-cover shrink-0"
+                                className="h-14 w-10 rounded-lg object-cover object-top shrink-0"
                               />
                               <div className="min-w-0 max-w-[230px]">
                                 <p className="font-extrabold text-white truncate">{item.title}</p>
@@ -2940,11 +3147,11 @@ export function AdminDashboardView({
                 {scrapedResult && (
                   <div className="rounded-3xl bg-[#0c1821] border border-[#4CAF50]/40 p-6 space-y-5 shadow-2xl">
                     <div className="flex flex-col md:flex-row gap-5">
-                      {scrapedResult.poster ? (
+                      {scrapedResult.poster_url || scrapedResult.poster ? (
                         <img
-                          src={scrapedResult.poster}
+                          src={upgradeKnownImageUrl(scrapedResult.poster_url || scrapedResult.poster)}
                           alt={scrapedResult.title}
-                          className="h-64 w-44 rounded-2xl object-cover border border-white/10 shrink-0"
+                          className="h-64 w-44 rounded-2xl object-cover object-top border border-white/10 shrink-0"
                         />
                       ) : (
                         <div className="h-64 w-44 rounded-2xl bg-[#1a242e] flex items-center justify-center text-xs text-[#b7c9ef] shrink-0">
@@ -3700,9 +3907,9 @@ export function AdminDashboardView({
                               className="h-4 w-4 accent-[#4CAF50] cursor-pointer"
                             />
                             <img
-                              src={item.poster || ASSETS.runningMan}
+                              src={upgradeKnownImageUrl(item.poster_url || item.poster) || ASSETS.runningMan}
                               alt={item.title}
-                              className="h-24 w-16 rounded-xl object-cover border border-white/10"
+                              className="h-24 w-16 rounded-xl object-cover object-top border border-white/10"
                             />
                           </div>
 
@@ -5123,74 +5330,292 @@ export function AdminDashboardView({
                     </div>
                   </div>
 
-                  {/* Poster Selector + Direct URL */}
-                  <div className="rounded-2xl bg-[#1a242e]/60 border border-white/[0.08] p-4 grid grid-cols-1 sm:grid-cols-12 gap-4 items-center">
-                    <div className="sm:col-span-2 flex justify-center">
-                      <img
-                        src={editingItem.poster || ASSETS.runningMan}
-                        alt="معاينة البوستر"
-                        className="h-28 w-20 rounded-xl object-cover border border-white/15"
-                      />
-                    </div>
-                    <div className="sm:col-span-10 space-y-2.5">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">
-                            اختيار سريع من البوسترات الجاهزة
-                          </label>
-                          <select
-                            value={
-                              POSTER_CHOICES.some((p) => p.url === editingItem.poster)
-                                ? editingItem.poster
-                                : ''
-                            }
-                            onChange={(e) => {
-                              if (e.target.value) {
-                                setEditingItem({ ...editingItem, poster: e.target.value });
-                              }
-                            }}
-                            className="w-full rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-xs text-white"
-                          >
-                            <option value="">-- رابط مخصص أو اختر بوستر --</option>
-                            {POSTER_CHOICES.map((p) => (
-                              <option key={p.url} value={p.url}>
-                                {p.label}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">
-                            رابط صورة البوستر (URL)
-                          </label>
-                          <input
-                            type="text"
-                            dir="ltr"
-                            value={editingItem.poster}
-                            onChange={(e) =>
-                              setEditingItem({ ...editingItem, poster: e.target.value })
-                            }
-                            placeholder="https://..."
-                            className="font-latin w-full rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-xs text-white"
-                          />
-                        </div>
-                      </div>
+                  {/* Dual High-Res Poster (2:3) + Backdrop (16:9) Section */}
+                  {(() => {
+                    const currentPosterUrl = getPosterUrl(editingItem);
+                    const backdropInfo = getBackdropInfo(editingItem);
+                    const qualityStatus = getMediaImageQualityStatus(editingItem);
+                    const qualityBadge = IMAGE_QUALITY_BADGE_MAP[qualityStatus];
+                    return (
+                      <div className="rounded-2xl bg-[#1a242e]/60 border border-white/[0.08] p-4 space-y-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-white/[0.08] pb-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="inline-flex items-center gap-1.5 text-xs font-extrabold text-white">
+                              <ImageIcon className="w-4 h-4 text-[#E50914]" />
+                              <span>إدارة البوستر والخلفية (Dual High-Res Images)</span>
+                            </span>
+                            <span
+                              className={`rounded-md border px-2 py-0.5 text-[10px] font-black ${qualityBadge.badgeClass}`}
+                            >
+                              {qualityBadge.label}
+                            </span>
+                          </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">
-                            رابط الخلفية العريضة (Backdrop URL)
-                          </label>
-                          <input
-                            type="text"
-                            dir="ltr"
-                            value={editingItem.backdrop}
-                            onChange={(e) =>
-                              setEditingItem({ ...editingItem, backdrop: e.target.value })
-                            }
-                            className="font-latin w-full rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-xs text-white"
-                          />
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={probingEditorImages}
+                              onClick={() => void handleProbeEditorImageDimensions()}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-[#0c1821] hover:bg-white/10 border border-white/10 px-2.5 py-1.5 text-[11px] font-bold text-[#b7c9ef] hover:text-white cursor-pointer disabled:opacity-50"
+                            >
+                              {probingEditorImages ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Ruler className="w-3.5 h-3.5 text-[#f9c400]" />
+                              )}
+                              <span>قياس الأبعاد</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={fetchingHqImages}
+                              onClick={() => void handleFetchHqImagesForEditor()}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-[#E50914] hover:bg-[#f40612] px-3 py-1.5 text-[11px] font-extrabold text-white cursor-pointer disabled:opacity-50"
+                            >
+                              {fetchingHqImages ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Sparkles className="w-3.5 h-3.5" />
+                              )}
+                              <span>
+                                {fetchingHqImages ? 'جاري الجلب...' : 'إعادة جلب صور عالية الجودة'}
+                              </span>
+                            </button>
+                          </div>
                         </div>
+
+                        {/* Preview Cards Side-by-Side */}
+                        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
+                          {/* Poster 2:3 */}
+                          <div className="md:col-span-3 space-y-1.5">
+                            <div className="flex items-center justify-between text-[11px] font-bold text-[#b7c9ef]">
+                              <span>البوستر (2:3)</span>
+                              <span className="font-latin text-[10px] text-[#f9c400]">
+                                {editingItem.poster_width && editingItem.poster_height
+                                  ? `${editingItem.poster_width}×${editingItem.poster_height}`
+                                  : 'غير مقاس'}
+                              </span>
+                            </div>
+                            <div className="aspect-[2/3] w-28 sm:w-32 mx-auto md:mx-0 overflow-hidden rounded-xl border border-white/15 bg-[#0c1821]">
+                              <img
+                                src={currentPosterUrl}
+                                alt="معاينة البوستر"
+                                className="h-full w-full object-cover object-top"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Backdrop 16:9 */}
+                          <div className="md:col-span-4 space-y-1.5">
+                            <div className="flex items-center justify-between text-[11px] font-bold text-[#b7c9ef]">
+                              <span>الخلفية العريضة (16:9)</span>
+                              <span className="font-latin text-[10px] text-[#f9c400]">
+                                {editingItem.backdrop_width && editingItem.backdrop_height
+                                  ? `${editingItem.backdrop_width}×${editingItem.backdrop_height}`
+                                  : backdropInfo.hasDedicatedBackdrop
+                                    ? 'غير مقاس'
+                                    : 'مفقودة'}
+                              </span>
+                            </div>
+                            <div className="aspect-video w-full overflow-hidden rounded-xl border border-white/15 bg-[#0c1821] relative">
+                              {backdropInfo.hasDedicatedBackdrop ? (
+                                <img
+                                  src={backdropInfo.url}
+                                  alt="معاينة الخلفية العريضة"
+                                  className="h-full w-full object-cover object-center"
+                                />
+                              ) : (
+                                <div className="h-full w-full flex flex-col items-center justify-center p-3 text-center gap-1 text-[#f9c400] bg-[#D92321]/10">
+                                  <AlertTriangle className="w-4 h-4" />
+                                  <span className="text-[10px] font-bold">
+                                    لا توجد خلفية عريضة مستقلة — سيتم عرض خلفية سينمائية داكنة دون مط البوستر
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* URL Inputs */}
+                          <div className="md:col-span-5 space-y-2.5">
+                            <div>
+                              <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">
+                                اختيار سريع من البوسترات الجاهزة
+                              </label>
+                              <select
+                                value={
+                                  POSTER_CHOICES.some((p) => p.url === currentPosterUrl)
+                                    ? currentPosterUrl
+                                    : ''
+                                }
+                                onChange={(e) => {
+                                  if (e.target.value) {
+                                    setEditingItem({
+                                      ...editingItem,
+                                      poster: e.target.value,
+                                      poster_url: e.target.value,
+                                      poster_width: 0,
+                                      poster_height: 0,
+                                      image_source: 'preset',
+                                    });
+                                  }
+                                }}
+                                className="w-full rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-xs text-white"
+                              >
+                                <option value="">-- رابط مخصص أو اختر بوستر --</option>
+                                {POSTER_CHOICES.map((p) => (
+                                  <option key={p.url} value={p.url}>
+                                    {p.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">
+                                رابط البوستر العمودي (poster_url)
+                              </label>
+                              <input
+                                type="text"
+                                dir="ltr"
+                                value={editingItem.poster_url || editingItem.poster}
+                                onChange={(e) =>
+                                  setEditingItem({
+                                    ...editingItem,
+                                    poster: e.target.value,
+                                    poster_url: e.target.value,
+                                    poster_width: 0,
+                                    poster_height: 0,
+                                  })
+                                }
+                                placeholder="https://..."
+                                className="font-latin w-full rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-xs text-white"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">
+                                رابط الخلفية العريضة 16:9 (backdrop_url)
+                              </label>
+                              <input
+                                type="text"
+                                dir="ltr"
+                                value={
+                                  editingItem.backdrop_url !== undefined
+                                    ? editingItem.backdrop_url
+                                    : backdropInfo.hasDedicatedBackdrop
+                                      ? backdropInfo.url
+                                      : ''
+                                }
+                                onChange={(e) =>
+                                  setEditingItem({
+                                    ...editingItem,
+                                    backdrop: e.target.value || ASSETS.heroBackdrop,
+                                    backdrop_url: e.target.value,
+                                    backdrop_width: 0,
+                                    backdrop_height: 0,
+                                  })
+                                }
+                                placeholder="https://image.tmdb.org/t/p/original/..."
+                                className="font-latin w-full rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-xs text-white"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Safe Proposal Review Box (Before / After — Keep Old on Cancel) */}
+                        {editorImageProposal && (
+                          <div className="rounded-xl border border-[#f9c400]/40 bg-[#0c1821] p-3.5 space-y-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-xs font-extrabold text-[#f9c400] flex items-center gap-1.5">
+                                <Sparkles className="w-3.5 h-3.5" />
+                                <span>
+                                  معاينة الصور المقترحة (المصدر: {editorImageProposal.image_source}) — لن تتغير صورك الحالية إلا عند الاعتماد
+                                </span>
+                              </span>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setEditorImageProposal(null)}
+                                  className="rounded-lg bg-white/10 hover:bg-white/20 px-2.5 py-1 text-[11px] font-bold text-[#b7c9ef] hover:text-white cursor-pointer"
+                                >
+                                  إبقاء الصور الحالية
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingItem((prev) =>
+                                      prev
+                                        ? {
+                                            ...prev,
+                                            poster: editorImageProposal.poster_url || prev.poster,
+                                            poster_url:
+                                              editorImageProposal.poster_url || prev.poster,
+                                            backdrop:
+                                              editorImageProposal.backdrop_url ||
+                                              prev.backdrop ||
+                                              ASSETS.heroBackdrop,
+                                            backdrop_url: editorImageProposal.backdrop_url || '',
+                                            poster_width: editorImageProposal.poster_width,
+                                            poster_height: editorImageProposal.poster_height,
+                                            backdrop_width: editorImageProposal.backdrop_width,
+                                            backdrop_height: editorImageProposal.backdrop_height,
+                                            image_source: editorImageProposal.image_source,
+                                            image_quality_status:
+                                              editorImageProposal.image_quality_status,
+                                          }
+                                        : prev
+                                    );
+                                    setEditorImageProposal(null);
+                                    onNotify('تم تطبيق الصور المقترحة في المحرر — اضغط حفظ لإثباتها');
+                                  }}
+                                  className="rounded-lg bg-[#4CAF50] hover:bg-[#43a047] px-3 py-1 text-[11px] font-extrabold text-white cursor-pointer"
+                                >
+                                  اعتماد الصور الجديدة
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
+                              <div className="flex items-center gap-3 rounded-lg bg-[#1a242e] p-2">
+                                {editorImageProposal.poster_url ? (
+                                  <img
+                                    src={editorImageProposal.poster_url}
+                                    alt="البوستر المقترح"
+                                    className="h-16 w-11 rounded object-cover object-top shrink-0"
+                                  />
+                                ) : null}
+                                <div className="min-w-0">
+                                  <p className="font-bold text-white">البوستر المقترح</p>
+                                  <p className="font-latin text-[#4CAF50]">
+                                    {editorImageProposal.poster_width &&
+                                    editorImageProposal.poster_height
+                                      ? `${editorImageProposal.poster_width}×${editorImageProposal.poster_height}`
+                                      : 'رابط محسّن'}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3 rounded-lg bg-[#1a242e] p-2">
+                                {editorImageProposal.backdrop_url ? (
+                                  <img
+                                    src={editorImageProposal.backdrop_url}
+                                    alt="الخلفية المقترحة"
+                                    className="h-14 w-24 rounded object-cover object-center shrink-0"
+                                  />
+                                ) : null}
+                                <div className="min-w-0">
+                                  <p className="font-bold text-white">الخلفية العريضة المقترحة</p>
+                                  <p className="font-latin text-[#4CAF50]">
+                                    {editorImageProposal.backdrop_url
+                                      ? editorImageProposal.backdrop_width &&
+                                        editorImageProposal.backdrop_height
+                                        ? `${editorImageProposal.backdrop_width}×${editorImageProposal.backdrop_height}`
+                                        : 'متوفرة'
+                                      : 'لم يتوفر Backdrop عريض 16:9'}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Trailer Row */}
                         <div>
                           <div className="flex items-center justify-between gap-2 mb-1">
                             <label className="block text-[11px] font-bold text-[#b7c9ef]">
@@ -5222,8 +5647,8 @@ export function AdminDashboardView({
                           />
                         </div>
                       </div>
-                    </div>
-                  </div>
+                    );
+                  })()}
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>

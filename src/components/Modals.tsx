@@ -42,6 +42,8 @@ import {
   loadStoredPlayerTheme,
   normalizePlayerTheme,
 } from '../lib/playerTheme';
+import { handlePosterError } from '../lib/mediaFilters';
+import { getPosterUrl } from '../lib/mediaImages';
 import { AdminPrivilegeRole, MediaItem, PlayerThemeConfig, VisitorRequest } from '../types/media';
 import { FooterTopic } from './Footer';
 
@@ -109,9 +111,11 @@ export function WatchlistModal({
                     className="flex items-center gap-3.5 text-right flex-1 min-w-0 cursor-pointer group"
                   >
                     <img
-                      src={item.poster}
+                      src={getPosterUrl(item)}
                       alt={item.title}
-                      className="h-18 w-14 rounded-xl object-cover shrink-0"
+                      referrerPolicy="no-referrer"
+                      onError={handlePosterError}
+                      className="h-18 w-14 rounded-xl object-cover object-top shrink-0"
                     />
                     <div className="min-w-0">
                       <h3 className="font-display text-sm font-bold text-white group-hover:text-[#D92321] truncate">

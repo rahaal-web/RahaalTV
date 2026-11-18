@@ -22,11 +22,10 @@ import {
 } from 'lucide-react';
 import { isLikelyNonVideoWebsiteUrl } from '../lib/clientScraper';
 import {
-  FALLBACK_BACKDROP,
-  FALLBACK_POSTER,
   handleBackdropError,
   handlePosterError,
 } from '../lib/mediaFilters';
+import { getBackdropUrl, getPosterUrl } from '../lib/mediaImages';
 import { resolveDisplayShortUrl } from '../lib/permalink';
 import {
   buildPlayerThemeVars,
@@ -186,11 +185,11 @@ export function MediaPreviewModal({
               {/* Hero Head Preview */}
               <div className="relative min-h-[250px] overflow-hidden border-b border-white/[0.08] bg-[#0c1821]">
                 <img
-                  src={item.backdrop || item.poster || FALLBACK_BACKDROP}
+                  src={getBackdropUrl(item)}
                   alt={item.title}
                   referrerPolicy="no-referrer"
                   onError={handleBackdropError}
-                  className="absolute inset-0 h-full w-full object-cover opacity-35"
+                  className="absolute inset-0 h-full w-full object-cover object-center opacity-35"
                 />
                 <div className="absolute inset-0 bg-[#06131c]/75" />
                 <div className="moov-hex-pattern absolute inset-0" />
@@ -246,11 +245,11 @@ export function MediaPreviewModal({
                       {item.quality}
                     </div>
                     <img
-                      src={item.poster || FALLBACK_POSTER}
+                      src={getPosterUrl(item)}
                       alt={item.title}
                       referrerPolicy="no-referrer"
                       onError={handlePosterError}
-                      className="h-full w-full object-cover"
+                      className="h-full w-full object-cover object-top"
                     />
                   </div>
                 </div>

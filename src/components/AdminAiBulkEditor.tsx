@@ -43,6 +43,7 @@ import {
   normalizeArabic,
   parseArabicAdminCommand,
 } from '../lib/localAdminNlp';
+import { getPosterUrl } from '../lib/mediaImages';
 import { buildDedicatedMediaUrl, generateCleanSlug } from '../lib/permalink';
 import { MediaItem, MediaKind } from '../types/media';
 import { AdminActivityLog } from './AdminActivityLog';
@@ -831,9 +832,9 @@ export function AdminAiBulkEditor({
                         {idx + 1}
                       </span>
                       <img
-                        src={item.poster}
+                        src={getPosterUrl(item)}
                         alt={item.title}
-                        className="h-12 w-9 rounded-lg object-cover bg-[#0c1821] shrink-0"
+                        className="h-12 w-9 rounded-lg object-cover object-top bg-[#0c1821] shrink-0"
                       />
                       <div className="min-w-0">
                         <p className="text-xs sm:text-sm font-extrabold text-white truncate">

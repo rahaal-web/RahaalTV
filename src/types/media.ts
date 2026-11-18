@@ -43,6 +43,13 @@ export interface DownloadMirror {
   url?: string;
 }
 
+export type ImageQualityStatus =
+  | 'high'
+  | 'medium'
+  | 'low'
+  | 'missing_backdrop'
+  | 'unknown';
+
 export interface MediaItem {
   id: string;
   slug: string;
@@ -65,6 +72,14 @@ export interface MediaItem {
   comingSoon?: boolean;
   poster: string;
   backdrop: string;
+  poster_url?: string;
+  backdrop_url?: string;
+  poster_width?: number;
+  poster_height?: number;
+  backdrop_width?: number;
+  backdrop_height?: number;
+  image_source?: string;
+  image_quality_status?: ImageQualityStatus;
   tagline: string;
   story: string;
   shortUrl: string;

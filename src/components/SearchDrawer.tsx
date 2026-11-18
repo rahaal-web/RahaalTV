@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Loader2, Search, Star, X } from 'lucide-react';
-import { FALLBACK_POSTER, handlePosterError, matchesCategoryFilter, normalizeArabicText } from '../lib/mediaFilters';
+import { handlePosterError, matchesCategoryFilter, normalizeArabicText } from '../lib/mediaFilters';
+import { getPosterUrl } from '../lib/mediaImages';
 import { MediaItem } from '../types/media';
 
 interface SearchDrawerProps {
@@ -170,11 +171,11 @@ export function SearchDrawer({
                   className="group flex items-center gap-3.5 rounded-2xl bg-[#1a242e]/80 border border-white/[0.07] p-2.5 text-right hover:border-[#D92321]/60 hover:bg-[#1a242e] transition-all cursor-pointer"
                 >
                   <img
-                    src={item.poster || FALLBACK_POSTER}
+                    src={getPosterUrl(item)}
                     alt={item.title}
                     referrerPolicy="no-referrer"
                     onError={handlePosterError}
-                    className="h-24 w-18 rounded-xl object-cover shrink-0"
+                    className="h-24 w-18 rounded-xl object-cover object-top shrink-0"
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1">

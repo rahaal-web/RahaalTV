@@ -33,6 +33,12 @@ import {
   submitMediaRatingToFirestore,
 } from '../lib/firebase';
 import { FALLBACK_BACKDROP, FALLBACK_POSTER, handleBackdropError, handlePosterError } from '../lib/mediaFilters';
+import {
+  buildBackdropSrcSet,
+  buildPosterSrcSet,
+  getBackdropUrl,
+  getPosterUrl,
+} from '../lib/mediaImages';
 import { resolveDisplayShortUrl } from '../lib/permalink';
 import { MediaItem, CatalogFilterState, MediaRatingRecord } from '../types/media';
 import { MovieCard } from './MovieCard';
@@ -276,11 +282,13 @@ export function SingleDetailView({
       {/* 1. Compact Single Hero Head */}
       <section className="relative overflow-hidden border-b border-white/[0.08] bg-[#0c1821]">
         <img
-          src={item.backdrop || item.poster || FALLBACK_BACKDROP}
+          src={getBackdropUrl(item) || FALLBACK_BACKDROP}
+          srcSet={buildBackdropSrcSet(getBackdropUrl(item))}
+          sizes="100vw"
           alt={item.title}
           referrerPolicy="no-referrer"
           onError={handleBackdropError}
-          className="absolute inset-0 h-full w-full object-cover opacity-30"
+          className="absolute inset-0 h-full w-full object-cover object-center opacity-35"
         />
         <div className="absolute inset-0 bg-[#06131c]/80" />
         <div className="moov-hex-pattern absolute inset-0" />
@@ -395,11 +403,13 @@ export function SingleDetailView({
                 </div>
 
                 <img
-                  src={item.poster || FALLBACK_POSTER}
+                  src={getPosterUrl(item) || FALLBACK_POSTER}
+                  srcSet={buildPosterSrcSet(getPosterUrl(item))}
+                  sizes="(max-width: 768px) 270px, 320px"
                   alt={item.title}
                   referrerPolicy="no-referrer"
                   onError={handlePosterError}
-                  className="h-full w-full object-cover object-center"
+                  className="h-full w-full object-cover object-top"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-[#06131c]/85 via-transparent to-black/15" />
 

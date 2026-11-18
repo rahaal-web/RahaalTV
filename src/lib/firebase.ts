@@ -42,6 +42,7 @@ import {
 } from './permalink';
 import { DEFAULT_PLAYER_THEME, saveStoredPlayerTheme } from './playerTheme';
 import { DEFAULT_HOME_CONFIG, saveStoredHomeConfig } from './homeConfig';
+import { evaluateImageQuality } from './mediaImages';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -291,8 +292,36 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
     ? item.shortUrl.trim().slice(0, 300)
     : buildDedicatedMediaUrl({ id: cleanId, slug: safeSlug }).slice(0, 300);
 
-  const safePoster = (item.poster || '').trim().slice(0, 500) || FALLBACK_POSTER_URL;
-  const safeBackdrop = (item.backdrop || safePoster || '').trim().slice(0, 500) || FALLBACK_BACKDROP_URL;
+  const rawPosterInput = (item.poster_url || item.poster || '').trim().slice(0, 500);
+  const safePoster = rawPosterInput || FALLBACK_POSTER_URL;
+  const rawBackdropUrl = (item.backdrop_url !== undefined ? item.backdrop_url : item.backdrop || '')
+    .trim()
+    .slice(0, 500);
+  const hasDistinctBackdropInput = Boolean(rawBackdropUrl && rawBackdropUrl !== safePoster);
+  const safeBackdropUrl = hasDistinctBackdropInput ? rawBackdropUrl : '';
+  // Legacy required `backdrop` field stays non-empty in Firestore rules
+  const safeBackdrop = rawBackdropUrl || FALLBACK_BACKDROP_URL;
+
+  const posterWidth = Math.max(0, Math.min(20000, Math.round(Number(item.poster_width) || 0)));
+  const posterHeight = Math.max(0, Math.min(20000, Math.round(Number(item.poster_height) || 0)));
+  const backdropWidth = Math.max(0, Math.min(20000, Math.round(Number(item.backdrop_width) || 0)));
+  const backdropHeight = Math.max(0, Math.min(20000, Math.round(Number(item.backdrop_height) || 0)));
+  const computedQuality = evaluateImageQuality({
+    posterUrl: safePoster,
+    backdropUrl: safeBackdropUrl,
+    posterWidth,
+    posterHeight,
+    backdropWidth,
+    backdropHeight,
+  });
+  const imageQualityStatus =
+    computedQuality !== 'unknown'
+      ? computedQuality
+      : item.image_quality_status || (hasDistinctBackdropInput ? 'unknown' : 'missing_backdrop');
+  const imageSource = String(item.image_source || (safePoster === FALLBACK_POSTER_URL ? 'fallback' : 'manual'))
+    .trim()
+    .slice(0, 60) || 'manual';
+
   const safeYear = (item.year || '2026').trim().slice(0, 10);
   const normalizedYear = safeYear.length >= 4 ? safeYear : '2026';
 
@@ -395,6 +424,14 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
     comingSoon: Boolean(item.comingSoon),
     poster: safePoster,
     backdrop: safeBackdrop,
+    poster_url: safePoster,
+    backdrop_url: safeBackdropUrl,
+    poster_width: posterWidth,
+    poster_height: posterHeight,
+    backdrop_width: backdropWidth,
+    backdrop_height: backdropHeight,
+    image_source: imageSource,
+    image_quality_status: imageQualityStatus,
     tagline: (item.tagline || '').slice(0, 400),
     story: (item.story || safeTitle).trim().slice(0, 3000) || safeTitle,
     shortUrl: dedicatedShortUrl,

@@ -26,6 +26,17 @@
         "comingSoon": { "type": "boolean" },
         "poster": { "type": "string", "minLength": 1, "maxLength": 500 },
         "backdrop": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "poster_url": { "type": "string", "maxLength": 500 },
+        "backdrop_url": { "type": "string", "maxLength": 500 },
+        "poster_width": { "type": "number" },
+        "poster_height": { "type": "number" },
+        "backdrop_width": { "type": "number" },
+        "backdrop_height": { "type": "number" },
+        "image_source": { "type": "string", "maxLength": 60 },
+        "image_quality_status": {
+          "type": "string",
+          "enum": ["high", "medium", "low", "missing_backdrop", "unknown"]
+        },
         "tagline": { "type": "string", "maxLength": 400 },
         "story": { "type": "string", "minLength": 1, "maxLength": 3000 },
         "shortUrl": { "type": "string", "maxLength": 300 },

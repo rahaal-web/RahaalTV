@@ -2,11 +2,35 @@ import {
   CastMember,
   DownloadMirror,
   EpisodeItem,
+  ImageQualityStatus,
   MediaItem,
   MediaKind,
   SeasonItem,
   StreamServer,
 } from '../types/media';
+
+function upgradeKnownImageUrlScraper(rawUrl: string | undefined | null): string {
+  const clean = String(rawUrl || '').trim();
+  if (!clean || !/^https?:\/\//i.test(clean)) return clean;
+  if (/image\.tmdb\.org\/t\/p\//i.test(clean)) {
+    return clean.replace(/\/t\/p\/(?:w\d+|h\d+|original)\//i, '/t/p/original/');
+  }
+  if (/bp\.blogspot\.com|blogger\.googleusercontent\.com|googleusercontent\.com/i.test(clean)) {
+    let upgraded = clean.replace(/\/(?:s|w|h)\d+(?:-[a-zA-Z0-9]+)*\//i, '/s1600/');
+    upgraded = upgraded.replace(/=[sw]\d+(?:-[a-zA-Z0-9-]+)*$/i, '=s1600');
+    return upgraded;
+  }
+  if (/media-amazon\.com\/images\/|ssl-images-amazon\.com\/images\//i.test(clean)) {
+    return clean.replace(/\._V1_[^.]*\.(jpg|jpeg|png|webp)$/i, '._V1_.$1');
+  }
+  if (/\/wp-content\/uploads\//i.test(clean)) {
+    return clean.replace(/-\d{2,4}x\d{2,4}(?=\.(jpg|jpeg|png|webp)(?:\?|$))/i, '');
+  }
+  if (/mzstatic\.com\/image\/thumb\//i.test(clean)) {
+    return clean.replace(/\/\d+x\d+bb\.(jpg|webp|png)$/i, '/1200x1800bb.jpg');
+  }
+  return clean;
+}
 
 export interface ScrapedPayload {
   title: string;
@@ -23,6 +47,14 @@ export interface ScrapedPayload {
   votes: string;
   poster: string;
   backdrop: string;
+  poster_url?: string;
+  backdrop_url?: string;
+  poster_width?: number;
+  poster_height?: number;
+  backdrop_width?: number;
+  backdrop_height?: number;
+  image_source?: string;
+  image_quality_status?: ImageQualityStatus;
   tagline: string;
   story: string;
   sourceUrl?: string;
@@ -681,23 +713,52 @@ function parseHtmlToMediaWithHintsBrowser(
   const englishMatch = rawTitle.match(/[A-Za-z][A-Za-z0-9\s:'\-&]{2,}/);
   const englishTitle = englishMatch ? cleanText(englishMatch[0]) : title;
 
-  // 3. Poster & Backdrop
-  const ogImage = resolveUrl(
-    sourceUrl,
-    doc.querySelector('meta[property="og:image"]')?.getAttribute('content')
+  // 3. Separate Poster (2:3) & Landscape Backdrop (16:9)
+  const ogImage = upgradeKnownImageUrlScraper(
+    resolveUrl(
+      sourceUrl,
+      doc.querySelector('meta[property="og:image"]')?.getAttribute('content')
+    )
+  );
+  const twitterImage = upgradeKnownImageUrlScraper(
+    resolveUrl(
+      sourceUrl,
+      doc.querySelector('meta[name="twitter:image"]')?.getAttribute('content')
+    )
   );
   const posterImgEl = doc.querySelector(
     '.single-right img, .poster img, .movie-poster img, .pm-video-thumb img, .video-thumb img, article img'
   );
-  const singlePoster = resolveUrl(
-    sourceUrl,
-    posterImgEl?.getAttribute('data-echo') ||
-      posterImgEl?.getAttribute('data-src') ||
-      posterImgEl?.getAttribute('data-lazy-src') ||
-      posterImgEl?.getAttribute('src')
+  const singlePoster = upgradeKnownImageUrlScraper(
+    resolveUrl(
+      sourceUrl,
+      posterImgEl?.getAttribute('data-echo') ||
+        posterImgEl?.getAttribute('data-src') ||
+        posterImgEl?.getAttribute('data-lazy-src') ||
+        posterImgEl?.getAttribute('src')
+    )
   );
-  const poster = ogImage || singlePoster || jsonLdImage || '';
-  const backdrop = ogImage || poster;
+  const backdropImgEl = doc.querySelector(
+    '.backdrop img, .hero img, .hero-bg img, .cover img, .single-cover img, .movie-backdrop img'
+  );
+  const explicitBackdrop = upgradeKnownImageUrlScraper(
+    resolveUrl(
+      sourceUrl,
+      backdropImgEl?.getAttribute('data-echo') ||
+        backdropImgEl?.getAttribute('data-src') ||
+        backdropImgEl?.getAttribute('src') ||
+        doc.querySelector('video')?.getAttribute('poster')
+    )
+  );
+  const poster = singlePoster || ogImage || upgradeKnownImageUrlScraper(jsonLdImage) || '';
+  const backdrop =
+    explicitBackdrop && explicitBackdrop !== poster
+      ? explicitBackdrop
+      : twitterImage && twitterImage !== poster
+        ? twitterImage
+        : ogImage && ogImage !== poster
+          ? ogImage
+          : '';
 
   // 4. Story
   const storySelector = cleanText(
@@ -1214,6 +1275,14 @@ function parseHtmlToMediaWithHintsBrowser(
       votes: '10,500',
       poster,
       backdrop,
+      poster_url: poster,
+      backdrop_url: backdrop,
+      poster_width: 0,
+      poster_height: 0,
+      backdrop_width: 0,
+      backdrop_height: 0,
+      image_source: poster ? 'scraped' : 'none',
+      image_quality_status: backdrop ? 'unknown' : 'missing_backdrop',
       tagline: story.slice(0, 140),
       story,
       sourceUrl: sourceUrl || '',
@@ -1511,8 +1580,11 @@ function parseBloggerJsonEntries(json: BloggerFeedJson, origin: string, maxItems
     }
 
     if (!parsed.poster && entry.media$thumbnail?.url) {
-      parsed.poster = entry.media$thumbnail.url.replace(/\/s\d+(-c)?\//, '/s640/');
-      parsed.backdrop = parsed.poster;
+      parsed.poster = upgradeKnownImageUrlScraper(entry.media$thumbnail.url);
+      parsed.poster_url = parsed.poster;
+      parsed.backdrop = '';
+      parsed.backdrop_url = '';
+      parsed.image_quality_status = 'missing_backdrop';
     }
 
     const categories: string[] = [];
@@ -1640,8 +1712,11 @@ async function tryWordPressApiBrowser(
       if (rawTitle) parsed.title = rawTitle.slice(0, 200);
       const featured = post._embedded?.['wp:featuredmedia']?.[0]?.source_url;
       if (featured && !parsed.poster) {
-        parsed.poster = featured;
-        parsed.backdrop = featured;
+        parsed.poster = upgradeKnownImageUrlScraper(featured);
+        parsed.poster_url = parsed.poster;
+        parsed.backdrop = '';
+        parsed.backdrop_url = '';
+        parsed.image_quality_status = 'missing_backdrop';
       }
       return parsed;
     });
@@ -2070,7 +2145,7 @@ async function scrapeFullItemInBrowser(
     // ignore
   }
 
-  const [filteredServers, fallbackTrailer] = await Promise.all([
+  const [filteredServers, fallbackTrailer, resolvedImages] = await Promise.all([
     verifyScrapedServersInBrowser(media.servers, mainOrigin),
     media.trailerUrl || options?.skipEpisodeCrawl
       ? Promise.resolve(media.trailerUrl)
@@ -2080,10 +2155,38 @@ async function scrapeFullItemInBrowser(
           year: media.year,
           kind: media.kind,
         }),
+    options?.skipEpisodeCrawl
+      ? Promise.resolve(null)
+      : import('./mediaImages')
+          .then(({ resolveHighResImagesClient }) =>
+            resolveHighResImagesClient({
+              title: media.title,
+              englishTitle: media.englishTitle,
+              year: media.year,
+              kind: media.kind,
+              currentPoster: media.poster,
+              currentBackdrop: media.backdrop,
+            })
+          )
+          .catch(() => null),
   ]);
 
   media.servers = filteredServers;
   media.trailerUrl = fallbackTrailer || '';
+  if (resolvedImages) {
+    if (resolvedImages.poster_url) {
+      media.poster = resolvedImages.poster_url;
+      media.poster_url = resolvedImages.poster_url;
+    }
+    media.poster_width = resolvedImages.poster_width;
+    media.poster_height = resolvedImages.poster_height;
+    media.backdrop = resolvedImages.backdrop_url;
+    media.backdrop_url = resolvedImages.backdrop_url;
+    media.backdrop_width = resolvedImages.backdrop_width;
+    media.backdrop_height = resolvedImages.backdrop_height;
+    media.image_source = resolvedImages.image_source;
+    media.image_quality_status = resolvedImages.image_quality_status;
+  }
   media.downloads = media.downloads.slice(0, 12);
 
   // Per-Episode Deep Server Extraction so Episode 2, 3, 4... each get their OWN watch servers
@@ -2193,8 +2296,11 @@ async function tryWordPressSinglePostBrowser(
     }
     const featured = post._embedded?.['wp:featuredmedia']?.[0]?.source_url;
     if (featured) {
-      parsed.poster = featured;
-      parsed.backdrop = featured;
+      parsed.poster = upgradeKnownImageUrlScraper(featured);
+      parsed.poster_url = parsed.poster;
+      parsed.backdrop = '';
+      parsed.backdrop_url = '';
+      parsed.image_quality_status = 'missing_backdrop';
     }
     const termGroups = post._embedded?.['wp:term'] || [];
     for (const group of termGroups) {
@@ -2452,8 +2558,11 @@ export async function scrapeSiteInBrowser(params: {
             if (detailRes.ok && detailRes.text.length > 150) {
               const parsed = await scrapeFullItemInBrowser(card.url, detailRes.text);
               if (!parsed.poster && card.poster) {
-                parsed.poster = card.poster;
-                parsed.backdrop = card.poster;
+                parsed.poster = upgradeKnownImageUrlScraper(card.poster);
+                parsed.poster_url = parsed.poster;
+                parsed.backdrop = '';
+                parsed.backdrop_url = '';
+                parsed.image_quality_status = 'missing_backdrop';
               }
               if ((!parsed.title || parsed.title === 'عمل مستورد جديد') && card.title) {
                 parsed.title = card.title;
@@ -2500,8 +2609,16 @@ function buildFallbackCardItem(card: { url: string; title: string; poster: strin
     duration: '120 دقيقة',
     imdb: 7.8,
     votes: '10,000',
-    poster: card.poster,
-    backdrop: card.poster,
+    poster: upgradeKnownImageUrlScraper(card.poster),
+    backdrop: '',
+    poster_url: upgradeKnownImageUrlScraper(card.poster),
+    backdrop_url: '',
+    poster_width: 0,
+    poster_height: 0,
+    backdrop_width: 0,
+    backdrop_height: 0,
+    image_source: card.poster ? 'scraped' : 'none',
+    image_quality_status: 'missing_backdrop',
     tagline: card.title,
     story: card.title,
     sourceUrl: card.url,

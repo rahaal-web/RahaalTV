@@ -1,5 +1,6 @@
 import { Bookmark, Check, Download, Film, Globe, Languages, Play, Star, Tag } from 'lucide-react';
-import { FALLBACK_POSTER, handlePosterError } from '../lib/mediaFilters';
+import { handlePosterError } from '../lib/mediaFilters';
+import { buildPosterSrcSet, getPosterUrl } from '../lib/mediaImages';
 import { MediaItem } from '../types/media';
 
 interface MovieCardProps {
@@ -45,13 +46,15 @@ export function MovieCard({
           className="moov-card-front absolute inset-0 cursor-pointer overflow-hidden rounded-[20px]"
         >
           <img
-            src={item.poster || FALLBACK_POSTER}
+            src={getPosterUrl(item)}
+            srcSet={buildPosterSrcSet(getPosterUrl(item))}
+            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 280px"
             alt={item.title}
             loading="lazy"
             decoding="async"
             referrerPolicy="no-referrer"
             onError={handlePosterError}
-            className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+            className="h-full w-full object-cover object-top transition-transform duration-500 group-hover:scale-105"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/35 to-transparent" />
 
@@ -195,13 +198,15 @@ export function MovieCard({
         className="relative aspect-[2/3] w-full overflow-hidden bg-[#121212] cursor-pointer"
       >
         <img
-          src={item.poster || FALLBACK_POSTER}
+          src={getPosterUrl(item)}
+          srcSet={buildPosterSrcSet(getPosterUrl(item))}
+          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 280px"
           alt={item.title}
           loading="lazy"
           decoding="async"
           referrerPolicy="no-referrer"
           onError={handlePosterError}
-          className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-105"
+          className="h-full w-full object-cover object-top transition-transform duration-500 ease-out group-hover:scale-105"
         />
 
         {/* Measured Contrast Scrim */}

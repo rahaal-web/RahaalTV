@@ -57,6 +57,526 @@ function resolveUrl(baseUrl: string, maybeRelative: string | undefined): string 
   }
 }
 
+type ServerImageQualityStatus = 'high' | 'medium' | 'low' | 'missing_backdrop' | 'unknown';
+
+function upgradeKnownImageUrlServer(rawUrl: string | undefined | null): string {
+  const clean = String(rawUrl || '').trim();
+  if (!clean || !/^https?:\/\//i.test(clean)) return clean;
+
+  if (/image\.tmdb\.org\/t\/p\//i.test(clean)) {
+    return clean.replace(/\/t\/p\/(?:w\d+|h\d+|original)\//i, '/t/p/original/');
+  }
+  if (/bp\.blogspot\.com|blogger\.googleusercontent\.com|googleusercontent\.com/i.test(clean)) {
+    let upgraded = clean.replace(/\/(?:s|w|h)\d+(?:-[a-zA-Z0-9]+)*\//i, '/s1600/');
+    upgraded = upgraded.replace(/=[sw]\d+(?:-[a-zA-Z0-9-]+)*$/i, '=s1600');
+    return upgraded;
+  }
+  if (/media-amazon\.com\/images\/|ssl-images-amazon\.com\/images\//i.test(clean)) {
+    return clean.replace(/\._V1_[^.]*\.(jpg|jpeg|png|webp)$/i, '._V1_.$1');
+  }
+  if (/\/wp-content\/uploads\//i.test(clean)) {
+    return clean.replace(/-\d{2,4}x\d{2,4}(?=\.(jpg|jpeg|png|webp)(?:\?|$))/i, '');
+  }
+  if (/mzstatic\.com\/image\/thumb\//i.test(clean)) {
+    return clean.replace(/\/\d+x\d+bb\.(jpg|webp|png)$/i, '/1200x1800bb.jpg');
+  }
+  return clean;
+}
+
+function parseImageDimensionsFromBuffer(buf: Buffer): { width: number; height: number } | null {
+  if (!buf || buf.length < 16) return null;
+
+  // PNG: 89 50 4E 47 0D 0A 1A 0A -> IHDR width at 16, height at 20
+  if (
+    buf[0] === 0x89 &&
+    buf[1] === 0x50 &&
+    buf[2] === 0x4e &&
+    buf[3] === 0x47 &&
+    buf.length >= 24
+  ) {
+    const w = buf.readUInt32BE(16);
+    const h = buf.readUInt32BE(20);
+    if (w > 0 && h > 0 && w < 30000 && h < 30000) return { width: w, height: h };
+  }
+
+  // GIF87a / GIF89a: width at 6 (LE16), height at 8 (LE16)
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf.length >= 10) {
+    const w = buf.readUInt16LE(6);
+    const h = buf.readUInt16LE(8);
+    if (w > 0 && h > 0) return { width: w, height: h };
+  }
+
+  // WebP: RIFF .... WEBP
+  if (
+    buf.toString('ascii', 0, 4) === 'RIFF' &&
+    buf.toString('ascii', 8, 12) === 'WEBP' &&
+    buf.length >= 30
+  ) {
+    const chunk = buf.toString('ascii', 12, 16);
+    if (chunk === 'VP8X' && buf.length >= 30) {
+      const w = 1 + (buf[24] | (buf[25] << 8) | (buf[26] << 16));
+      const h = 1 + (buf[27] | (buf[28] << 8) | (buf[29] << 16));
+      if (w > 0 && h > 0) return { width: w, height: h };
+    }
+    if (chunk === 'VP8 ' && buf.length >= 30 && buf[23] === 0x9d && buf[24] === 0x01 && buf[25] === 0x2a) {
+      const w = buf.readUInt16LE(26) & 0x3fff;
+      const h = buf.readUInt16LE(28) & 0x3fff;
+      if (w > 0 && h > 0) return { width: w, height: h };
+    }
+    if (chunk === 'VP8L' && buf.length >= 25 && buf[20] === 0x2f) {
+      const b1 = buf[21];
+      const b2 = buf[22];
+      const b3 = buf[23];
+      const b4 = buf[24];
+      const w = 1 + (((b2 & 0x3f) << 8) | b1);
+      const h = 1 + (((b4 & 0x0f) << 10) | (b3 << 2) | ((b2 & 0xc0) >> 6));
+      if (w > 0 && h > 0) return { width: w, height: h };
+    }
+  }
+
+  // JPEG: FF D8 -> scan SOF0..SOF3 markers (0xC0..0xC3, 0xC5..0xC7, 0xC9..0xCB, 0xCD..0xCF)
+  if (buf[0] === 0xff && buf[1] === 0xd8) {
+    let i = 2;
+    while (i + 9 < buf.length) {
+      if (buf[i] !== 0xff) {
+        i++;
+        continue;
+      }
+      while (i < buf.length && buf[i] === 0xff) i++;
+      if (i >= buf.length) break;
+      const marker = buf[i];
+      i++;
+      if (marker === 0xd8 || marker === 0xd9 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+        continue;
+      }
+      if (i + 2 > buf.length) break;
+      const segLen = buf.readUInt16BE(i);
+      if (segLen < 2) break;
+      const isSof =
+        (marker >= 0xc0 && marker <= 0xc3) ||
+        (marker >= 0xc5 && marker <= 0xc7) ||
+        (marker >= 0xc9 && marker <= 0xcb) ||
+        (marker >= 0xcd && marker <= 0xcf);
+      if (isSof && i + 7 <= buf.length) {
+        const h = buf.readUInt16BE(i + 3);
+        const w = buf.readUInt16BE(i + 5);
+        if (w > 0 && h > 0 && w < 30000 && h < 30000) return { width: w, height: h };
+        break;
+      }
+      i += segLen;
+    }
+  }
+
+  return null;
+}
+
+async function probeRemoteImageDimensions(
+  rawUrl: string,
+  timeoutMs = 6500
+): Promise<{ ok: boolean; url: string; width: number; height: number; contentType: string }> {
+  const cleanUrl = String(rawUrl || '').trim();
+  if (!cleanUrl || !/^https?:\/\//i.test(cleanUrl)) {
+    return { ok: false, url: cleanUrl, width: 0, height: 0, contentType: '' };
+  }
+  try {
+    const parsed = new URL(cleanUrl);
+    if (isBlockedHost(parsed.hostname)) {
+      return { ok: false, url: cleanUrl, width: 0, height: 0, contentType: '' };
+    }
+  } catch {
+    return { ok: false, url: cleanUrl, width: 0, height: 0, contentType: '' };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(cleanUrl, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: {
+        'User-Agent': DEFAULT_FETCH_HEADERS['User-Agent'],
+        Accept: 'image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8',
+        Range: 'bytes=0-131071',
+      },
+    });
+    if (!res.ok) {
+      return { ok: false, url: cleanUrl, width: 0, height: 0, contentType: '' };
+    }
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType && !/^image\//i.test(contentType)) {
+      return { ok: false, url: cleanUrl, width: 0, height: 0, contentType };
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) {
+      const ab = await res.arrayBuffer();
+      const dims = parseImageDimensionsFromBuffer(Buffer.from(ab));
+      return {
+        ok: Boolean(dims),
+        url: res.url || cleanUrl,
+        width: dims?.width || 0,
+        height: dims?.height || 0,
+        contentType,
+      };
+    }
+
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    const MAX_READ_BYTES = 2 * 1024 * 1024;
+    while (totalBytes < MAX_READ_BYTES) {
+      const { value, done } = await reader.read();
+      if (done || !value) break;
+      chunks.push(Buffer.from(value));
+      totalBytes += value.length;
+      const merged = Buffer.concat(chunks);
+      const dims = parseImageDimensionsFromBuffer(merged);
+      if (dims) {
+        try {
+          await reader.cancel();
+        } catch {
+          // ignore stream cancel error
+        }
+        return {
+          ok: true,
+          url: res.url || cleanUrl,
+          width: dims.width,
+          height: dims.height,
+          contentType,
+        };
+      }
+    }
+
+    const finalDims = parseImageDimensionsFromBuffer(Buffer.concat(chunks));
+    return {
+      ok: Boolean(finalDims),
+      url: res.url || cleanUrl,
+      width: finalDims?.width || 0,
+      height: finalDims?.height || 0,
+      contentType,
+    };
+  } catch {
+    return { ok: false, url: cleanUrl, width: 0, height: 0, contentType: '' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function evaluateImageQualityServer(params: {
+  posterUrl: string;
+  backdropUrl: string;
+  posterWidth: number;
+  posterHeight: number;
+  backdropWidth: number;
+  backdropHeight: number;
+}): ServerImageQualityStatus {
+  const { posterUrl, backdropUrl, posterWidth, posterHeight, backdropWidth, backdropHeight } = params;
+  const hasDistinctBackdrop = Boolean(backdropUrl && backdropUrl !== posterUrl);
+  const backdropIsPortrait = backdropWidth > 0 && backdropHeight > 0 && backdropWidth <= backdropHeight;
+
+  if (!hasDistinctBackdrop || backdropIsPortrait) return 'missing_backdrop';
+  if (posterWidth > 0 && posterHeight > 0 && backdropWidth > 0 && backdropHeight > 0) {
+    if (posterWidth < 450 || posterHeight < 650 || backdropWidth < 960 || backdropHeight < 540) {
+      return 'low';
+    }
+    if (posterWidth >= 600 && posterHeight >= 900 && backdropWidth >= 1200 && backdropHeight >= 675) {
+      return 'high';
+    }
+    return 'medium';
+  }
+  return 'unknown';
+}
+
+function cleanExternalSearchTitle(title: string, englishTitle: string): string {
+  const raw = (englishTitle || title || '').trim();
+  return raw
+    .replace(/\b(19|20)\d{2}\b/g, '')
+    .replace(/مترجم|مدبلج|فيلم|مسلسل|الموسم|الحلقة|اون لاين|بجودة عالية|WEB-DL|HD|4K|BluRay/gi, '')
+    .replace(/[-–|:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function queryTmdbHighResImages(
+  query: string,
+  year: string,
+  kind: string
+): Promise<{
+  poster_url: string;
+  poster_width: number;
+  poster_height: number;
+  backdrop_url: string;
+  backdrop_width: number;
+  backdrop_height: number;
+} | null> {
+  const tmdbKey = (process.env.TMDB_API_KEY || '').trim();
+  const tmdbBearer = (process.env.TMDB_READ_ACCESS_TOKEN || '').trim();
+  if ((!tmdbKey && !tmdbBearer) || !query) return null;
+
+  const isSeries = kind === 'series';
+  const searchType = isSeries ? 'tv' : 'movie';
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (tmdbBearer) headers.Authorization = `Bearer ${tmdbBearer}`;
+
+  const buildUrl = (pathAndQuery: string) => {
+    const sep = pathAndQuery.includes('?') ? '&' : '?';
+    return tmdbBearer
+      ? `https://api.themoviedb.org/3${pathAndQuery}`
+      : `https://api.themoviedb.org/3${pathAndQuery}${sep}api_key=${encodeURIComponent(tmdbKey)}`;
+  };
+
+  try {
+    const yearParam = /^\d{4}$/.test(year)
+      ? isSeries
+        ? `&first_air_date_year=${year}`
+        : `&year=${year}`
+      : '';
+    const searchRes = await fetch(
+      buildUrl(`/search/${searchType}?query=${encodeURIComponent(query)}&include_adult=false${yearParam}`),
+      { headers, signal: AbortSignal.timeout(7000) }
+    );
+    if (!searchRes.ok) return null;
+    const searchJson = (await searchRes.json()) as {
+      results?: Array<{ id: number; poster_path?: string; backdrop_path?: string }>;
+    };
+    const first = searchJson.results?.[0];
+    if (!first?.id) return null;
+
+    const imagesRes = await fetch(
+      buildUrl(`/${searchType}/${first.id}/images?include_image_language=en,ar,null`),
+      { headers, signal: AbortSignal.timeout(7000) }
+    );
+    if (!imagesRes.ok) {
+      return {
+        poster_url: first.poster_path ? `https://image.tmdb.org/t/p/original${first.poster_path}` : '',
+        poster_width: 0,
+        poster_height: 0,
+        backdrop_url: first.backdrop_path ? `https://image.tmdb.org/t/p/original${first.backdrop_path}` : '',
+        backdrop_width: 0,
+        backdrop_height: 0,
+      };
+    }
+
+    const imgJson = (await imagesRes.json()) as {
+      posters?: Array<{ file_path: string; width: number; height: number; aspect_ratio: number }>;
+      backdrops?: Array<{ file_path: string; width: number; height: number; aspect_ratio: number }>;
+    };
+
+    const bestPoster = (imgJson.posters || [])
+      .filter((p) => p.file_path && p.height > p.width)
+      .sort((a, b) => (b.width || 0) - (a.width || 0))[0];
+    const bestBackdrop = (imgJson.backdrops || [])
+      .filter((b) => b.file_path && b.width > b.height && (b.aspect_ratio || b.width / Math.max(1, b.height)) >= 1.5)
+      .sort((a, b) => (b.width || 0) - (a.width || 0))[0];
+
+    const posterPath = bestPoster?.file_path || first.poster_path || '';
+    const backdropPath = bestBackdrop?.file_path || first.backdrop_path || '';
+
+    return {
+      poster_url: posterPath ? `https://image.tmdb.org/t/p/original${posterPath}` : '',
+      poster_width: bestPoster?.width || 0,
+      poster_height: bestPoster?.height || 0,
+      backdrop_url: backdropPath ? `https://image.tmdb.org/t/p/original${backdropPath}` : '',
+      backdrop_width: bestBackdrop?.width || 0,
+      backdrop_height: bestBackdrop?.height || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveHighResImagesServer(params: {
+  title: string;
+  englishTitle?: string;
+  year?: string;
+  kind?: string;
+  currentPoster?: string;
+  currentBackdrop?: string;
+}) {
+  const {
+    title,
+    englishTitle = '',
+    year = '',
+    kind = 'movie',
+    currentPoster = '',
+    currentBackdrop = '',
+  } = params;
+
+  const cleanQuery = cleanExternalSearchTitle(title, englishTitle);
+  const candidatePoster = upgradeKnownImageUrlServer(currentPoster);
+  const candidateBackdrop =
+    currentBackdrop && currentBackdrop !== currentPoster
+      ? upgradeKnownImageUrlServer(currentBackdrop)
+      : '';
+
+  const [curP, curB, tmdbRes] = await Promise.all([
+    candidatePoster ? probeRemoteImageDimensions(candidatePoster) : Promise.resolve(null),
+    candidateBackdrop ? probeRemoteImageDimensions(candidateBackdrop) : Promise.resolve(null),
+    queryTmdbHighResImages(cleanQuery, year, kind),
+  ]);
+
+  let poster_url = curP?.ok ? curP.url : candidatePoster;
+  let poster_width = curP?.ok ? curP.width : 0;
+  let poster_height = curP?.ok ? curP.height : 0;
+
+  let backdrop_url = curB?.ok && curB.width > curB.height ? curB.url : '';
+  let backdrop_width = curB?.ok && curB.width > curB.height ? curB.width : 0;
+  let backdrop_height = curB?.ok && curB.width > curB.height ? curB.height : 0;
+  let image_source = curP?.ok || curB?.ok ? 'scraped' : 'none';
+
+  // Prefer TMDB genuine 2:3 & 16:9 high-res assets when configured
+  if (tmdbRes) {
+    if (tmdbRes.poster_url) {
+      let pw = tmdbRes.poster_width;
+      let ph = tmdbRes.poster_height;
+      if (!pw || !ph) {
+        const pr = await probeRemoteImageDimensions(tmdbRes.poster_url);
+        if (pr.ok) {
+          pw = pr.width;
+          ph = pr.height;
+        }
+      }
+      if (pw >= Math.max(500, poster_width)) {
+        poster_url = tmdbRes.poster_url;
+        poster_width = pw;
+        poster_height = ph;
+        image_source = 'tmdb';
+      }
+    }
+    if (tmdbRes.backdrop_url) {
+      let bw = tmdbRes.backdrop_width;
+      let bh = tmdbRes.backdrop_height;
+      if (!bw || !bh) {
+        const br = await probeRemoteImageDimensions(tmdbRes.backdrop_url);
+        if (br.ok) {
+          bw = br.width;
+          bh = br.height;
+        }
+      }
+      if (bw > bh && bw >= Math.max(1000, backdrop_width)) {
+        backdrop_url = tmdbRes.backdrop_url;
+        backdrop_width = bw;
+        backdrop_height = bh;
+        image_source = 'tmdb';
+      }
+    }
+  }
+
+  // TVmaze fallback (especially strong for series & anime/shows: real separate poster + 16:9 background!)
+  if (cleanQuery && (!backdrop_url || poster_width < 800)) {
+    try {
+      const tvmRes = await fetch(
+        `https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(cleanQuery)}&embed=images`,
+        { signal: AbortSignal.timeout(6000) }
+      );
+      if (tvmRes.ok) {
+        const tvm = (await tvmRes.json()) as {
+          image?: { original?: string };
+          _embedded?: {
+            images?: Array<{
+              type?: string;
+              resolutions?: { original?: { url?: string; width?: number; height?: number } };
+            }>;
+          };
+        };
+        const imgs = tvm._embedded?.images || [];
+        const pBest = imgs
+          .filter((i) => i.type === 'poster' && i.resolutions?.original?.url)
+          .sort((a, b) => (b.resolutions?.original?.width || 0) - (a.resolutions?.original?.width || 0))[0]
+          ?.resolutions?.original;
+        const bBest = imgs
+          .filter(
+            (i) =>
+              (i.type === 'background' || i.type === 'banner') &&
+              i.resolutions?.original?.url &&
+              (i.resolutions?.original?.width || 0) > (i.resolutions?.original?.height || 0)
+          )
+          .sort((a, b) => (b.resolutions?.original?.width || 0) - (a.resolutions?.original?.width || 0))[0]
+          ?.resolutions?.original;
+
+        if (pBest?.url && (pBest.width || 0) > poster_width) {
+          poster_url = pBest.url;
+          poster_width = pBest.width || 0;
+          poster_height = pBest.height || 0;
+          if (!poster_width) {
+            const pCheck = await probeRemoteImageDimensions(pBest.url);
+            if (pCheck.ok) {
+              poster_width = pCheck.width;
+              poster_height = pCheck.height;
+            }
+          }
+          image_source = 'tvmaze';
+        }
+        if (bBest?.url && (bBest.width || 0) > backdrop_width) {
+          backdrop_url = bBest.url;
+          backdrop_width = bBest.width || 0;
+          backdrop_height = bBest.height || 0;
+          if (!backdrop_width) {
+            const bCheck = await probeRemoteImageDimensions(bBest.url);
+            if (bCheck.ok && bCheck.width > bCheck.height) {
+              backdrop_width = bCheck.width;
+              backdrop_height = bCheck.height;
+            }
+          }
+          image_source = 'tvmaze';
+        }
+      }
+    } catch {
+      // ignore TVmaze network errors
+    }
+  }
+
+  // iTunes fallback for high-res movie poster if still low-res or missing
+  if (cleanQuery && poster_width < 800) {
+    try {
+      const entity = kind === 'series' ? 'tvSeason' : 'movie';
+      const itRes = await fetch(
+        `https://itunes.apple.com/search?term=${encodeURIComponent(cleanQuery)}&media=${kind === 'series' ? 'tvShow' : 'movie'}&entity=${entity}&limit=3`,
+        { signal: AbortSignal.timeout(6000) }
+      );
+      if (itRes.ok) {
+        const itJson = (await itRes.json()) as {
+          results?: Array<{ artworkUrl100?: string }>;
+        };
+        const rawArt = itJson.results?.[0]?.artworkUrl100 || '';
+        if (rawArt) {
+          const hiArt = upgradeKnownImageUrlServer(rawArt);
+          const itProbe = await probeRemoteImageDimensions(hiArt);
+          if (itProbe.ok && itProbe.width > poster_width) {
+            poster_url = itProbe.url;
+            poster_width = itProbe.width;
+            poster_height = itProbe.height;
+            if (image_source === 'scraped' || image_source === 'none') {
+              image_source = 'itunes';
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore iTunes errors
+    }
+  }
+
+  const image_quality_status = evaluateImageQualityServer({
+    posterUrl: poster_url,
+    backdropUrl: backdrop_url,
+    posterWidth: poster_width,
+    posterHeight: poster_height,
+    backdropWidth: backdrop_width,
+    backdropHeight: backdrop_height,
+  });
+
+  return {
+    poster_url,
+    poster_width,
+    poster_height,
+    backdrop_url,
+    backdrop_width,
+    backdrop_height,
+    image_source,
+    image_quality_status,
+  };
+}
+
 function isYoutubeUrl(rawUrl: string): boolean {
   return /(?:youtube\.com\/(?:watch|embed|shorts|v\/)|youtube-nocookie\.com\/embed\/|youtu\.be\/)/i.test(
     rawUrl
@@ -267,20 +787,48 @@ function parseHtmlToMediaWithHints(
   const englishMatch = rawTitle.match(/[A-Za-z][A-Za-z0-9\s:'\-&]{2,}/);
   const englishTitle = englishMatch ? cleanText(englishMatch[0]) : title;
 
-  // 3. Poster & Backdrop extraction (supports lazy data-echo / data-src)
-  const ogImage = resolveUrl(sourceUrl, $('meta[property="og:image"]').attr('content'));
+  // 3. Separate Poster (2:3) & Landscape Backdrop (16:9) extraction (upgrade known thumbnails & never force portrait into backdrop)
+  const ogImage = upgradeKnownImageUrlServer(
+    resolveUrl(sourceUrl, $('meta[property="og:image"]').attr('content'))
+  );
+  const twitterImage = upgradeKnownImageUrlServer(
+    resolveUrl(sourceUrl, $('meta[name="twitter:image"]').attr('content'))
+  );
   const posterImgEl = $(
     '.single-right img, .poster img, .movie-poster img, .pm-video-thumb img, .video-thumb img, article img'
   ).first();
-  const singlePoster = resolveUrl(
-    sourceUrl,
-    posterImgEl.attr('data-echo') ||
-      posterImgEl.attr('data-src') ||
-      posterImgEl.attr('data-lazy-src') ||
-      posterImgEl.attr('src')
+  const singlePoster = upgradeKnownImageUrlServer(
+    resolveUrl(
+      sourceUrl,
+      posterImgEl.attr('data-echo') ||
+        posterImgEl.attr('data-src') ||
+        posterImgEl.attr('data-lazy-src') ||
+        posterImgEl.attr('src')
+    )
   );
-  const poster = ogImage || singlePoster || jsonLdImage || '';
-  const backdrop = ogImage || poster;
+  const backdropImgEl = $(
+    '.backdrop img, .hero img, .hero-bg img, .cover img, .single-cover img, .movie-backdrop img'
+  ).first();
+  const explicitBackdrop = upgradeKnownImageUrlServer(
+    resolveUrl(
+      sourceUrl,
+      backdropImgEl.attr('data-echo') ||
+        backdropImgEl.attr('data-src') ||
+        backdropImgEl.attr('src') ||
+        $('video').first().attr('poster')
+    )
+  );
+
+  const poster = singlePoster || ogImage || upgradeKnownImageUrlServer(jsonLdImage) || '';
+  const distinctBackdropCandidate =
+    explicitBackdrop && explicitBackdrop !== poster
+      ? explicitBackdrop
+      : twitterImage && twitterImage !== poster
+        ? twitterImage
+        : ogImage && ogImage !== poster
+          ? ogImage
+          : '';
+  const backdrop = distinctBackdropCandidate;
 
   // 4. Story / Description
   const storySelector = cleanText(
@@ -867,6 +1415,14 @@ function parseHtmlToMediaWithHints(
     votes: '10,500',
     poster,
     backdrop,
+    poster_url: poster,
+    backdrop_url: backdrop,
+    poster_width: 0,
+    poster_height: 0,
+    backdrop_width: 0,
+    backdrop_height: 0,
+    image_source: poster ? 'scraped' : 'none',
+    image_quality_status: (backdrop ? 'unknown' : 'missing_backdrop') as ServerImageQualityStatus,
     tagline: story.slice(0, 140),
     story,
     sourceUrl: sourceUrl || '',
@@ -1388,16 +1944,40 @@ async function scrapeFullItemWithSubpages(
   }
 
   // Step 4: Verify scraped servers aren't website homepages / broken + enforce سيرفر 1, سيرفر 2...
-  // Step 5: Fallback trailer search on YouTube if page omitted trailer (skip trailer search when crawling individual episodes)
-  const [filteredServers, fallbackTrailer] = await Promise.all([
+  // Step 5: Fallback trailer search + independent High-Res Poster (2:3) & Backdrop (16:9) enrichment with real pixel probing
+  const [filteredServers, fallbackTrailer, resolvedImages] = await Promise.all([
     verifyScrapedServers(media.servers, mainOrigin),
     media.trailerUrl || options?.skipEpisodeCrawl
       ? Promise.resolve(media.trailerUrl)
       : findYoutubeTrailerFallback(media.title, media.englishTitle, media.year, media.kind),
+    options?.skipEpisodeCrawl
+      ? Promise.resolve(null)
+      : resolveHighResImagesServer({
+          title: media.title,
+          englishTitle: media.englishTitle,
+          year: media.year,
+          kind: media.kind,
+          currentPoster: media.poster,
+          currentBackdrop: media.backdrop,
+        }),
   ]);
 
   media.servers = filteredServers;
   media.trailerUrl = fallbackTrailer || '';
+  if (resolvedImages) {
+    if (resolvedImages.poster_url) {
+      media.poster = resolvedImages.poster_url;
+      media.poster_url = resolvedImages.poster_url;
+    }
+    media.poster_width = resolvedImages.poster_width;
+    media.poster_height = resolvedImages.poster_height;
+    media.backdrop = resolvedImages.backdrop_url;
+    media.backdrop_url = resolvedImages.backdrop_url;
+    media.backdrop_width = resolvedImages.backdrop_width;
+    media.backdrop_height = resolvedImages.backdrop_height;
+    media.image_source = resolvedImages.image_source;
+    media.image_quality_status = resolvedImages.image_quality_status;
+  }
   media.downloads = media.downloads.slice(0, 12);
 
   // Step 6: Per-Episode Deep Server Extraction for Series (so Episode 2, 3, 4... each have their OWN watch servers!)
@@ -1510,8 +2090,11 @@ async function tryBloggerFeedScrape(
       }
 
       if (!parsed.poster && entry.media$thumbnail?.url) {
-        parsed.poster = entry.media$thumbnail.url.replace(/\/s\d+(-c)?\//, '/s640/');
-        parsed.backdrop = parsed.poster;
+        parsed.poster = upgradeKnownImageUrlServer(entry.media$thumbnail.url);
+        parsed.poster_url = parsed.poster;
+        parsed.backdrop = '';
+        parsed.backdrop_url = '';
+        parsed.image_quality_status = 'missing_backdrop';
       }
 
       const categories: string[] = [];
@@ -1897,8 +2480,11 @@ async function startServer() {
                 if (detailRes.ok && detailRes.text.length > 150) {
                   const parsed = await scrapeFullItemWithSubpages(card.url, detailRes.text);
                   if (!parsed.poster && card.poster) {
-                    parsed.poster = card.poster;
-                    parsed.backdrop = card.poster;
+                    parsed.poster = upgradeKnownImageUrlServer(card.poster);
+                    parsed.poster_url = parsed.poster;
+                    if (!parsed.backdrop_url) {
+                      parsed.image_quality_status = 'missing_backdrop';
+                    }
                   }
                   if ((!parsed.title || parsed.title === 'عمل مستورد جديد') && card.title) {
                     parsed.title = card.title;
@@ -1908,6 +2494,7 @@ async function startServer() {
               } catch {
                 // Fall back to card metadata if single detail page fails
               }
+              const upgradedPoster = upgradeKnownImageUrlServer(card.poster);
               return {
                 title: card.title || 'عمل مستورد',
                 englishTitle: card.title || 'Imported Title',
@@ -1923,8 +2510,16 @@ async function startServer() {
                 duration: '120 دقيقة',
                 imdb: 7.8,
                 votes: '10,000',
-                poster: card.poster,
-                backdrop: card.poster,
+                poster: upgradedPoster,
+                backdrop: '',
+                poster_url: upgradedPoster,
+                backdrop_url: '',
+                poster_width: 0,
+                poster_height: 0,
+                backdrop_width: 0,
+                backdrop_height: 0,
+                image_source: 'card_fallback',
+                image_quality_status: 'missing_backdrop' as ServerImageQualityStatus,
                 tagline: card.title,
                 story: card.title,
                 sourceUrl: card.url,
@@ -1941,6 +2536,7 @@ async function startServer() {
         }
       } else {
         for (const card of candidates) {
+          const upgradedPoster = upgradeKnownImageUrlServer(card.poster);
           finalItems.push({
             title: card.title || 'عمل مستورد',
             englishTitle: card.title || 'Imported Title',
@@ -1956,8 +2552,16 @@ async function startServer() {
             duration: '120 دقيقة',
             imdb: 7.8,
             votes: '10,000',
-            poster: card.poster,
-            backdrop: card.poster,
+            poster: upgradedPoster,
+            backdrop: '',
+            poster_url: upgradedPoster,
+            backdrop_url: '',
+            poster_width: 0,
+            poster_height: 0,
+            backdrop_width: 0,
+            backdrop_height: 0,
+            image_source: 'card_fallback',
+            image_quality_status: 'missing_backdrop',
             tagline: card.title,
             story: card.title,
             sourceUrl: card.url,
@@ -2484,6 +3088,63 @@ async function startServer() {
       return res.json({ ok: true, results: checked });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'خطأ غير متوقع';
+      return res.status(500).json({ ok: false, error: msg });
+    }
+  });
+
+  // Measure real pixel dimensions of candidate image URLs server-side
+  app.post('/api/images/probe', async (req, res) => {
+    try {
+      const { urls } = (req.body || {}) as { urls?: unknown };
+      if (!Array.isArray(urls) || urls.length === 0) {
+        return res.status(400).json({ ok: false, error: 'urls array required' });
+      }
+      const uniqueUrls = Array.from(
+        new Set(urls.map((u) => String(u || '').trim()).filter((u) => /^https?:\/\//i.test(u)))
+      ).slice(0, 25);
+      const probed = await Promise.all(
+        uniqueUrls.map(async (u) => {
+          const upgraded = upgradeKnownImageUrlServer(u);
+          const origResult = await probeRemoteImageDimensions(u);
+          const upgradedResult =
+            upgraded !== u ? await probeRemoteImageDimensions(upgraded) : origResult;
+          const best =
+            upgradedResult.ok && upgradedResult.width >= origResult.width ? upgradedResult : origResult;
+          return [u, { ...best, upgradedUrl: upgraded }] as const;
+        })
+      );
+      return res.json({ ok: true, results: Object.fromEntries(probed) });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Probe failed';
+      return res.status(500).json({ ok: false, error: msg });
+    }
+  });
+
+  // Resolve independent high-res 2:3 Portrait Poster & 16:9 Landscape Backdrop (server-side TMDB + fallbacks + dimension verification)
+  app.post('/api/images/resolve', async (req, res) => {
+    try {
+      const body = (req.body || {}) as {
+        title?: string;
+        englishTitle?: string;
+        year?: string;
+        kind?: string;
+        currentPoster?: string;
+        currentBackdrop?: string;
+      };
+      if (!body.title && !body.englishTitle && !body.currentPoster) {
+        return res.status(400).json({ ok: false, error: 'title or currentPoster required' });
+      }
+      const result = await resolveHighResImagesServer({
+        title: String(body.title || ''),
+        englishTitle: String(body.englishTitle || ''),
+        year: String(body.year || ''),
+        kind: String(body.kind || 'movie'),
+        currentPoster: String(body.currentPoster || ''),
+        currentBackdrop: String(body.currentBackdrop || ''),
+      });
+      return res.json({ ok: true, result });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Image resolution failed';
       return res.status(500).json({ ok: false, error: msg });
     }
   });

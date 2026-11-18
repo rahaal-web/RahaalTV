@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clapperboard,
+  Clock,
   Film,
   Flame,
   Grid2x2,
@@ -30,6 +31,12 @@ import {
   handlePosterError,
   matchesCategoryFilter,
 } from '../lib/mediaFilters';
+import {
+  buildBackdropSrcSet,
+  getBackdropInfo,
+  getHeroThumbUrl,
+  getPosterUrl,
+} from '../lib/mediaImages';
 import {
   CatalogFilterState,
   HomeSectionConfig,
@@ -260,12 +267,36 @@ export function HomeView({
   );
 
   const pinnedList = useMemo(() => catalog.filter((i) => i.pinned), [catalog]);
-  const featuredItems = useMemo(
-    () => (pinnedList.length > 0 ? pinnedList : catalog).slice(0, siteSettings.featuredLimit || 5),
-    [pinnedList, catalog, siteSettings.featuredLimit]
-  );
+  const heroSlides = useMemo(() => {
+    if (catalog.length === 0) return [];
+    const ordered: MediaItem[] = [];
+    const seen = new Set<string>();
+    if ((homeConfig.heroMode === 'manual' || homeConfig.heroMode === 'brand') && homeConfig.heroMediaId) {
+      const manualItem = catalog.find((i) => i.id === homeConfig.heroMediaId);
+      if (manualItem) {
+        ordered.push(manualItem);
+        seen.add(manualItem.id);
+      }
+    }
+    for (const item of pinnedList) {
+      if (ordered.length >= 8) break;
+      if (!seen.has(item.id)) {
+        ordered.push(item);
+        seen.add(item.id);
+      }
+    }
+    for (const item of catalog) {
+      if (ordered.length >= 8) break;
+      if (!seen.has(item.id)) {
+        ordered.push(item);
+        seen.add(item.id);
+      }
+    }
+    return ordered.slice(0, 8);
+  }, [pinnedList, catalog, homeConfig.heroMode, homeConfig.heroMediaId]);
 
   const [heroIndex, setHeroIndex] = useState(0);
+  const [heroPaused, setHeroPaused] = useState(false);
   const [dismissedBanner, setDismissedBanner] = useState(false);
 
   // Full Paginated Library (optional when toggled on by admin)
@@ -273,30 +304,32 @@ export function HomeView({
   const [libraryPage, setLibraryPage] = useState(1);
 
   useEffect(() => {
-    if (homeConfig.heroMode !== 'auto' || featuredItems.length <= 1) return;
+    if (heroSlides.length > 0 && heroIndex >= heroSlides.length) {
+      setHeroIndex(0);
+    }
+  }, [heroSlides.length, heroIndex]);
+
+  useEffect(() => {
+    if (homeConfig.heroMode !== 'auto' || heroSlides.length <= 1 || heroPaused) return;
     const interval = setInterval(() => {
-      setHeroIndex((prev) => (prev + 1) % featuredItems.length);
+      setHeroIndex((prev) => (prev + 1) % heroSlides.length);
     }, 6500);
     return () => clearInterval(interval);
-  }, [homeConfig.heroMode, featuredItems.length]);
+  }, [homeConfig.heroMode, heroSlides.length, heroPaused]);
 
   useEffect(() => {
     setLibraryPage(1);
   }, [libraryFilter, catalog.length]);
 
+  const activeSlideIndex = heroSlides.length ? heroIndex % heroSlides.length : 0;
+
   const activeHero = useMemo(() => {
     if (catalog.length === 0) return null;
-    if (homeConfig.heroMode === 'manual' && homeConfig.heroMediaId) {
-      const picked = catalog.find((i) => i.id === homeConfig.heroMediaId);
-      if (picked) return picked;
+    if (heroSlides.length > 0) {
+      return heroSlides[activeSlideIndex] || catalog[0];
     }
-    if (homeConfig.heroMode === 'brand' && homeConfig.heroMediaId) {
-      const picked = catalog.find((i) => i.id === homeConfig.heroMediaId);
-      if (picked) return picked;
-    }
-    const safeIdx = featuredItems.length ? heroIndex % featuredItems.length : 0;
-    return featuredItems[safeIdx] || catalog[0];
-  }, [catalog, featuredItems, heroIndex, homeConfig.heroMode, homeConfig.heroMediaId]);
+    return catalog[0];
+  }, [catalog, heroSlides, activeSlideIndex]);
 
   const tickerBase = catalog.slice(0, 10);
   const tickerItems = [...tickerBase, ...tickerBase];
@@ -409,181 +442,253 @@ export function HomeView({
         </div>
       )}
 
-      {/* 1. Cinematic Hero Section (Admin-Controlled) */}
-      {homeConfig.showHero && (
-        <section className="relative overflow-hidden bg-[#0f0f0f]">
-          <div className="relative min-h-[490px] sm:min-h-[550px] lg:min-h-[600px] flex items-end">
-            <img
-              src={activeHero.backdrop || activeHero.poster || FALLBACK_BACKDROP}
-              alt={activeHero.title}
-              fetchPriority="high"
-              referrerPolicy="no-referrer"
-              onError={handleBackdropError}
-              className="absolute inset-0 h-full w-full object-cover transition-opacity duration-700"
-            />
-            {/* Multi-layer Scrims Blending Seamlessly Into #0f0f0f */}
-            <div className="absolute inset-0 bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/65 to-[#0f0f0f]/35" />
-            <div className="absolute inset-0 bg-gradient-to-l from-[#0f0f0f]/95 via-[#0f0f0f]/45 to-transparent" />
+      {/* 1. Cinematic Hero Section (High-Res 16:9 Backdrop + Right Info Panel + 8 Bottom Square Thumbnails) */}
+      {homeConfig.showHero && (() => {
+        const backdropInfo = getBackdropInfo(activeHero);
+        const heroBgSrc = backdropInfo.hasDedicatedBackdrop
+          ? backdropInfo.url
+          : FALLBACK_BACKDROP;
+        const heroBgSrcSet = backdropInfo.hasDedicatedBackdrop
+          ? buildBackdropSrcSet(backdropInfo.url)
+          : undefined;
+        const ambientPoster = getPosterUrl(activeHero);
 
-            <div className="relative z-10 mx-auto w-full max-w-[1440px] px-4 sm:px-6 lg:px-8 pt-28 pb-10 sm:pb-12">
-              <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-8">
-                <div className="max-w-2xl space-y-4">
-                  {/* Unboxed Typographic Metadata */}
-                  <div className="flex flex-wrap items-center gap-2.5 text-xs font-bold text-[#d4d4d4] tabular-nums">
-                    <span className="inline-flex items-center gap-1.5 text-[#E50914] font-extrabold">
-                      <Sparkles className="w-3.5 h-3.5" />
-                      {homeConfig.heroBadgeText || 'اختيار المحررين'}
-                    </span>
-                    <span aria-hidden="true" className="text-white/30">·</span>
-                    <span className="inline-flex items-center gap-1 text-[#f9c400] font-extrabold font-latin">
-                      <Star className="w-3.5 h-3.5 fill-current" />
-                      {Number(activeHero.imdb || 7.5).toFixed(1)} IMDb
-                    </span>
-                    {activeHero.communityRating && activeHero.communityRating.count > 0 && (
-                      <>
-                        <span aria-hidden="true" className="text-white/30">·</span>
-                        <span className="inline-flex items-center gap-1 text-[#4CAF50] font-extrabold font-latin">
-                          <Star className="w-3.5 h-3.5 text-[#f9c400] fill-[#f9c400]" />
-                          {activeHero.communityRating.average.toFixed(1)}/5 ({activeHero.communityRating.count})
-                        </span>
-                      </>
-                    )}
-                    <span aria-hidden="true" className="text-white/30">·</span>
-                    <span className="font-latin">{activeHero.year}</span>
-                    <span aria-hidden="true" className="text-white/30">·</span>
-                    <span className="font-latin text-white">{activeHero.quality}</span>
-                    {activeHero.duration && (
-                      <>
-                        <span aria-hidden="true" className="text-white/30">·</span>
-                        <span>{activeHero.duration}</span>
-                      </>
-                    )}
-                  </div>
+        return (
+          <section
+            className="relative overflow-hidden bg-[#0f0f0f]"
+            onMouseEnter={() => setHeroPaused(true)}
+            onMouseLeave={() => setHeroPaused(false)}
+          >
+            <div className="relative min-h-[540px] sm:min-h-[600px] lg:min-h-[660px] flex flex-col justify-end">
+              {/* Background Visual Layer */}
+              <img
+                key={activeHero.id}
+                src={heroBgSrc}
+                srcSet={heroBgSrcSet}
+                sizes="100vw"
+                alt={activeHero.title}
+                fetchPriority="high"
+                referrerPolicy="no-referrer"
+                onError={handleBackdropError}
+                className="absolute inset-0 h-full w-full object-cover object-center transition-opacity duration-700"
+              />
 
-                  <h1 className="font-display text-3xl sm:text-4xl lg:text-5xl font-black text-white leading-tight">
-                    {heroTitle}
-                  </h1>
+              {/* Subtle blurred poster accent overlay only when item lacks a genuine 16:9 backdrop */}
+              {!backdropInfo.hasDedicatedBackdrop && (
+                <img
+                  src={ambientPoster}
+                  alt=""
+                  aria-hidden="true"
+                  referrerPolicy="no-referrer"
+                  onError={handlePosterError}
+                  className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center opacity-25 blur-2xl scale-110"
+                />
+              )}
 
-                  <p className="text-sm sm:text-base text-[#d4d4d4] leading-relaxed line-clamp-2 max-w-xl">
-                    {heroDescription}
-                  </p>
+              {/* Layered Gradient Scrims Matching Dark Mode + Seamless #0f0f0f Bottom Blend */}
+              <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-transparent to-transparent" />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/55 to-black/20" />
+              <div className="absolute inset-0 bg-gradient-to-l from-[#0f0f0f]/92 via-[#0f0f0f]/48 to-transparent" />
 
-                  {/* Primary & Secondary Actions */}
-                  <div className="pt-2 flex flex-wrap items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => onPlayNow(activeHero)}
-                      className="inline-flex items-center gap-2.5 rounded-xl bg-[#E50914] hover:bg-[#f40612] px-7 py-3.5 text-sm sm:text-base font-extrabold text-white shadow-[0_12px_32px_rgba(229,9,20,0.45)] transition-transform hover:-translate-y-0.5 cursor-pointer"
-                    >
-                      <Play className="w-5 h-5 fill-current" />
-                      <span>{homeConfig.heroPrimaryCta || 'مشاهدة الآن'}</span>
-                    </button>
+              <div className="relative z-10 mx-auto w-full max-w-[1440px] px-4 sm:px-6 lg:px-10 pt-28 pb-6 sm:pb-8 flex flex-col gap-6 sm:gap-7">
+                {/* Main Info (Right Side in RTL) + Arrows & Progress (Left Side) */}
+                <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
+                  <div className="max-w-lg space-y-3 text-right">
+                    {/* Compact Status Badge */}
+                    <div>
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-[#E50914] px-3 py-1 text-[11px] font-extrabold text-white shadow-[0_6px_18px_rgba(229,9,20,0.45)]">
+                        <Flame className="w-3.5 h-3.5 fill-current" />
+                        <span>{homeConfig.heroBadgeText || 'الأكثر مشاهدة'}</span>
+                      </span>
+                    </div>
 
-                    <button
-                      type="button"
-                      onClick={() => onSelectMedia(activeHero)}
-                      className="inline-flex items-center gap-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 px-5 py-3.5 text-sm font-bold text-white backdrop-blur-md transition-colors cursor-pointer"
-                    >
-                      <Info className="w-4 h-4" />
-                      <span>التفاصيل والتحميل</span>
-                    </button>
+                    {/* Balanced Compact Headline */}
+                    <h1 className="font-display text-2xl sm:text-3xl lg:text-[34px] font-black text-white leading-[1.2] line-clamp-2">
+                      {heroTitle}
+                    </h1>
 
-                    <button
-                      type="button"
-                      onClick={() => onToggleWatchlist(activeHero)}
-                      aria-label={heroInWatchlist ? 'إزالة من قائمتي' : 'إضافة لقائمتي'}
-                      className={`inline-flex h-12 w-12 items-center justify-center rounded-xl border backdrop-blur-md transition-colors cursor-pointer ${
-                        heroInWatchlist
-                          ? 'bg-[#4CAF50]/20 border-[#4CAF50] text-[#4CAF50]'
-                          : 'bg-white/10 border-white/15 text-white hover:bg-white/20'
-                      }`}
-                    >
-                      {heroInWatchlist ? (
-                        <Check className="w-5 h-5" />
-                      ) : (
-                        <Bookmark className="w-5 h-5" />
+                    {/* Single Compact Metadata Line */}
+                    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs font-bold text-[#d4d4d4] tabular-nums">
+                      {activeHero.duration && (
+                        <>
+                          <span className="inline-flex items-center gap-1 text-white/90">
+                            <Clock className="w-3.5 h-3.5 text-white/75" />
+                            <span>{activeHero.duration}</span>
+                          </span>
+                          <span aria-hidden="true" className="text-white/25">|</span>
+                        </>
                       )}
-                    </button>
+                      <span className="font-latin text-white">{activeHero.quality || 'WEB-DL'}</span>
+                      <span aria-hidden="true" className="text-white/25">|</span>
+                      <span className="font-latin">{activeHero.year || '2026'}</span>
+                      <span aria-hidden="true" className="text-white/25">|</span>
+                      <span className="inline-flex items-center gap-1 text-[#f9c400] font-extrabold font-latin">
+                        <Star className="w-3.5 h-3.5 fill-current" />
+                        {Number(activeHero.imdb || 7.5).toFixed(1)}
+                      </span>
+                    </div>
 
-                    {isAdmin && onOpenHomeBuilder && (
+                    {/* Concise 2-Line Story */}
+                    <p className="text-xs sm:text-[13px] text-[#d4d4d4]/90 leading-relaxed line-clamp-2 max-w-md">
+                      {heroDescription}
+                    </p>
+
+                    {/* Primary & Secondary Action Buttons */}
+                    <div className="pt-1 flex flex-wrap items-center gap-2.5">
                       <button
                         type="button"
-                        onClick={onOpenHomeBuilder}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#eab308] px-4 py-3.5 text-xs font-black text-[#0f0f0f] transition-colors cursor-pointer"
+                        onClick={() => onPlayNow(activeHero)}
+                        className="inline-flex items-center gap-2 rounded-xl bg-[#E50914] hover:bg-[#f40612] px-6 py-2.5 sm:py-3 text-xs sm:text-sm font-extrabold text-white shadow-[0_10px_28px_rgba(229,9,20,0.45)] transition-transform hover:-translate-y-0.5 cursor-pointer"
                       >
-                        <SlidersHorizontal className="w-4 h-4" />
-                        <span>تخصيص الرئيسية</span>
+                        <Play className="w-4 h-4 fill-current" />
+                        <span>{homeConfig.heroPrimaryCta || 'مشاهدة الآن'}</span>
                       </button>
+
+                      <button
+                        type="button"
+                        onClick={() => onSelectMedia(activeHero)}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f242b]/85 hover:bg-white/20 border border-white/15 px-4 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-bold text-white backdrop-blur-md transition-colors cursor-pointer"
+                      >
+                        <Info className="w-4 h-4" />
+                        <span>التفاصيل</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => onToggleWatchlist(activeHero)}
+                        aria-label={heroInWatchlist ? 'إزالة من قائمتي' : 'إضافة لقائمتي'}
+                        className={`inline-flex h-10 w-10 sm:h-11 sm:w-11 items-center justify-center rounded-xl border backdrop-blur-md transition-colors cursor-pointer ${
+                          heroInWatchlist
+                            ? 'bg-[#4CAF50]/20 border-[#4CAF50] text-[#4CAF50]'
+                            : 'bg-[#1f242b]/80 border-white/15 text-white hover:bg-white/20'
+                        }`}
+                      >
+                        {heroInWatchlist ? (
+                          <Check className="w-4 h-4" />
+                        ) : (
+                          <Bookmark className="w-4 h-4" />
+                        )}
+                      </button>
+
+                      {isAdmin && onOpenHomeBuilder && (
+                        <button
+                          type="button"
+                          onClick={onOpenHomeBuilder}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#eab308] px-3.5 py-2.5 sm:py-3 text-xs font-black text-[#0f0f0f] transition-colors cursor-pointer"
+                        >
+                          <SlidersHorizontal className="w-3.5 h-3.5" />
+                          <span>تخصيص الرئيسية</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {homeConfig.heroShowHighlights && (
+                      <div className="pt-1 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[11px] font-medium text-[#a3a3a3]">
+                        <span className="inline-flex items-center gap-1">
+                          <Zap className="w-3 h-3 text-[#E50914]" />
+                          <span>سيرفرات سريعة بدون تقطيع</span>
+                        </span>
+                        <span className="inline-flex items-center gap-1">
+                          <Film className="w-3 h-3 text-[#f9c400]" />
+                          <span>دقة 4K UHD</span>
+                        </span>
+                        <span className="inline-flex items-center gap-1">
+                          <ShieldCheck className="w-3 h-3 text-[#4CAF50]" />
+                          <span>تحديث يومي</span>
+                        </span>
+                      </div>
                     )}
                   </div>
 
-                  {/* Subtle Site Highlights Strip */}
-                  {homeConfig.heroShowHighlights && (
-                    <div className="pt-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs font-medium text-[#a3a3a3]">
-                      <span className="inline-flex items-center gap-1.5">
-                        <Zap className="w-3.5 h-3.5 text-[#E50914]" />
-                        <span>سيرفرات سريعة بدون تقطيع</span>
-                      </span>
-                      <span className="inline-flex items-center gap-1.5">
-                        <Film className="w-3.5 h-3.5 text-[#f9c400]" />
-                        <span>دقة تصل إلى 4K UHD</span>
-                      </span>
-                      <span className="inline-flex items-center gap-1.5">
-                        <ShieldCheck className="w-3.5 h-3.5 text-[#4CAF50]" />
-                        <span>تحديث يومي واتصال آمن</span>
-                      </span>
+                  {/* Left Controls: Circular Prev/Next Arrows + Progress Dots */}
+                  {heroSlides.length > 1 && (
+                    <div className="flex flex-col items-start lg:items-end gap-2.5 shrink-0">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setHeroIndex(
+                              (prev) => (prev - 1 + heroSlides.length) % heroSlides.length
+                            )
+                          }
+                          aria-label="العرض السابق"
+                          className="inline-flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-black/65 border border-white/15 text-white hover:bg-[#E50914] hover:border-[#E50914] transition-colors cursor-pointer"
+                        >
+                          <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setHeroIndex((prev) => (prev + 1) % heroSlides.length)}
+                          aria-label="العرض التالي"
+                          className="inline-flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-black/65 border border-white/15 text-white hover:bg-[#E50914] hover:border-[#E50914] transition-colors cursor-pointer"
+                        >
+                          <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5" />
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        {heroSlides.map((item, idx) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => setHeroIndex(idx)}
+                            aria-label={`عرض ${item.title}`}
+                            className={`h-1 rounded-full transition-all cursor-pointer ${
+                              idx === activeSlideIndex
+                                ? 'w-6 bg-[#E50914]'
+                                : 'w-1.5 bg-white/35 hover:bg-white/65'
+                            }`}
+                          />
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
 
-                {/* Slider Controls (Only when Auto Mode & >1 items) */}
-                {homeConfig.heroMode === 'auto' && featuredItems.length > 1 && (
-                  <div className="flex flex-col items-start lg:items-end gap-3">
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setHeroIndex(
-                            (prev) => (prev - 1 + featuredItems.length) % featuredItems.length
-                          )
-                        }
-                        aria-label="العرض السابق"
-                        className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/60 border border-white/15 text-white hover:bg-[#E50914] transition-colors cursor-pointer"
-                      >
-                        <ChevronRight className="w-5 h-5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setHeroIndex((prev) => (prev + 1) % featuredItems.length)}
-                        aria-label="العرض التالي"
-                        className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/60 border border-white/15 text-white hover:bg-[#E50914] transition-colors cursor-pointer"
-                      >
-                        <ChevronLeft className="w-5 h-5" />
-                      </button>
-                    </div>
-
-                    <div className="flex items-center gap-1.5">
-                      {featuredItems.map((item, idx) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => setHeroIndex(idx)}
-                          aria-label={`عرض ${item.title}`}
-                          className={`h-1.5 rounded-full transition-all cursor-pointer ${
-                            idx === heroIndex % featuredItems.length
-                              ? 'w-8 bg-[#E50914]'
-                              : 'w-2 bg-white/30 hover:bg-white/60'
-                          }`}
-                        />
-                      ))}
+                {/* 8 Square Poster Thumbnails Strip (Desktop: 64x64px, Gap: 12px, Radius: 8px, Active Border: 2px #E50914, Zero Text) */}
+                {heroSlides.length > 1 && (
+                  <div className="flex items-center justify-center pt-1">
+                    <div
+                      className="flex items-center justify-center gap-[12px] overflow-x-auto no-scrollbar px-2 py-1.5 max-w-full"
+                      role="tablist"
+                      aria-label="الأعمال المميزة في السلايدر"
+                    >
+                      {heroSlides.map((item, idx) => {
+                        const isActiveThumb = idx === activeSlideIndex;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            role="tab"
+                            aria-selected={isActiveThumb}
+                            aria-label={item.title}
+                            onClick={() => setHeroIndex(idx)}
+                            className={`relative aspect-square w-[52px] h-[52px] sm:w-[64px] sm:h-[64px] shrink-0 rounded-[8px] overflow-hidden p-0 bg-[#181818] transition-all duration-200 cursor-pointer focus:outline-none ${
+                              isActiveThumb
+                                ? 'border-2 border-[#E50914] shadow-[0_0_20px_rgba(229,9,20,0.65)] scale-[1.04] opacity-100'
+                                : 'border-2 border-white/20 opacity-75 hover:opacity-100 hover:border-white/55'
+                            }`}
+                          >
+                            <img
+                              src={getHeroThumbUrl(item)}
+                              alt={item.title}
+                              loading="eager"
+                              decoding="async"
+                              referrerPolicy="no-referrer"
+                              onError={handlePosterError}
+                              className="h-full w-full object-cover object-top"
+                            />
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
               </div>
             </div>
-          </div>
-        </section>
-      )}
+          </section>
+        );
+      })()}
 
       {/* Admin Quick Customize Banner when Hero is hidden */}
       {!homeConfig.showHero && (

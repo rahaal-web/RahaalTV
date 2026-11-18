@@ -77,6 +77,8 @@ service cloud.firestore {
         'id', 'slug', 'title', 'englishTitle', 'kind', 'categories', 'genres',
         'year', 'country', 'language', 'quality', 'duration', 'imdb', 'votes',
         'views', 'likes', 'pinned', 'isNew', 'comingSoon', 'poster', 'backdrop',
+        'poster_url', 'backdrop_url', 'poster_width', 'poster_height',
+        'backdrop_width', 'backdrop_height', 'image_source', 'image_quality_status',
         'tagline', 'story', 'shortUrl', 'trailerUrl', 'trailerLabel', 'trailerDuration',
         'cast', 'seasons', 'franchiseIds', 'servers', 'downloads',
         'updatedBy', 'createdAt', 'updatedAt'
@@ -102,6 +104,14 @@ service cloud.firestore {
       && data.comingSoon is bool
       && data.poster is string && data.poster.size() >= 1 && data.poster.size() <= 500
       && data.backdrop is string && data.backdrop.size() >= 1 && data.backdrop.size() <= 500
+      && (!('poster_url' in data) || (data.poster_url is string && data.poster_url.size() <= 500))
+      && (!('backdrop_url' in data) || (data.backdrop_url is string && data.backdrop_url.size() <= 500))
+      && (!('poster_width' in data) || ((data.poster_width is int || data.poster_width is float) && data.poster_width >= 0 && data.poster_width <= 20000))
+      && (!('poster_height' in data) || ((data.poster_height is int || data.poster_height is float) && data.poster_height >= 0 && data.poster_height <= 20000))
+      && (!('backdrop_width' in data) || ((data.backdrop_width is int || data.backdrop_width is float) && data.backdrop_width >= 0 && data.backdrop_width <= 20000))
+      && (!('backdrop_height' in data) || ((data.backdrop_height is int || data.backdrop_height is float) && data.backdrop_height >= 0 && data.backdrop_height <= 20000))
+      && (!('image_source' in data) || (data.image_source is string && data.image_source.size() <= 60))
+      && (!('image_quality_status' in data) || (data.image_quality_status in ['high', 'medium', 'low', 'missing_backdrop', 'unknown']))
       && data.tagline is string && data.tagline.size() <= 400
       && data.story is string && data.story.size() >= 1 && data.story.size() <= 3000
       && data.shortUrl is string && data.shortUrl.size() <= 300

@@ -269,12 +269,20 @@ export default function App() {
             raw.updatedAt && typeof raw.updatedAt.toMillis === 'function'
               ? raw.updatedAt.toMillis()
               : createdAtMs;
-          const poster = resolveMediaAssetUrl(raw.poster, FALLBACK_POSTER);
-          const backdrop = resolveMediaAssetUrl(raw.backdrop, poster || FALLBACK_BACKDROP);
+          const poster = resolveMediaAssetUrl(raw.poster_url || raw.poster, FALLBACK_POSTER);
+          const rawDistinctBackdrop =
+            raw.backdrop_url !== undefined
+              ? resolveMediaAssetUrl(raw.backdrop_url, '')
+              : resolveMediaAssetUrl(raw.backdrop, '');
+          const backdropUrlNormalized =
+            rawDistinctBackdrop && rawDistinctBackdrop !== poster ? rawDistinctBackdrop : '';
+          const backdrop = rawDistinctBackdrop || FALLBACK_BACKDROP;
           return {
             ...raw,
             poster,
             backdrop,
+            poster_url: poster,
+            backdrop_url: backdropUrlNormalized,
             createdAtMs,
             updatedAtMs,
           } as MediaItem;
