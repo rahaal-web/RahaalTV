@@ -10,6 +10,7 @@ import {
   ChevronRight,
   ChevronUp,
   Film,
+  Globe,
   LayoutDashboard,
   Loader2,
   LogOut,
@@ -46,6 +47,7 @@ import {
   getFirebaseAuthErrorMessage,
   registerMemberWithEmailPassword,
   signInWithEmailPassword,
+  signInWithGoogle,
 } from '../lib/firebase';
 import {
   buildPlayerThemeVars,
@@ -2524,6 +2526,20 @@ export function LoginModal({
     }
   };
 
+  const handleGoogleSignIn = async () => {
+    setAuthError(null);
+    setSigningIn(true);
+    try {
+      const cred = await signInWithGoogle();
+      onNotify?.(`مرحبًا بك يا ${cred.user.displayName || cred.user.email || 'مستخدم'} في RahaL TV`);
+      onClose();
+    } catch (err: unknown) {
+      setAuthError(getFirebaseAuthErrorMessage(err));
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
   return (
     <div
       role="dialog"
@@ -2697,6 +2713,22 @@ export function LoginModal({
               {mode === 'login'
                 ? 'ليس لديك حساب؟ إنشاء حساب عضو جديد'
                 : 'لديك حساب بالفعل؟ العودة لتسجيل الدخول'}
+            </button>
+
+            <div className="flex items-center gap-3 pt-1">
+              <div className="h-px flex-1 bg-white/10" />
+              <span className="text-[11px] font-bold text-[#b7c9ef]/60">أو</span>
+              <div className="h-px flex-1 bg-white/10" />
+            </div>
+
+            <button
+              type="button"
+              disabled={signingIn}
+              onClick={() => void handleGoogleSignIn()}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-[#1a242e] hover:bg-[#23313f] border border-white/15 disabled:opacity-60 py-3 text-xs font-extrabold text-white transition-colors cursor-pointer"
+            >
+              <Globe className="w-4 h-4 text-[#f9c400]" />
+              <span>تسجيل الدخول بحساب Google</span>
             </button>
           </form>
         )}

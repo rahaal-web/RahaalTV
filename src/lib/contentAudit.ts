@@ -42,6 +42,157 @@ export function normalizeTitleForDuplicateCheck(title: string): string {
     .trim();
 }
 
+export interface DuplicateGroup {
+  key: string;
+  title: string;
+  kind: MediaKind;
+  year: string;
+  items: MediaItem[];
+  keepId: string;
+  extraIds: string[];
+  matchReason: 'exact_title_year' | 'english_title_match' | 'title_cross_year';
+}
+
+export function scoreMediaCompleteness(item: MediaItem): number {
+  let score = 0;
+  const serverCount = Array.isArray(item.servers) ? item.servers.length : 0;
+  const downloadCount = Array.isArray(item.downloads) ? item.downloads.length : 0;
+  const seasons = Array.isArray(item.seasons) ? item.seasons : [];
+  const episodeCount = seasons.reduce(
+    (sum, s) => sum + (Array.isArray(s.episodes) ? s.episodes.length : 0),
+    0
+  );
+  const episodeServerCount = seasons.reduce(
+    (sum, s) =>
+      sum +
+      (Array.isArray(s.episodes)
+        ? s.episodes.reduce((eSum, ep) => eSum + (ep.servers?.length || 0), 0)
+        : 0),
+    0
+  );
+
+  score += serverCount * 12;
+  score += episodeCount * 8;
+  score += episodeServerCount * 4;
+  score += downloadCount * 5;
+  if ((item.poster_url || item.poster || '').trim() && !/poster_running_man/i.test(item.poster || '')) {
+    score += 10;
+  }
+  if ((item.backdrop_url || '').trim()) score += 8;
+  if (item.story && item.story.trim().length >= 20) score += 6;
+  if ((item.trailerUrl || '').trim()) score += 4;
+  if (item.pinned) score += 5;
+  score += Math.min(20, Math.floor((item.views || 0) / 500));
+  return score;
+}
+
+export function findDuplicateGroups(
+  media: MediaItem[],
+  options: { ignoreYear?: boolean } = {}
+): DuplicateGroup[] {
+  const ignoreYear = Boolean(options.ignoreYear);
+  if (media.length < 2) return [];
+
+  // Union-find across items that share (kind + year + normalized title or normalized englishTitle)
+  const parent = media.map((_, idx) => idx);
+  const find = (x: number): number => {
+    let r = x;
+    while (parent[r] !== r) r = parent[r];
+    let curr = x;
+    while (curr !== r) {
+      const nxt = parent[curr];
+      parent[curr] = r;
+      curr = nxt;
+    }
+    return r;
+  };
+  const union = (a: number, b: number) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[rb] = ra;
+  };
+
+  const tokenBuckets = new Map<string, number[]>();
+  const englishMatchSet = new Set<number>();
+
+  media.forEach((item, idx) => {
+    const yearKey = ignoreYear ? 'any' : (item.year || 'na').trim() || 'na';
+    const normTitle = normalizeTitleForDuplicateCheck(item.title || '');
+    const normEng = normalizeTitleForDuplicateCheck(item.englishTitle || '');
+
+    if (normTitle.length >= 2) {
+      const tKey = `${item.kind}::${yearKey}::t::${normTitle}`;
+      const list = tokenBuckets.get(tKey) || [];
+      list.push(idx);
+      tokenBuckets.set(tKey, list);
+    }
+
+    if (normEng.length >= 3) {
+      const eKey = `${item.kind}::${yearKey}::t::${normEng}`;
+      const list = tokenBuckets.get(eKey) || [];
+      if (normEng !== normTitle) {
+        englishMatchSet.add(idx);
+      }
+      list.push(idx);
+      tokenBuckets.set(eKey, list);
+    }
+  });
+
+  for (const [, indices] of tokenBuckets.entries()) {
+    if (indices.length > 1) {
+      const base = indices[0];
+      for (let i = 1; i < indices.length; i++) {
+        union(base, indices[i]);
+      }
+    }
+  }
+
+  const grouped = new Map<number, number[]>();
+  for (let i = 0; i < media.length; i++) {
+    const root = find(i);
+    const bucket = grouped.get(root) || [];
+    bucket.push(i);
+    grouped.set(root, bucket);
+  }
+
+  const results: DuplicateGroup[] = [];
+  for (const [root, indices] of grouped.entries()) {
+    if (indices.length <= 1) continue;
+    const groupItems = indices
+      .map((i) => media[i])
+      .sort((a, b) => {
+        const scoreDiff = scoreMediaCompleteness(b) - scoreMediaCompleteness(a);
+        if (scoreDiff !== 0) return scoreDiff;
+        const viewsDiff = (b.views || 0) - (a.views || 0);
+        if (viewsDiff !== 0) return viewsDiff;
+        return (a.createdAtMs || 0) - (b.createdAtMs || 0);
+      });
+
+    const best = groupItems[0];
+    const hasMixedYears =
+      ignoreYear &&
+      new Set(groupItems.map((it) => (it.year || '').trim()).filter(Boolean)).size > 1;
+    const usedEnglishMatch = indices.some((idx) => englishMatchSet.has(idx));
+
+    results.push({
+      key: `${best.kind}::${best.id}::${root}`,
+      title: best.title || best.englishTitle || 'عمل مكرر',
+      kind: best.kind,
+      year: best.year || 'غير محدد',
+      items: groupItems,
+      keepId: best.id,
+      extraIds: groupItems.slice(1).map((it) => it.id),
+      matchReason: hasMixedYears
+        ? 'title_cross_year'
+        : usedEnglishMatch
+          ? 'english_title_match'
+          : 'exact_title_year',
+    });
+  }
+
+  return results.sort((a, b) => b.items.length - a.items.length);
+}
+
 export function extractServerResolvedUrl(srv?: {
   url?: string;
   embedCode?: string;

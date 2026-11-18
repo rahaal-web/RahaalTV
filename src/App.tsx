@@ -56,10 +56,13 @@ import { loadAdminWorkspacePrefs } from './lib/adminPreferences';
 import { installTvSpatialNavigation } from './lib/tvNavigation';
 import {
   auth,
+  classifyFirestoreConnectionError,
   db,
+  FirestoreConnectionStatus,
   getUserAdminRole,
   handleFirestoreError,
   OperationType,
+  probeDatabaseConnection,
   sanitizeRatingMediaId,
   saveSiteSettingsToFirestore,
   saveWatchlistToFirestore,
@@ -161,6 +164,10 @@ export default function App() {
     Record<string, { average: number; count: number }>
   >({});
   const [initialMediaLoaded, setInitialMediaLoaded] = useState(false);
+  const [dbConnectionStatus, setDbConnectionStatus] =
+    useState<FirestoreConnectionStatus>('connecting');
+  const [dbConnectionError, setDbConnectionError] = useState<string | null>(null);
+  const [dbReconnectNonce, setDbReconnectNonce] = useState(0);
   const [siteSettings, setSiteSettings] = useState<SiteSettings>(DEFAULT_SETTINGS);
   const [customFonts, setCustomFonts] = useState<
     Partial<Record<CustomFontSlot, CustomFontRecord>>
@@ -410,6 +417,8 @@ export default function App() {
         });
         setFirestoreCatalog(docs);
         setInitialMediaLoaded(true);
+        setDbConnectionStatus('connected');
+        setDbConnectionError(null);
         if (docs.length > 0) {
           // Once Firestore holds live items, prevent initial fallback items from popping back if DB is cleared later
           setStarterCleared(true);
@@ -417,6 +426,9 @@ export default function App() {
       },
       (error) => {
         setInitialMediaLoaded(true);
+        const classified = classifyFirestoreConnectionError(error);
+        setDbConnectionStatus(classified.status);
+        setDbConnectionError(classified.message);
         try {
           handleFirestoreError(error, OperationType.LIST, mediaPath);
         } catch {
@@ -545,7 +557,7 @@ export default function App() {
       unsubFonts();
       unsubRatings();
     };
-  }, []);
+  }, [dbReconnectNonce]);
 
   // 2. Auth State Listener + Profile Sync
   useEffect(() => {
@@ -846,6 +858,21 @@ export default function App() {
             authLoading={authLoading}
             catalog={activeCatalog}
             isFirestoreSeeded={isFirestoreSeeded}
+            dbConnectionStatus={dbConnectionStatus}
+            dbConnectionError={dbConnectionError}
+            onReconnectDatabase={async () => {
+              setDbConnectionStatus('connecting');
+              setDbConnectionError(null);
+              const probe = await probeDatabaseConnection();
+              setDbReconnectNonce((n) => n + 1);
+              if (!probe.ok && probe.status !== 'connected') {
+                setDbConnectionStatus(probe.status);
+                setDbConnectionError(probe.message || null);
+                showToast(probe.message || 'تعذر إعادة الاتصال بقاعدة البيانات');
+              } else {
+                showToast('تم إرسال طلب إعادة الاتصال بقاعدة بيانات Firestore');
+              }
+            }}
             hasDismissedStarters={hasDismissedStarters}
             requests={visitorRequests}
             usersList={usersList}

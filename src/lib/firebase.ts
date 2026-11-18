@@ -64,6 +64,7 @@ export const PRIMARY_ADMIN_EMAILS = [
   'rahalahmed348@gmail.com',
   'mfeshmeny2@gmail.com',
   'ccicada6@gmail.com',
+  'bebraheem439@gmail.com',
 ];
 
 export enum OperationType {
@@ -216,17 +217,79 @@ export function formatFirestoreWriteError(error: unknown, fallbackMessage: strin
   return fallbackMessage;
 }
 
+export type FirestoreConnectionStatus =
+  | 'connecting'
+  | 'connected'
+  | 'quota_exceeded'
+  | 'permission_denied'
+  | 'offline'
+  | 'error';
+
+export function classifyFirestoreConnectionError(err: unknown): {
+  status: FirestoreConnectionStatus;
+  message: string;
+} {
+  const { code, message } = getFirebaseErrorCodeAndMessage(err);
+  const combined = `${code} ${message}`.toLowerCase();
+
+  if (combined.includes('quota exceeded') || combined.includes('resource-exhausted')) {
+    return {
+      status: 'quota_exceeded',
+      message:
+        'تم تجاوز الحصة اليومية المجانية لقراءة قاعدة بيانات Firestore (Quota exceeded) — تتجدد الحصة تلقائياً غداً أو بعد ترقية الخطة.',
+    };
+  }
+  if (combined.includes('permission-denied') || combined.includes('missing or insufficient permissions')) {
+    return {
+      status: 'permission_denied',
+      message:
+        'قاعدة البيانات متصلة ولكن قواعد الأمان (firestore.rules) الحالية ترفض القراءة — يرجى نشر ملف firestore.rules في Firebase Console.',
+    };
+  }
+  if (combined.includes('the client is offline') || combined.includes('unavailable')) {
+    return {
+      status: 'offline',
+      message: 'تعذر الوصول إلى خادم Firestore (تحقق من الاتصال بالإنترنت أو إعدادات المشروع).',
+    };
+  }
+  return {
+    status: 'error',
+    message: message || 'حدث خطأ غير متوقع أثناء الاتصال بقاعدة بيانات Firestore.',
+  };
+}
+
 // Mandatory boot connection check
-async function testConnection() {
+export async function testConnection(): Promise<{
+  ok: boolean;
+  status: FirestoreConnectionStatus;
+  message?: string;
+}> {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
+    return { ok: true, status: 'connected' };
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.error('Please check your Firebase configuration.');
     }
+    const classified = classifyFirestoreConnectionError(error);
+    return { ok: false, status: classified.status, message: classified.message };
   }
 }
 void testConnection();
+
+export async function probeDatabaseConnection(): Promise<{
+  ok: boolean;
+  status: FirestoreConnectionStatus;
+  message?: string;
+}> {
+  try {
+    await getDocFromServer(doc(db, 'settings', 'general'));
+    return { ok: true, status: 'connected' };
+  } catch (error) {
+    const classified = classifyFirestoreConnectionError(error);
+    return { ok: false, status: classified.status, message: classified.message };
+  }
+}
 
 export function normalizeAuthIdentifier(identifier: string): string {
   const clean = identifier.trim();

@@ -19,6 +19,7 @@ import {
   CatalogSortField,
   CatalogTablePrefs,
 } from '../../lib/adminPreferences';
+import { findDuplicateGroups } from '../../lib/contentAudit';
 import { getPosterUrl } from '../../lib/mediaImages';
 import { MediaItem, MediaKind } from '../../types/media';
 import type { AdminTab } from './adminNavigation';
@@ -136,10 +137,31 @@ export function AdminCatalogPanel({
 }: AdminCatalogPanelProps) {
   const [page, setPage] = useState(1);
   const [showColumnMenu, setShowColumnMenu] = useState(false);
+  const [duplicatesOnly, setDuplicatesOnly] = useState(false);
+
+  const duplicateAnalysis = useMemo(() => {
+    const groups = findDuplicateGroups(catalog);
+    const allIds = new Set<string>();
+    const extraIds: string[] = [];
+    for (const group of groups) {
+      for (const item of group.items) allIds.add(item.id);
+      extraIds.push(...group.extraIds);
+    }
+    return { groups, allIds, extraIds };
+  }, [catalog]);
+
+  const effectiveCatalog = useMemo(() => {
+    if (!duplicatesOnly) return filteredCatalog;
+    return filteredCatalog.filter((item) => duplicateAnalysis.allIds.has(item.id));
+  }, [filteredCatalog, duplicatesOnly, duplicateAnalysis.allIds]);
 
   const sortedItems = useMemo(() => {
     const dir = tablePrefs.sortDir === 'asc' ? 1 : -1;
-    return [...filteredCatalog].sort((a, b) => {
+    return [...effectiveCatalog].sort((a, b) => {
+      if (duplicatesOnly) {
+        const titleCmp = a.title.localeCompare(b.title, 'ar');
+        if (titleCmp !== 0) return titleCmp;
+      }
       switch (tablePrefs.sortBy) {
         case 'title':
           return a.title.localeCompare(b.title, 'ar') * dir;
@@ -157,7 +179,7 @@ export function AdminCatalogPanel({
         }
       }
     });
-  }, [filteredCatalog, catalog, tablePrefs.sortBy, tablePrefs.sortDir]);
+  }, [effectiveCatalog, catalog, tablePrefs.sortBy, tablePrefs.sortDir, duplicatesOnly]);
 
   const totalPages = Math.max(1, Math.ceil(sortedItems.length / tablePrefs.pageSize));
   const safePage = Math.min(Math.max(1, page), totalPages);
@@ -324,6 +346,22 @@ export function AdminCatalogPanel({
 
           <button
             type="button"
+            onClick={() => {
+              setDuplicatesOnly((prev) => !prev);
+              setPage(1);
+            }}
+            className={`inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-2.5 text-xs font-extrabold cursor-pointer whitespace-nowrap shrink-0 transition-colors ${
+              duplicatesOnly
+                ? 'bg-[#f9c400] border-[#f9c400] text-[#06131c]'
+                : 'bg-[#1a242e] hover:bg-[#f9c400]/15 border-[#f9c400]/35 text-[#f9c400]'
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>المكرر ({duplicateAnalysis.allIds.size})</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => onNavigateTab('bulk_editor')}
             className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 px-3.5 py-2.5 text-xs font-extrabold text-white cursor-pointer whitespace-nowrap shrink-0"
           >
@@ -354,18 +392,43 @@ export function AdminCatalogPanel({
       </div>
 
       {/* Bulk Selection Toolbar */}
-      {filteredCatalog.length > 0 ? (
+      {effectiveCatalog.length > 0 ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-[#1a242e]/75 border border-white/10 px-4 py-3">
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={onSelectFiltered}
+              onClick={() => {
+                if (duplicatesOnly) {
+                  onSetSelectedIds(
+                    Array.from(new Set([...selectedMediaIds, ...effectiveCatalog.map((i) => i.id)]))
+                  );
+                } else {
+                  onSelectFiltered();
+                }
+              }}
               className="rounded-xl bg-[#0c1821] hover:bg-white/10 border border-white/10 px-3 py-1.5 text-xs font-bold text-white cursor-pointer whitespace-nowrap shrink-0"
             >
-              تحديد المعروض ({filteredCatalog.length})
+              تحديد المعروض ({effectiveCatalog.length})
             </button>
 
-            {catalog.length > filteredCatalog.length && (
+            {duplicateAnalysis.extraIds.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  onSetSelectedIds(duplicateAnalysis.extraIds);
+                  setDuplicatesOnly(true);
+                  setPage(1);
+                  onNotify(
+                    `تم تحديد ${duplicateAnalysis.extraIds.length} نسخة مكررة مع الإبقاء على النسخة الأفضل لكل عمل`
+                  );
+                }}
+                className="rounded-xl bg-[#f9c400]/15 hover:bg-[#f9c400]/25 border border-[#f9c400]/45 px-3 py-1.5 text-xs font-extrabold text-[#f9c400] cursor-pointer whitespace-nowrap shrink-0"
+              >
+                تحديد النسخ المكررة ({duplicateAnalysis.extraIds.length})
+              </button>
+            )}
+
+            {catalog.length > effectiveCatalog.length && (
               <button
                 type="button"
                 onClick={onSelectAllCatalog}
@@ -515,7 +578,14 @@ export function AdminCatalogPanel({
                               />
                             )}
                             <div className="min-w-0 max-w-[230px]">
-                              <p className="font-extrabold text-white truncate">{item.title}</p>
+                              <div className="flex items-center gap-1.5">
+                                <p className="font-extrabold text-white truncate">{item.title}</p>
+                                {duplicateAnalysis.allIds.has(item.id) && (
+                                  <span className="shrink-0 rounded bg-[#f9c400]/20 border border-[#f9c400]/45 px-1.5 py-0.5 text-[9px] font-black text-[#f9c400]">
+                                    مكرر
+                                  </span>
+                                )}
+                              </div>
                               <p className="text-[11px] text-[#b7c9ef] truncate">
                                 {item.quality} • {item.language || 'مترجم'}
                               </p>

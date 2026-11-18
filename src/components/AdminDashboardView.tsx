@@ -51,6 +51,7 @@ import {
   X,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
+import firebaseConfig from '../../firebase-applet-config.json';
 import { ASSETS, CATALOG_ITEMS } from '../data/catalog';
 import { MediaPreviewModal } from './MediaPreviewModal';
 import {
@@ -141,6 +142,7 @@ import {
   deleteCustomFontFromFirestore,
   deleteMediaFromFirestore,
   deleteVisitorRequestFromFirestore,
+  FirestoreConnectionStatus,
   formatFirestoreWriteError,
   getFirebaseAuthErrorMessage,
   grantAdminRoleInFirestore,
@@ -150,6 +152,7 @@ import {
   saveSiteSettingsToFirestore,
   seedCatalogToFirestore,
   signInWithEmailPassword,
+  signInWithGoogle,
   signOutFirebase,
   updateAdminRoleInFirestore,
   updateVisitorRequestInFirestore,
@@ -306,6 +309,9 @@ interface AdminDashboardViewProps {
   authLoading: boolean;
   catalog: MediaItem[];
   isFirestoreSeeded: boolean;
+  dbConnectionStatus?: FirestoreConnectionStatus;
+  dbConnectionError?: string | null;
+  onReconnectDatabase?: () => Promise<void> | void;
   hasDismissedStarters: boolean;
   requests: VisitorRequest[];
   usersList: UserProfileRecord[];
@@ -597,6 +603,9 @@ export function AdminDashboardView({
   authLoading,
   catalog,
   isFirestoreSeeded,
+  dbConnectionStatus,
+  dbConnectionError,
+  onReconnectDatabase,
   hasDismissedStarters,
   requests,
   usersList,
@@ -828,6 +837,7 @@ export function AdminDashboardView({
   }, [authLoading, user, isAdmin]);
 
   const [busyAction, setBusyAction] = useState(false);
+  const [reconnectingDb, setReconnectingDb] = useState(false);
   const [adminSigningIn, setAdminSigningIn] = useState(false);
   const [adminAuthError, setAdminAuthError] = useState<string | null>(null);
   const [adminLoginEmail, setAdminLoginEmail] = useState('');
@@ -2091,6 +2101,29 @@ export function AdminDashboardView({
     }
   };
 
+  const handleDeleteMediaIds = async (ids: string[]) => {
+    const targetIds = ids.filter((id) => catalog.some((item) => item.id === id));
+    if (targetIds.length === 0) return;
+
+    if (!isFirestoreSeeded) {
+      onDeleteStarterItems(targetIds);
+      setSelectedMediaIds((prev) => prev.filter((id) => !targetIds.includes(id)));
+      onNotify(`تم حذف ${targetIds.length} نسخة مكررة من المحتوى المبدئي بنجاح`);
+      return;
+    }
+
+    setBusyAction(true);
+    try {
+      const deletedCount = await bulkDeleteMediaFromFirestore(targetIds);
+      setSelectedMediaIds((prev) => prev.filter((id) => !targetIds.includes(id)));
+      onNotify(`تم حذف ${deletedCount} نسخة مكررة من قاعدة بيانات Firestore نهائيًا`);
+    } catch (err) {
+      onNotify(formatFirestoreWriteError(err, 'تعذر حذف النسخ المكررة'));
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
   const handleUpdateRequest = async (req: VisitorRequest) => {
     const draft = adminReplies[req.id] || { status: req.status, note: req.adminNote || '' };
     setBusyAction(true);
@@ -3083,66 +3116,94 @@ export function AdminDashboardView({
           </div>
 
           {!user ? (
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                if (!adminLoginEmail.trim() || !adminLoginPassword) {
-                  setAdminAuthError('يرجى إدخال اسم المستخدم/البريد الإلكتروني وكلمة المرور.');
-                  return;
-                }
-                setAdminAuthError(null);
-                setAdminSigningIn(true);
-                try {
-                  await signInWithEmailPassword(adminLoginEmail, adminLoginPassword);
-                } catch (err: unknown) {
-                  setAdminAuthError(getFirebaseAuthErrorMessage(err));
-                } finally {
-                  setAdminSigningIn(false);
-                }
-              }}
-              className="space-y-3 text-right"
-            >
-              <div>
-                <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
-                  البريد الإلكتروني أو اسم المستخدم
-                </label>
-                <input
-                  type="text"
-                  required
-                  dir="ltr"
-                  value={adminLoginEmail}
-                  onChange={(e) => setAdminLoginEmail(e.target.value)}
-                  placeholder="admin@rahaltv.com أو admin"
-                  className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-4 py-3 text-sm text-white focus:border-[#D92321] focus:outline-none"
-                />
-              </div>
+            <div className="space-y-3 text-right">
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!adminLoginEmail.trim() || !adminLoginPassword) {
+                    setAdminAuthError('يرجى إدخال اسم المستخدم/البريد الإلكتروني وكلمة المرور.');
+                    return;
+                  }
+                  setAdminAuthError(null);
+                  setAdminSigningIn(true);
+                  try {
+                    await signInWithEmailPassword(adminLoginEmail, adminLoginPassword);
+                  } catch (err: unknown) {
+                    setAdminAuthError(getFirebaseAuthErrorMessage(err));
+                  } finally {
+                    setAdminSigningIn(false);
+                  }
+                }}
+                className="space-y-3"
+              >
+                <div>
+                  <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
+                    البريد الإلكتروني أو اسم المستخدم
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    dir="ltr"
+                    value={adminLoginEmail}
+                    onChange={(e) => setAdminLoginEmail(e.target.value)}
+                    placeholder="admin@rahaltv.com أو admin"
+                    className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-4 py-3 text-sm text-white focus:border-[#D92321] focus:outline-none"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
-                  كلمة المرور
-                </label>
-                <input
-                  type="password"
-                  required
-                  dir="ltr"
-                  value={adminLoginPassword}
-                  onChange={(e) => setAdminLoginPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-4 py-3 text-sm text-white focus:border-[#D92321] focus:outline-none"
-                />
+                <div>
+                  <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
+                    كلمة المرور
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    dir="ltr"
+                    value={adminLoginPassword}
+                    onChange={(e) => setAdminLoginPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-4 py-3 text-sm text-white focus:border-[#D92321] focus:outline-none"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={adminSigningIn}
+                  className="w-full inline-flex items-center justify-center gap-2.5 rounded-2xl bg-[#D92321] hover:bg-[#dc0e30] disabled:opacity-60 py-3.5 px-6 text-sm font-extrabold text-white shadow-lg transition-colors cursor-pointer"
+                >
+                  {adminSigningIn ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <ShieldCheck className="w-5 h-5" />
+                  )}
+                  <span>{adminSigningIn ? 'جاري تسجيل الدخول...' : 'دخول إلى لوحة التحكم'}</span>
+                </button>
+              </form>
+
+              <div className="flex items-center gap-3 py-1">
+                <div className="h-px flex-1 bg-white/10" />
+                <span className="text-[11px] font-bold text-[#b7c9ef]/60">أو</span>
+                <div className="h-px flex-1 bg-white/10" />
               </div>
 
               <button
-                type="submit"
+                type="button"
                 disabled={adminSigningIn}
-                className="w-full inline-flex items-center justify-center gap-2.5 rounded-2xl bg-[#D92321] hover:bg-[#dc0e30] disabled:opacity-60 py-3.5 px-6 text-sm font-extrabold text-white shadow-lg transition-colors cursor-pointer"
+                onClick={async () => {
+                  setAdminAuthError(null);
+                  setAdminSigningIn(true);
+                  try {
+                    await signInWithGoogle();
+                  } catch (err: unknown) {
+                    setAdminAuthError(getFirebaseAuthErrorMessage(err));
+                  } finally {
+                    setAdminSigningIn(false);
+                  }
+                }}
+                className="w-full inline-flex items-center justify-center gap-2.5 rounded-2xl bg-[#1a242e] hover:bg-[#23313f] border border-white/15 disabled:opacity-60 py-3 px-6 text-sm font-extrabold text-white transition-colors cursor-pointer"
               >
-                {adminSigningIn ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                ) : (
-                  <ShieldCheck className="w-5 h-5" />
-                )}
-                <span>{adminSigningIn ? 'جاري تسجيل الدخول...' : 'دخول إلى لوحة التحكم'}</span>
+                <Globe className="w-4 h-4 text-[#f9c400]" />
+                <span>تسجيل الدخول بحساب Google</span>
               </button>
 
               {adminAuthError && (
@@ -3154,7 +3215,7 @@ export function AdminDashboardView({
               <p className="text-[11px] text-[#b7c9ef]/70 text-center leading-relaxed pt-1">
                 إذا كتبت اسم مستخدم بدون @ سيتم إلحاق <span className="font-latin text-white/90">@rahaltv.com</span> تلقائيًا.
               </p>
-            </form>
+            </div>
           ) : (
             <div className="space-y-3 text-right">
               <div className="rounded-xl bg-[#1a242e] p-3.5 text-xs text-[#b7c9ef] space-y-2">
@@ -3517,6 +3578,91 @@ export function AdminDashboardView({
 
           {/* Active Tab Workspace */}
           <main className="flex-1 min-w-0 w-full space-y-6">
+            {dbConnectionStatus && dbConnectionStatus !== 'connected' && (
+              <div
+                className={`rounded-2xl border px-4 py-3.5 flex flex-wrap items-center justify-between gap-3 shadow-lg ${
+                  dbConnectionStatus === 'connecting'
+                    ? 'bg-[#1a242e] border-sky-400/35 text-sky-100'
+                    : 'bg-[#D92321]/15 border-[#D92321]/45 text-red-100'
+                }`}
+              >
+                <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                  {dbConnectionStatus === 'connecting' ? (
+                    <Loader2 className="w-4 h-4 text-sky-400 animate-spin shrink-0 mt-0.5" />
+                  ) : (
+                    <Database className="w-4 h-4 text-[#f9c400] shrink-0 mt-0.5" />
+                  )}
+                  <div className="space-y-1 text-xs min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 font-extrabold text-white">
+                      <span>
+                        {dbConnectionStatus === 'connecting'
+                          ? 'جاري الاتصال بقاعدة بيانات Firestore...'
+                          : dbConnectionStatus === 'quota_exceeded'
+                            ? 'توقف الاتصال: تم تجاوز الحصة اليومية المجانية لقراءة Firestore (Quota exceeded)'
+                            : dbConnectionStatus === 'permission_denied'
+                              ? 'توقف الاتصال: قواعد الأمان (firestore.rules) الحالية ترفض القراءة'
+                              : dbConnectionStatus === 'offline'
+                                ? 'تعذر الوصول إلى خادم قاعدة بيانات Firestore'
+                                : 'تنبيه اتصال قاعدة بيانات Firestore'}
+                      </span>
+                      <span className="font-latin text-[10px] rounded-md bg-black/30 px-2 py-0.5 text-[#b7c9ef]">
+                        {firebaseConfig.projectId}
+                      </span>
+                    </div>
+                    {dbConnectionError && (
+                      <p className="text-[11px] leading-relaxed text-white/85">{dbConnectionError}</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {dbConnectionStatus === 'quota_exceeded' && (
+                    <a
+                      href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/${firebaseConfig.firestoreDatabaseId}/data?openUpgradeDialog=true`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] px-3 py-2 text-xs font-black text-[#06131c] whitespace-nowrap"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>فتح خيارات ترقية الحصة</span>
+                    </a>
+                  )}
+                  {dbConnectionStatus === 'permission_denied' && (
+                    <a
+                      href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/${firebaseConfig.firestoreDatabaseId}/rules`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] px-3 py-2 text-xs font-black text-[#06131c] whitespace-nowrap"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>فتح قواعد Firestore Rules</span>
+                    </a>
+                  )}
+                  {onReconnectDatabase && (
+                    <button
+                      type="button"
+                      disabled={reconnectingDb || dbConnectionStatus === 'connecting'}
+                      onClick={async () => {
+                        setReconnectingDb(true);
+                        try {
+                          await onReconnectDatabase();
+                        } finally {
+                          setReconnectingDb(false);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-white/15 hover:bg-white/25 disabled:opacity-60 px-3.5 py-2 text-xs font-extrabold text-white cursor-pointer whitespace-nowrap"
+                    >
+                      {reconnectingDb ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-3.5 h-3.5" />
+                      )}
+                      <span>إعادة الاتصال بقاعدة البيانات</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
             {isFirestoreSeeded && default78Items.length >= 5 && (
               <div className="rounded-2xl bg-[#1a242e] border border-[#f9c400]/35 px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-lg">
                 <div className="flex items-center gap-2.5 text-xs font-bold text-[#fde68a]">
@@ -3705,7 +3851,9 @@ export function AdminDashboardView({
                 ) && (
                   <AdminContentAuditPanel
                     catalog={catalog}
+                    busyAction={busyAction}
                     onEditMedia={openEditorForExisting}
+                    onDeleteMediaIds={handleDeleteMediaIds}
                     onNavigateImages={() => navigateToTab('images')}
                   />
                 )}

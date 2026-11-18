@@ -44,7 +44,8 @@ service cloud.firestore {
         (isVerifiedUser() && (
           request.auth.token.email == 'rahalahmed348@gmail.com' ||
           request.auth.token.email == 'mfeshmeny2@gmail.com' ||
-          request.auth.token.email == 'ccicada6@gmail.com'
+          request.auth.token.email == 'ccicada6@gmail.com' ||
+          request.auth.token.email == 'bebraheem439@gmail.com'
         )) ||
         (
           exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
