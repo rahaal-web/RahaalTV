@@ -8,6 +8,14 @@ import {
   SeasonItem,
   StreamServer,
 } from '../types/media';
+import {
+  extractBackgroundImageUrl,
+  extractCleanEnglishTitleCandidate,
+  extractJsonLdImageUrl,
+  extractJsonLdNodes,
+  isJunkImageCandidate,
+  parseSrcsetBestUrl,
+} from './imageMatching';
 
 function upgradeKnownImageUrlScraper(rawUrl: string | undefined | null): string {
   const clean = String(rawUrl || '').trim();
@@ -634,6 +642,78 @@ interface SubpageHints {
   downloadSubpageUrl?: string;
 }
 
+function extractBestImageFromElementBrowser(el: Element | null, baseUrl: string): string {
+  if (!el) return '';
+  const hintText = [
+    el.getAttribute('alt') || '',
+    el.getAttribute('class') || '',
+    el.getAttribute('id') || '',
+  ].join(' ');
+
+  const attrWidth = Number(el.getAttribute('width') || 0);
+  const attrHeight = Number(el.getAttribute('height') || 0);
+  if ((attrWidth > 0 && attrWidth < 80) || (attrHeight > 0 && attrHeight < 80)) {
+    return '';
+  }
+
+  const pictureSrcsets: string[] = [];
+  if (el.parentElement && el.parentElement.tagName === 'PICTURE') {
+    el.parentElement.querySelectorAll('source').forEach((srcEl) => {
+      const s = srcEl.getAttribute('data-srcset') || srcEl.getAttribute('srcset') || '';
+      if (s) pictureSrcsets.push(s);
+    });
+  }
+
+  const rawCandidates = [
+    el.getAttribute('data-original'),
+    el.getAttribute('data-full-src'),
+    el.getAttribute('data-lazy-src'),
+    el.getAttribute('data-src'),
+    el.getAttribute('data-lazy'),
+    el.getAttribute('data-echo'),
+    el.getAttribute('data-bg'),
+    el.getAttribute('data-background'),
+    el.getAttribute('data-background-image'),
+    el.getAttribute('data-poster'),
+    el.getAttribute('data-image'),
+    el.getAttribute('data-thumb'),
+    el.getAttribute('data-url'),
+    parseSrcsetBestUrl(el.getAttribute('data-srcset') || el.getAttribute('srcset')),
+    ...pictureSrcsets.map((s) => parseSrcsetBestUrl(s)),
+    extractBackgroundImageUrl(el.getAttribute('style')),
+    el.getAttribute('src'),
+    el.getAttribute('content'),
+  ];
+
+  for (const raw of rawCandidates) {
+    if (!raw) continue;
+    const resolved = resolveUrl(baseUrl, raw);
+    if (!resolved || isJunkImageCandidate(resolved, hintText)) continue;
+    return upgradeKnownImageUrlScraper(resolved);
+  }
+  return '';
+}
+
+function pickFirstValidImageFromSelectorsBrowser(
+  doc: Document,
+  selectors: string,
+  baseUrl: string,
+  skipChromeAndRelated = false
+): string {
+  const els = doc.querySelectorAll(selectors);
+  for (const el of Array.from(els)) {
+    if (
+      skipChromeAndRelated &&
+      el.closest('header, nav, footer, aside, .navbar, .related, .similar, .comments, .sidebar')
+    ) {
+      continue;
+    }
+    const found = extractBestImageFromElementBrowser(el, baseUrl);
+    if (found) return found;
+  }
+  return '';
+}
+
 function parseHtmlToMediaWithHintsBrowser(
   html: string,
   sourceUrl: string,
@@ -652,51 +732,47 @@ function parseHtmlToMediaWithHintsBrowser(
   const jsonLdCast: CastMember[] = [];
 
   doc.querySelectorAll('script[type="application/ld+json"]').forEach((el) => {
-    try {
-      const parsed = JSON.parse(el.textContent || '');
-      const items = Array.isArray(parsed) ? parsed : [parsed];
-      for (const obj of items) {
-        if (!obj || typeof obj !== 'object') continue;
-        if (obj['@type'] === 'Movie' || obj['@type'] === 'TVSeries') {
-          jsonLdType = String(obj['@type']);
-          if (obj.name && !jsonLdTitle) jsonLdTitle = cleanText(String(obj.name));
-          if (obj.description && !jsonLdDesc) jsonLdDesc = cleanText(String(obj.description));
-          if (obj.image && !jsonLdImage) {
-            jsonLdImage =
-              typeof obj.image === 'string'
-                ? obj.image
-                : Array.isArray(obj.image)
-                  ? String(obj.image[0] || '')
-                  : String(obj.image?.url || '');
-          }
-          if (obj.trailer && !jsonLdTrailer) {
-            const rawTr =
-              typeof obj.trailer === 'string'
-                ? obj.trailer
-                : String(obj.trailer?.embedUrl || obj.trailer?.url || obj.trailer?.contentUrl || '');
-            const normTr = normalizeTrailerUrlBrowser(rawTr);
-            if (normTr) jsonLdTrailer = normTr;
-          }
-          if (obj.aggregateRating?.ratingValue) {
-            const val = parseFloat(String(obj.aggregateRating.ratingValue));
-            if (!Number.isNaN(val) && val > 0 && val <= 10) jsonLdImdb = val;
-          }
-          if (Array.isArray(obj.actor)) {
-            for (const act of obj.actor.slice(0, 10)) {
-              const nm = cleanText(act?.name || (typeof act === 'string' ? act : ''));
-              if (nm) {
-                jsonLdCast.push({
-                  name: nm,
-                  role: 'ممثل',
-                  initials: nm.slice(0, 2).toUpperCase(),
-                });
-              }
+    const nodes = extractJsonLdNodes(el.textContent || '');
+    for (const obj of nodes) {
+      const typeVal = String(obj['@type'] || '');
+      if (typeVal === 'Movie' || typeVal === 'TVSeries') {
+        jsonLdType = typeVal;
+        if (obj.name && !jsonLdTitle) jsonLdTitle = cleanText(String(obj.name));
+        if (obj.description && !jsonLdDesc) jsonLdDesc = cleanText(String(obj.description));
+        if (obj.image && !jsonLdImage) {
+          const imgUrl = extractJsonLdImageUrl(obj.image);
+          if (imgUrl) jsonLdImage = resolveUrl(sourceUrl, imgUrl);
+        }
+        if (obj.trailer && !jsonLdTrailer) {
+          const trObj = obj.trailer as Record<string, unknown>;
+          const rawTr =
+            typeof obj.trailer === 'string'
+              ? obj.trailer
+              : String(trObj?.embedUrl || trObj?.url || trObj?.contentUrl || '');
+          const normTr = normalizeTrailerUrlBrowser(rawTr);
+          if (normTr) jsonLdTrailer = normTr;
+        }
+        const aggRating = obj.aggregateRating as Record<string, unknown> | undefined;
+        if (aggRating?.ratingValue) {
+          const val = parseFloat(String(aggRating.ratingValue));
+          if (!Number.isNaN(val) && val > 0 && val <= 10) jsonLdImdb = val;
+        }
+        if (Array.isArray(obj.actor)) {
+          for (const act of obj.actor.slice(0, 10)) {
+            const actObj = act as Record<string, unknown> | null;
+            const nm = cleanText(
+              typeof act === 'string' ? act : String(actObj?.name || '')
+            );
+            if (nm) {
+              jsonLdCast.push({
+                name: nm,
+                role: 'ممثل',
+                initials: nm.slice(0, 2).toUpperCase(),
+              });
             }
           }
         }
       }
-    } catch {
-      // Ignore invalid JSON-LD
     }
   });
 
@@ -710,50 +786,72 @@ function parseHtmlToMediaWithHintsBrowser(
     .trim()
     .slice(0, 200);
 
-  const englishMatch = rawTitle.match(/[A-Za-z][A-Za-z0-9\s:'\-&]{2,}/);
-  const englishTitle = englishMatch ? cleanText(englishMatch[0]) : title;
+  const cleanEnglish = extractCleanEnglishTitleCandidate(rawTitle);
+  const englishTitle = cleanEnglish || title;
 
   // 3. Separate Poster (2:3) & Landscape Backdrop (16:9)
-  const ogImage = upgradeKnownImageUrlScraper(
+  const rawOgImage = upgradeKnownImageUrlScraper(
     resolveUrl(
       sourceUrl,
-      doc.querySelector('meta[property="og:image"]')?.getAttribute('content')
+      doc.querySelector('meta[property="og:image:secure_url"]')?.getAttribute('content') ||
+        doc.querySelector('meta[property="og:image"]')?.getAttribute('content') ||
+        doc.querySelector('meta[property="og:image:url"]')?.getAttribute('content') ||
+        doc.querySelector('link[rel="image_src"]')?.getAttribute('href')
     )
   );
-  const twitterImage = upgradeKnownImageUrlScraper(
+  const ogImage = isJunkImageCandidate(rawOgImage) ? '' : rawOgImage;
+
+  const rawTwitterImage = upgradeKnownImageUrlScraper(
     resolveUrl(
       sourceUrl,
-      doc.querySelector('meta[name="twitter:image"]')?.getAttribute('content')
+      doc.querySelector('meta[name="twitter:image:src"]')?.getAttribute('content') ||
+        doc.querySelector('meta[name="twitter:image"]')?.getAttribute('content')
     )
   );
-  const posterImgEl = doc.querySelector(
-    '.single-right img, .poster img, .movie-poster img, .pm-video-thumb img, .video-thumb img, article img'
-  );
-  const singlePoster = upgradeKnownImageUrlScraper(
-    resolveUrl(
-      sourceUrl,
-      posterImgEl?.getAttribute('data-echo') ||
-        posterImgEl?.getAttribute('data-src') ||
-        posterImgEl?.getAttribute('data-lazy-src') ||
-        posterImgEl?.getAttribute('src')
-    )
-  );
-  const backdropImgEl = doc.querySelector(
-    '.backdrop img, .hero img, .hero-bg img, .cover img, .single-cover img, .movie-backdrop img'
-  );
-  const explicitBackdrop = upgradeKnownImageUrlScraper(
-    resolveUrl(
-      sourceUrl,
-      backdropImgEl?.getAttribute('data-echo') ||
-        backdropImgEl?.getAttribute('data-src') ||
-        backdropImgEl?.getAttribute('src') ||
-        doc.querySelector('video')?.getAttribute('poster')
-    )
-  );
-  const poster = singlePoster || ogImage || upgradeKnownImageUrlScraper(jsonLdImage) || '';
+  const twitterImage = isJunkImageCandidate(rawTwitterImage) ? '' : rawTwitterImage;
+
+  const safeJsonLdImage = isJunkImageCandidate(jsonLdImage)
+    ? ''
+    : upgradeKnownImageUrlScraper(jsonLdImage);
+
+  const singlePoster =
+    pickFirstValidImageFromSelectorsBrowser(
+      doc,
+      '.single-poster img, .single-right img, .poster img, .movie-poster img, .film-poster img, .entry-poster img, .pm-video-thumb img, .video-thumb img, .Thumb--GridItem img, .Poster--Block img, img[itemprop="image"], meta[itemprop="image"]',
+      sourceUrl
+    ) ||
+    pickFirstValidImageFromSelectorsBrowser(
+      doc,
+      '.single-poster, .single-right, .poster, .movie-poster, .film-poster, .entry-poster, .Thumb--GridItem, .Poster--Block, [data-poster], [data-bg]',
+      sourceUrl
+    );
+
+  const fallbackBodyPoster =
+    singlePoster || ogImage || safeJsonLdImage || twitterImage
+      ? ''
+      : pickFirstValidImageFromSelectorsBrowser(
+          doc,
+          '.post-body img, .entry-content img, main img, article img',
+          sourceUrl,
+          true
+        );
+
+  const explicitBackdrop =
+    pickFirstValidImageFromSelectorsBrowser(
+      doc,
+      '.backdrop img, .hero img, .hero-bg img, .cover img, .single-cover img, .movie-backdrop img, .single-cover, .movie-backdrop',
+      sourceUrl
+    ) ||
+    upgradeKnownImageUrlScraper(
+      resolveUrl(sourceUrl, doc.querySelector('video')?.getAttribute('poster') || undefined)
+    );
+
+  const poster =
+    singlePoster || ogImage || safeJsonLdImage || twitterImage || fallbackBodyPoster || '';
+  const cleanExplicitBackdrop = isJunkImageCandidate(explicitBackdrop) ? '' : explicitBackdrop;
   const backdrop =
-    explicitBackdrop && explicitBackdrop !== poster
-      ? explicitBackdrop
+    cleanExplicitBackdrop && cleanExplicitBackdrop !== poster
+      ? cleanExplicitBackdrop
       : twitterImage && twitterImage !== poster
         ? twitterImage
         : ogImage && ogImage !== poster
@@ -1377,20 +1475,40 @@ function extractListingLinksAndPaginationBrowser(html: string, pageUrl: string) 
       const parentCard = el.closest(
         '.entry-box, .cinema-poster-slide, .cinema-card, .pm-li-video, .pm-video-thumb, article, .post, .movie, .card, .item, .block'
       );
-      const imgEl = el.querySelector('img') || parentCard?.querySelector('img') || null;
-      const rawPoster =
-        imgEl?.getAttribute('data-echo') ||
-        imgEl?.getAttribute('data-src') ||
-        imgEl?.getAttribute('data-lazy-src') ||
-        imgEl?.getAttribute('src') ||
-        '';
-      const poster = resolveUrl(pageUrl, rawPoster);
+      const imgEls = [
+        ...Array.from(el.querySelectorAll('img')),
+        ...Array.from(parentCard?.querySelectorAll('img') || []),
+      ];
+      let poster = '';
+      let matchedImgEl: Element | null = null;
+      for (const candidateImg of imgEls) {
+        const extracted = extractBestImageFromElementBrowser(candidateImg, pageUrl);
+        if (extracted) {
+          poster = extracted;
+          matchedImgEl = candidateImg;
+          break;
+        }
+      }
+      if (!poster) {
+        const bgCandidates = [
+          el,
+          ...Array.from(el.querySelectorAll('[style*="background-image"], [data-bg], [data-poster]')),
+          ...(parentCard ? [parentCard, ...Array.from(parentCard.querySelectorAll('[style*="background-image"], [data-bg], [data-poster]'))] : []),
+        ];
+        for (const bgEl of bgCandidates) {
+          const extracted = extractBestImageFromElementBrowser(bgEl, pageUrl);
+          if (extracted) {
+            poster = extracted;
+            break;
+          }
+        }
+      }
 
       const cardTitle =
         cleanText(el.getAttribute('title')) ||
         cleanText(el.querySelector('h2, h3, h4, .title')?.textContent) ||
         cleanText(parentCard?.querySelector('h2, h3, h4, .title, .ellipsis')?.textContent) ||
-        cleanText(imgEl?.getAttribute('alt')) ||
+        cleanText(matchedImgEl?.getAttribute('alt')) ||
         cleanText(el.textContent);
 
       const looksLikeCard =

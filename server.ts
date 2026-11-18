@@ -5,6 +5,16 @@ import fs from 'fs';
 import http from 'http';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
+import {
+  cleanExternalSearchTitle,
+  extractBackgroundImageUrl,
+  extractCleanEnglishTitleCandidate,
+  extractJsonLdImageUrl,
+  extractJsonLdNodes,
+  isJunkImageCandidate,
+  parseSrcsetBestUrl,
+  scoreExternalTitleMatch,
+} from './src/lib/imageMatching';
 
 const PORT = 3000;
 
@@ -286,21 +296,93 @@ function evaluateImageQualityServer(params: {
   return 'unknown';
 }
 
-function cleanExternalSearchTitle(title: string, englishTitle: string): string {
-  const raw = (englishTitle || title || '').trim();
-  return raw
-    .replace(/\b(19|20)\d{2}\b/g, '')
-    .replace(/مترجم|مدبلج|فيلم|مسلسل|الموسم|الحلقة|اون لاين|بجودة عالية|WEB-DL|HD|4K|BluRay/gi, '')
-    .replace(/[-–|:]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+function extractBestImageFromElementServer(
+  $: cheerio.CheerioAPI,
+  $el: cheerio.Cheerio<any>,
+  baseUrl: string
+): string {
+  if (!$el || $el.length === 0) return '';
+  const hintText = [
+    $el.attr('alt') || '',
+    $el.attr('class') || '',
+    $el.attr('id') || '',
+  ].join(' ');
+
+  const attrWidth = Number($el.attr('width') || 0);
+  const attrHeight = Number($el.attr('height') || 0);
+  if ((attrWidth > 0 && attrWidth < 80) || (attrHeight > 0 && attrHeight < 80)) {
+    return '';
+  }
+
+  const pictureSrcsets: string[] = [];
+  const $parent = $el.parent();
+  if ($parent.length && $parent.prop('tagName')?.toLowerCase() === 'picture') {
+    $parent.find('source').each((_, srcEl) => {
+      const s = $(srcEl).attr('data-srcset') || $(srcEl).attr('srcset') || '';
+      if (s) pictureSrcsets.push(s);
+    });
+  }
+
+  const rawCandidates = [
+    $el.attr('data-original'),
+    $el.attr('data-full-src'),
+    $el.attr('data-lazy-src'),
+    $el.attr('data-src'),
+    $el.attr('data-lazy'),
+    $el.attr('data-echo'),
+    $el.attr('data-bg'),
+    $el.attr('data-background'),
+    $el.attr('data-background-image'),
+    $el.attr('data-poster'),
+    $el.attr('data-image'),
+    $el.attr('data-thumb'),
+    $el.attr('data-url'),
+    parseSrcsetBestUrl($el.attr('data-srcset') || $el.attr('srcset')),
+    ...pictureSrcsets.map((s) => parseSrcsetBestUrl(s)),
+    extractBackgroundImageUrl($el.attr('style')),
+    $el.attr('src'),
+    $el.attr('content'),
+  ];
+
+  for (const raw of rawCandidates) {
+    if (!raw) continue;
+    const resolved = resolveUrl(baseUrl, raw);
+    if (!resolved || isJunkImageCandidate(resolved, hintText)) continue;
+    return upgradeKnownImageUrlServer(resolved);
+  }
+  return '';
 }
 
-async function queryTmdbHighResImages(
-  query: string,
-  year: string,
-  kind: string
-): Promise<{
+function pickFirstValidImageFromSelectorsServer(
+  $: cheerio.CheerioAPI,
+  selectors: string,
+  baseUrl: string,
+  skipChromeAndRelated = false
+): string {
+  let found = '';
+  $(selectors).each((_, el) => {
+    if (found) return;
+    const $el = $(el);
+    if (
+      skipChromeAndRelated &&
+      $el.closest('header, nav, footer, aside, .navbar, .related, .similar, .comments, .sidebar')
+        .length > 0
+    ) {
+      return;
+    }
+    const candidate = extractBestImageFromElementServer($, $el, baseUrl);
+    if (candidate) found = candidate;
+  });
+  return found;
+}
+
+async function queryTmdbHighResImages(params: {
+  query: string;
+  title: string;
+  englishTitle: string;
+  year: string;
+  kind: string;
+}): Promise<{
   poster_url: string;
   poster_width: number;
   poster_height: number;
@@ -308,6 +390,7 @@ async function queryTmdbHighResImages(
   backdrop_width: number;
   backdrop_height: number;
 } | null> {
+  const { query, title, englishTitle, year, kind } = params;
   const tmdbKey = (process.env.TMDB_API_KEY || '').trim();
   const tmdbBearer = (process.env.TMDB_READ_ACCESS_TOKEN || '').trim();
   if ((!tmdbKey && !tmdbBearer) || !query) return null;
@@ -324,33 +407,83 @@ async function queryTmdbHighResImages(
       : `https://api.themoviedb.org/3${pathAndQuery}${sep}api_key=${encodeURIComponent(tmdbKey)}`;
   };
 
+  interface TmdbSearchItem {
+    id: number;
+    title?: string;
+    original_title?: string;
+    name?: string;
+    original_name?: string;
+    release_date?: string;
+    first_air_date?: string;
+    poster_path?: string;
+    backdrop_path?: string;
+  }
+
+  const pickBestMatch = (results: TmdbSearchItem[]): TmdbSearchItem | null => {
+    let best: TmdbSearchItem | null = null;
+    let bestScore = 0;
+    for (const item of results.slice(0, 8)) {
+      if (!item?.id) continue;
+      const candYear = (item.release_date || item.first_air_date || '').slice(0, 4);
+      const check = scoreExternalTitleMatch({
+        queryTitle: title,
+        englishTitle,
+        expectedYear: year,
+        expectedYearExplicit: Boolean(year && year !== '2026'),
+        candidateTitles: [item.title, item.original_title, item.name, item.original_name],
+        candidateYear: candYear,
+      });
+      if (check.matched && check.score > bestScore) {
+        bestScore = check.score;
+        best = item;
+      }
+    }
+    return best;
+  };
+
   try {
-    const yearParam = /^\d{4}$/.test(year)
-      ? isSeries
-        ? `&first_air_date_year=${year}`
-        : `&year=${year}`
-      : '';
+    const yearParam =
+      /^\d{4}$/.test(year) && year !== '2026'
+        ? isSeries
+          ? `&first_air_date_year=${year}`
+          : `&year=${year}`
+        : '';
+
+    let matchedItem: TmdbSearchItem | null = null;
+
     const searchRes = await fetch(
       buildUrl(`/search/${searchType}?query=${encodeURIComponent(query)}&include_adult=false${yearParam}`),
       { headers, signal: AbortSignal.timeout(7000) }
     );
-    if (!searchRes.ok) return null;
-    const searchJson = (await searchRes.json()) as {
-      results?: Array<{ id: number; poster_path?: string; backdrop_path?: string }>;
-    };
-    const first = searchJson.results?.[0];
-    if (!first?.id) return null;
+    if (searchRes.ok) {
+      const searchJson = (await searchRes.json()) as { results?: TmdbSearchItem[] };
+      matchedItem = pickBestMatch(searchJson.results || []);
+    }
+
+    // Retry without strict year param in case theatrical vs digital release year differs by 1-2 years
+    if (!matchedItem && yearParam) {
+      const fallbackRes = await fetch(
+        buildUrl(`/search/${searchType}?query=${encodeURIComponent(query)}&include_adult=false`),
+        { headers, signal: AbortSignal.timeout(7000) }
+      );
+      if (fallbackRes.ok) {
+        const fallbackJson = (await fallbackRes.json()) as { results?: TmdbSearchItem[] };
+        matchedItem = pickBestMatch(fallbackJson.results || []);
+      }
+    }
+
+    if (!matchedItem?.id) return null;
 
     const imagesRes = await fetch(
-      buildUrl(`/${searchType}/${first.id}/images?include_image_language=en,ar,null`),
+      buildUrl(`/${searchType}/${matchedItem.id}/images?include_image_language=en,ar,null`),
       { headers, signal: AbortSignal.timeout(7000) }
     );
     if (!imagesRes.ok) {
       return {
-        poster_url: first.poster_path ? `https://image.tmdb.org/t/p/original${first.poster_path}` : '',
+        poster_url: matchedItem.poster_path ? `https://image.tmdb.org/t/p/original${matchedItem.poster_path}` : '',
         poster_width: 0,
         poster_height: 0,
-        backdrop_url: first.backdrop_path ? `https://image.tmdb.org/t/p/original${first.backdrop_path}` : '',
+        backdrop_url: matchedItem.backdrop_path ? `https://image.tmdb.org/t/p/original${matchedItem.backdrop_path}` : '',
         backdrop_width: 0,
         backdrop_height: 0,
       };
@@ -368,8 +501,8 @@ async function queryTmdbHighResImages(
       .filter((b) => b.file_path && b.width > b.height && (b.aspect_ratio || b.width / Math.max(1, b.height)) >= 1.5)
       .sort((a, b) => (b.width || 0) - (a.width || 0))[0];
 
-    const posterPath = bestPoster?.file_path || first.poster_path || '';
-    const backdropPath = bestBackdrop?.file_path || first.backdrop_path || '';
+    const posterPath = bestPoster?.file_path || matchedItem.poster_path || '';
+    const backdropPath = bestBackdrop?.file_path || matchedItem.backdrop_path || '';
 
     return {
       poster_url: posterPath ? `https://image.tmdb.org/t/p/original${posterPath}` : '',
@@ -401,17 +534,20 @@ async function resolveHighResImagesServer(params: {
     currentBackdrop = '',
   } = params;
 
+  const sanitizedCurrentPoster = isJunkImageCandidate(currentPoster) ? '' : currentPoster;
+  const sanitizedCurrentBackdrop = isJunkImageCandidate(currentBackdrop) ? '' : currentBackdrop;
+
   const cleanQuery = cleanExternalSearchTitle(title, englishTitle);
-  const candidatePoster = upgradeKnownImageUrlServer(currentPoster);
+  const candidatePoster = sanitizedCurrentPoster ? upgradeKnownImageUrlServer(sanitizedCurrentPoster) : '';
   const candidateBackdrop =
-    currentBackdrop && currentBackdrop !== currentPoster
-      ? upgradeKnownImageUrlServer(currentBackdrop)
+    sanitizedCurrentBackdrop && sanitizedCurrentBackdrop !== sanitizedCurrentPoster
+      ? upgradeKnownImageUrlServer(sanitizedCurrentBackdrop)
       : '';
 
   const [curP, curB, tmdbRes] = await Promise.all([
     candidatePoster ? probeRemoteImageDimensions(candidatePoster) : Promise.resolve(null),
     candidateBackdrop ? probeRemoteImageDimensions(candidateBackdrop) : Promise.resolve(null),
-    queryTmdbHighResImages(cleanQuery, year, kind),
+    queryTmdbHighResImages({ query: cleanQuery, title, englishTitle, year, kind }),
   ]);
 
   let poster_url = curP?.ok ? curP.url : candidatePoster;
@@ -421,9 +557,11 @@ async function resolveHighResImagesServer(params: {
   let backdrop_url = curB?.ok && curB.width > curB.height ? curB.url : '';
   let backdrop_width = curB?.ok && curB.width > curB.height ? curB.width : 0;
   let backdrop_height = curB?.ok && curB.width > curB.height ? curB.height : 0;
-  let image_source = curP?.ok || curB?.ok ? 'scraped' : 'none';
+  let image_source = poster_url || backdrop_url ? 'scraped' : 'none';
 
-  // Prefer TMDB genuine 2:3 & 16:9 high-res assets when configured
+  const hasUnmeasuredScrapedPoster = Boolean(candidatePoster && !curP?.ok);
+
+  // Prefer TMDB genuine 2:3 & 16:9 high-res assets when title+year verified
   if (tmdbRes) {
     if (tmdbRes.poster_url) {
       let pw = tmdbRes.poster_width;
@@ -435,7 +573,8 @@ async function resolveHighResImagesServer(params: {
           ph = pr.height;
         }
       }
-      if (pw >= Math.max(500, poster_width)) {
+      const minWidth = hasUnmeasuredScrapedPoster ? 500 : Math.max(500, poster_width);
+      if (pw >= minWidth && (ph === 0 || ph >= pw)) {
         poster_url = tmdbRes.poster_url;
         poster_width = pw;
         poster_height = ph;
@@ -461,63 +600,104 @@ async function resolveHighResImagesServer(params: {
     }
   }
 
-  // TVmaze fallback (especially strong for series & anime/shows: real separate poster + 16:9 background!)
-  if (cleanQuery && (!backdrop_url || poster_width < 800)) {
+  // TVmaze fallback ONLY for TV series, strictly verified by title + year via /search/shows
+  if (cleanQuery && kind === 'series' && (!backdrop_url || poster_width < 800)) {
     try {
-      const tvmRes = await fetch(
-        `https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(cleanQuery)}&embed=images`,
+      const searchRes = await fetch(
+        `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(cleanQuery)}`,
         { signal: AbortSignal.timeout(6000) }
       );
-      if (tvmRes.ok) {
-        const tvm = (await tvmRes.json()) as {
-          image?: { original?: string };
-          _embedded?: {
-            images?: Array<{
-              type?: string;
-              resolutions?: { original?: { url?: string; width?: number; height?: number } };
-            }>;
-          };
-        };
-        const imgs = tvm._embedded?.images || [];
-        const pBest = imgs
-          .filter((i) => i.type === 'poster' && i.resolutions?.original?.url)
-          .sort((a, b) => (b.resolutions?.original?.width || 0) - (a.resolutions?.original?.width || 0))[0]
-          ?.resolutions?.original;
-        const bBest = imgs
-          .filter(
-            (i) =>
-              (i.type === 'background' || i.type === 'banner') &&
-              i.resolutions?.original?.url &&
-              (i.resolutions?.original?.width || 0) > (i.resolutions?.original?.height || 0)
-          )
-          .sort((a, b) => (b.resolutions?.original?.width || 0) - (a.resolutions?.original?.width || 0))[0]
-          ?.resolutions?.original;
-
-        if (pBest?.url && (pBest.width || 0) > poster_width) {
-          poster_url = pBest.url;
-          poster_width = pBest.width || 0;
-          poster_height = pBest.height || 0;
-          if (!poster_width) {
-            const pCheck = await probeRemoteImageDimensions(pBest.url);
-            if (pCheck.ok) {
-              poster_width = pCheck.width;
-              poster_height = pCheck.height;
-            }
+      if (searchRes.ok) {
+        const candidates = (await searchRes.json()) as Array<{
+          show?: { id?: number; name?: string; premiered?: string };
+        }>;
+        let bestId = 0;
+        let bestScore = 0;
+        for (const entry of (candidates || []).slice(0, 8)) {
+          const show = entry.show;
+          if (!show?.id || !show.name) continue;
+          const check = scoreExternalTitleMatch({
+            queryTitle: title,
+            englishTitle,
+            expectedYear: year,
+            expectedYearExplicit: Boolean(year && year !== '2026'),
+            candidateTitles: [show.name],
+            candidateYear: show.premiered?.slice(0, 4),
+          });
+          if (check.matched && check.score > bestScore) {
+            bestScore = check.score;
+            bestId = show.id;
           }
-          image_source = 'tvmaze';
         }
-        if (bBest?.url && (bBest.width || 0) > backdrop_width) {
-          backdrop_url = bBest.url;
-          backdrop_width = bBest.width || 0;
-          backdrop_height = bBest.height || 0;
-          if (!backdrop_width) {
-            const bCheck = await probeRemoteImageDimensions(bBest.url);
-            if (bCheck.ok && bCheck.width > bCheck.height) {
-              backdrop_width = bCheck.width;
-              backdrop_height = bCheck.height;
+
+        if (bestId) {
+          const tvmRes = await fetch(
+            `https://api.tvmaze.com/shows/${bestId}?embed=images`,
+            { signal: AbortSignal.timeout(6000) }
+          );
+          if (tvmRes.ok) {
+            const tvm = (await tvmRes.json()) as {
+              image?: { original?: string };
+              _embedded?: {
+                images?: Array<{
+                  type?: string;
+                  resolutions?: { original?: { url?: string; width?: number; height?: number } };
+                }>;
+              };
+            };
+            const imgs = tvm._embedded?.images || [];
+            const pBest = imgs
+              .filter((i) => i.type === 'poster' && i.resolutions?.original?.url)
+              .sort((a, b) => (b.resolutions?.original?.width || 0) - (a.resolutions?.original?.width || 0))[0]
+              ?.resolutions?.original;
+            const bBest = imgs
+              .filter(
+                (i) =>
+                  (i.type === 'background' || i.type === 'banner') &&
+                  i.resolutions?.original?.url &&
+                  (i.resolutions?.original?.width || 0) > (i.resolutions?.original?.height || 0)
+              )
+              .sort((a, b) => (b.resolutions?.original?.width || 0) - (a.resolutions?.original?.width || 0))[0]
+              ?.resolutions?.original;
+
+            if (pBest?.url) {
+              let pw = pBest.width || 0;
+              let ph = pBest.height || 0;
+              if (!pw) {
+                const pCheck = await probeRemoteImageDimensions(pBest.url);
+                if (pCheck.ok) {
+                  pw = pCheck.width;
+                  ph = pCheck.height;
+                }
+              }
+              const minWidth = hasUnmeasuredScrapedPoster ? 600 : poster_width + 1;
+              if (pw >= minWidth && (ph === 0 || ph >= pw)) {
+                poster_url = pBest.url;
+                poster_width = pw;
+                poster_height = ph;
+                image_source = 'tvmaze';
+              }
+            }
+            if (bBest?.url && (bBest.width || 0) > backdrop_width) {
+              let bw = bBest.width || 0;
+              let bh = bBest.height || 0;
+              if (!bw) {
+                const bCheck = await probeRemoteImageDimensions(bBest.url);
+                if (bCheck.ok && bCheck.width > bCheck.height) {
+                  bw = bCheck.width;
+                  bh = bCheck.height;
+                }
+              }
+              if (bw > bh && bw >= Math.max(1000, backdrop_width)) {
+                backdrop_url = bBest.url;
+                backdrop_width = bw;
+                backdrop_height = bh;
+                if (image_source === 'scraped' || image_source === 'none') {
+                  image_source = 'tvmaze';
+                }
+              }
             }
           }
-          image_source = 'tvmaze';
         }
       }
     } catch {
@@ -525,23 +705,43 @@ async function resolveHighResImagesServer(params: {
     }
   }
 
-  // iTunes fallback for high-res movie poster if still low-res or missing
-  if (cleanQuery && poster_width < 800) {
+  // iTunes fallback ONLY for movies, verified strictly against movie title & year
+  if (cleanQuery && kind === 'movie' && poster_width < 800) {
     try {
-      const entity = kind === 'series' ? 'tvSeason' : 'movie';
       const itRes = await fetch(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(cleanQuery)}&media=${kind === 'series' ? 'tvShow' : 'movie'}&entity=${entity}&limit=3`,
+        `https://itunes.apple.com/search?term=${encodeURIComponent(cleanQuery)}&media=movie&entity=movie&limit=8`,
         { signal: AbortSignal.timeout(6000) }
       );
       if (itRes.ok) {
         const itJson = (await itRes.json()) as {
-          results?: Array<{ artworkUrl100?: string }>;
+          results?: Array<{
+            trackName?: string;
+            collectionName?: string;
+            releaseDate?: string;
+            artworkUrl100?: string;
+          }>;
         };
-        const rawArt = itJson.results?.[0]?.artworkUrl100 || '';
-        if (rawArt) {
-          const hiArt = upgradeKnownImageUrlServer(rawArt);
-          const itProbe = await probeRemoteImageDimensions(hiArt);
-          if (itProbe.ok && itProbe.width > poster_width) {
+        let bestArt = '';
+        let bestScore = 0;
+        for (const r of itJson.results || []) {
+          if (!r.artworkUrl100) continue;
+          const check = scoreExternalTitleMatch({
+            queryTitle: title,
+            englishTitle,
+            expectedYear: year,
+            expectedYearExplicit: Boolean(year && year !== '2026'),
+            candidateTitles: [r.trackName, r.collectionName],
+            candidateYear: r.releaseDate?.slice(0, 4),
+          });
+          if (check.matched && check.score > bestScore) {
+            bestScore = check.score;
+            bestArt = upgradeKnownImageUrlServer(r.artworkUrl100);
+          }
+        }
+        if (bestArt) {
+          const itProbe = await probeRemoteImageDimensions(bestArt);
+          const minWidth = hasUnmeasuredScrapedPoster ? 600 : poster_width + 1;
+          if (itProbe.ok && itProbe.height >= itProbe.width && itProbe.width >= minWidth) {
             poster_url = itProbe.url;
             poster_width = itProbe.width;
             poster_height = itProbe.height;
@@ -726,51 +926,47 @@ function parseHtmlToMediaWithHints(
   const jsonLdCast: { name: string; role: string; initials: string }[] = [];
 
   $('script[type="application/ld+json"]').each((_, el) => {
-    try {
-      const parsed = JSON.parse($(el).text());
-      const items = Array.isArray(parsed) ? parsed : [parsed];
-      for (const obj of items) {
-        if (!obj || typeof obj !== 'object') continue;
-        if (obj['@type'] === 'Movie' || obj['@type'] === 'TVSeries') {
-          jsonLdType = obj['@type'];
-          if (obj.name && !jsonLdTitle) jsonLdTitle = cleanText(String(obj.name));
-          if (obj.description && !jsonLdDesc) jsonLdDesc = cleanText(String(obj.description));
-          if (obj.image && !jsonLdImage) {
-            jsonLdImage =
-              typeof obj.image === 'string'
-                ? obj.image
-                : Array.isArray(obj.image)
-                  ? String(obj.image[0] || '')
-                  : String(obj.image?.url || '');
-          }
-          if (obj.trailer && !jsonLdTrailer) {
-            const rawTr =
-              typeof obj.trailer === 'string'
-                ? obj.trailer
-                : String(obj.trailer?.embedUrl || obj.trailer?.url || obj.trailer?.contentUrl || '');
-            const normTr = normalizeTrailerUrlServer(rawTr);
-            if (normTr) jsonLdTrailer = normTr;
-          }
-          if (obj.aggregateRating?.ratingValue) {
-            const val = parseFloat(String(obj.aggregateRating.ratingValue));
-            if (!Number.isNaN(val) && val > 0 && val <= 10) jsonLdImdb = val;
-          }
-          if (Array.isArray(obj.actor)) {
-            for (const act of obj.actor.slice(0, 10)) {
-              const nm = cleanText(act?.name || (typeof act === 'string' ? act : ''));
-              if (nm) {
-                jsonLdCast.push({
-                  name: nm,
-                  role: 'ممثل',
-                  initials: nm.slice(0, 2).toUpperCase(),
-                });
-              }
+    const nodes = extractJsonLdNodes($(el).text());
+    for (const obj of nodes) {
+      const typeVal = String(obj['@type'] || '');
+      if (typeVal === 'Movie' || typeVal === 'TVSeries') {
+        jsonLdType = typeVal;
+        if (obj.name && !jsonLdTitle) jsonLdTitle = cleanText(String(obj.name));
+        if (obj.description && !jsonLdDesc) jsonLdDesc = cleanText(String(obj.description));
+        if (obj.image && !jsonLdImage) {
+          const imgUrl = extractJsonLdImageUrl(obj.image);
+          if (imgUrl) jsonLdImage = resolveUrl(sourceUrl, imgUrl);
+        }
+        if (obj.trailer && !jsonLdTrailer) {
+          const trObj = obj.trailer as Record<string, unknown>;
+          const rawTr =
+            typeof obj.trailer === 'string'
+              ? obj.trailer
+              : String(trObj?.embedUrl || trObj?.url || trObj?.contentUrl || '');
+          const normTr = normalizeTrailerUrlServer(rawTr);
+          if (normTr) jsonLdTrailer = normTr;
+        }
+        const aggRating = obj.aggregateRating as Record<string, unknown> | undefined;
+        if (aggRating?.ratingValue) {
+          const val = parseFloat(String(aggRating.ratingValue));
+          if (!Number.isNaN(val) && val > 0 && val <= 10) jsonLdImdb = val;
+        }
+        if (Array.isArray(obj.actor)) {
+          for (const act of obj.actor.slice(0, 10)) {
+            const actObj = act as Record<string, unknown> | null;
+            const nm = cleanText(
+              typeof act === 'string' ? act : String(actObj?.name || '')
+            );
+            if (nm) {
+              jsonLdCast.push({
+                name: nm,
+                role: 'ممثل',
+                initials: nm.slice(0, 2).toUpperCase(),
+              });
             }
           }
         }
       }
-    } catch {
-      // Ignore invalid JSON-LD blocks
     }
   });
 
@@ -784,45 +980,70 @@ function parseHtmlToMediaWithHints(
     .trim()
     .slice(0, 200);
 
-  const englishMatch = rawTitle.match(/[A-Za-z][A-Za-z0-9\s:'\-&]{2,}/);
-  const englishTitle = englishMatch ? cleanText(englishMatch[0]) : title;
+  const cleanEnglish = extractCleanEnglishTitleCandidate(rawTitle);
+  const englishTitle = cleanEnglish || title;
 
   // 3. Separate Poster (2:3) & Landscape Backdrop (16:9) extraction (upgrade known thumbnails & never force portrait into backdrop)
-  const ogImage = upgradeKnownImageUrlServer(
-    resolveUrl(sourceUrl, $('meta[property="og:image"]').attr('content'))
-  );
-  const twitterImage = upgradeKnownImageUrlServer(
-    resolveUrl(sourceUrl, $('meta[name="twitter:image"]').attr('content'))
-  );
-  const posterImgEl = $(
-    '.single-right img, .poster img, .movie-poster img, .pm-video-thumb img, .video-thumb img, article img'
-  ).first();
-  const singlePoster = upgradeKnownImageUrlServer(
+  const rawOgImage = upgradeKnownImageUrlServer(
     resolveUrl(
       sourceUrl,
-      posterImgEl.attr('data-echo') ||
-        posterImgEl.attr('data-src') ||
-        posterImgEl.attr('data-lazy-src') ||
-        posterImgEl.attr('src')
+      $('meta[property="og:image:secure_url"]').attr('content') ||
+        $('meta[property="og:image"]').attr('content') ||
+        $('meta[property="og:image:url"]').attr('content') ||
+        $('link[rel="image_src"]').attr('href')
     )
   );
-  const backdropImgEl = $(
-    '.backdrop img, .hero img, .hero-bg img, .cover img, .single-cover img, .movie-backdrop img'
-  ).first();
-  const explicitBackdrop = upgradeKnownImageUrlServer(
-    resolveUrl(
-      sourceUrl,
-      backdropImgEl.attr('data-echo') ||
-        backdropImgEl.attr('data-src') ||
-        backdropImgEl.attr('src') ||
-        $('video').first().attr('poster')
-    )
-  );
+  const ogImage = isJunkImageCandidate(rawOgImage) ? '' : rawOgImage;
 
-  const poster = singlePoster || ogImage || upgradeKnownImageUrlServer(jsonLdImage) || '';
+  const rawTwitterImage = upgradeKnownImageUrlServer(
+    resolveUrl(
+      sourceUrl,
+      $('meta[name="twitter:image:src"]').attr('content') ||
+        $('meta[name="twitter:image"]').attr('content')
+    )
+  );
+  const twitterImage = isJunkImageCandidate(rawTwitterImage) ? '' : rawTwitterImage;
+
+  const safeJsonLdImage = isJunkImageCandidate(jsonLdImage)
+    ? ''
+    : upgradeKnownImageUrlServer(jsonLdImage);
+
+  const singlePoster =
+    pickFirstValidImageFromSelectorsServer(
+      $,
+      '.single-poster img, .single-right img, .poster img, .movie-poster img, .film-poster img, .entry-poster img, .pm-video-thumb img, .video-thumb img, .Thumb--GridItem img, .Poster--Block img, img[itemprop="image"], meta[itemprop="image"]',
+      sourceUrl
+    ) ||
+    pickFirstValidImageFromSelectorsServer(
+      $,
+      '.single-poster, .single-right, .poster, .movie-poster, .film-poster, .entry-poster, .Thumb--GridItem, .Poster--Block, [data-poster], [data-bg]',
+      sourceUrl
+    );
+
+  const fallbackBodyPoster =
+    singlePoster || ogImage || safeJsonLdImage || twitterImage
+      ? ''
+      : pickFirstValidImageFromSelectorsServer(
+          $,
+          '.post-body img, .entry-content img, main img, article img',
+          sourceUrl,
+          true
+        );
+
+  const explicitBackdrop =
+    pickFirstValidImageFromSelectorsServer(
+      $,
+      '.backdrop img, .hero img, .hero-bg img, .cover img, .single-cover img, .movie-backdrop img, .single-cover, .movie-backdrop',
+      sourceUrl
+    ) ||
+    upgradeKnownImageUrlServer(resolveUrl(sourceUrl, $('video').first().attr('poster')));
+
+  const poster =
+    singlePoster || ogImage || safeJsonLdImage || twitterImage || fallbackBodyPoster || '';
+  const cleanExplicitBackdrop = isJunkImageCandidate(explicitBackdrop) ? '' : explicitBackdrop;
   const distinctBackdropCandidate =
-    explicitBackdrop && explicitBackdrop !== poster
-      ? explicitBackdrop
+    cleanExplicitBackdrop && cleanExplicitBackdrop !== poster
+      ? cleanExplicitBackdrop
       : twitterImage && twitterImage !== poster
         ? twitterImage
         : ogImage && ogImage !== poster
@@ -1545,22 +1766,38 @@ function extractListingLinksAndPagination(html: string, pageUrl: string) {
       if (cards.has(cleanHref)) return;
 
       const parentCard = $(el).closest('.entry-box, .cinema-poster-slide, .cinema-card, .pm-li-video, .pm-video-thumb, article, .post, .movie, .card, .item, .block');
-      const imgEl = $(el).find('img').first().length
-        ? $(el).find('img').first()
-        : parentCard.find('img').first();
-      const rawPoster =
-        imgEl.attr('data-echo') ||
-        imgEl.attr('data-src') ||
-        imgEl.attr('data-lazy-src') ||
-        imgEl.attr('src') ||
-        '';
-      const poster = resolveUrl(pageUrl, rawPoster);
+      let poster = '';
+      let matchedAlt = '';
+
+      $(el)
+        .find('img')
+        .add(parentCard.find('img'))
+        .each((_, imgNode) => {
+          if (poster) return;
+          const candidate = extractBestImageFromElementServer($, $(imgNode), pageUrl);
+          if (candidate) {
+            poster = candidate;
+            matchedAlt = cleanText($(imgNode).attr('alt'));
+          }
+        });
+
+      if (!poster) {
+        $(el)
+          .add($(el).find('[style*="background-image"], [data-bg], [data-poster]'))
+          .add(parentCard)
+          .add(parentCard.find('[style*="background-image"], [data-bg], [data-poster]'))
+          .each((_, bgNode) => {
+            if (poster) return;
+            const candidate = extractBestImageFromElementServer($, $(bgNode), pageUrl);
+            if (candidate) poster = candidate;
+          });
+      }
 
       const cardTitle =
         cleanText($(el).attr('title')) ||
         cleanText($(el).find('h2, h3, h4, .title').first().text()) ||
         cleanText(parentCard.find('h2, h3, h4, .title, .ellipsis').first().text()) ||
-        cleanText(imgEl.attr('alt')) ||
+        matchedAlt ||
         cleanText($(el).text());
 
       // Prioritize elements that look like actual media cards
@@ -2149,9 +2386,12 @@ async function tryWordPressApiScrape(
       const rawTitle = cleanText(cheerio.load(post.title?.rendered || '').text());
       if (rawTitle) parsed.title = rawTitle.slice(0, 200);
       const featured = post._embedded?.['wp:featuredmedia']?.[0]?.source_url;
-      if (featured && !parsed.poster) {
-        parsed.poster = featured;
-        parsed.backdrop = featured;
+      if (featured && !parsed.poster && !isJunkImageCandidate(featured)) {
+        parsed.poster = upgradeKnownImageUrlServer(featured);
+        parsed.poster_url = parsed.poster;
+        parsed.backdrop = '';
+        parsed.backdrop_url = '';
+        parsed.image_quality_status = 'missing_backdrop';
       }
       return parsed;
     });
@@ -2381,8 +2621,11 @@ async function startServer() {
                             if (detailRes.ok && detailRes.text.length > 150) {
                               const full = await scrapeFullItemWithSubpages(wpUrl, detailRes.text);
                               if (!full.poster && item.poster) {
-                                full.poster = item.poster;
-                                full.backdrop = item.poster;
+                                full.poster = upgradeKnownImageUrlServer(item.poster);
+                                full.poster_url = full.poster;
+                                full.backdrop = '';
+                                full.backdrop_url = '';
+                                full.image_quality_status = 'missing_backdrop';
                               }
                               return full;
                             }

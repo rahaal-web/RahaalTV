@@ -3,6 +3,11 @@ import {
   resolveApiEndpoint,
   shouldSkipBackendApiCalls,
 } from './clientScraper';
+import {
+  cleanExternalSearchTitle,
+  isJunkImageCandidate,
+  scoreExternalTitleMatch,
+} from './imageMatching';
 import { FALLBACK_BACKDROP, FALLBACK_POSTER, resolveMediaAssetUrl } from './mediaFilters';
 
 export interface ImageDimensionResult {
@@ -362,27 +367,69 @@ export function probeImageDimensionsInBrowser(
   });
 }
 
-function cleanSearchQueryForExternalApis(title: string, englishTitle: string): string {
-  const raw = (englishTitle || title || '').trim();
-  return raw
-    .replace(/\b(19|20)\d{2}\b/g, '')
-    .replace(/مترجم|مدبلج|فيلم|مسلسل|الموسم|الحلقة|اون لاين|بجودة عالية|WEB-DL|HD|4K|BluRay/gi, '')
-    .replace(/[-–|:]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-async function queryTvmazeImagesInBrowser(
-  query: string
-): Promise<{ poster?: string; backdrop?: string; pw?: number; ph?: number; bw?: number; bh?: number } | null> {
+async function queryTvmazeImagesInBrowser(params: {
+  query: string;
+  title: string;
+  englishTitle: string;
+  year: string;
+}): Promise<{
+  poster?: string;
+  backdrop?: string;
+  pw?: number;
+  ph?: number;
+  bw?: number;
+  bh?: number;
+  matchedTitle?: string;
+} | null> {
+  const { query, title, englishTitle, year } = params;
   if (!query || query.length < 2) return null;
   try {
-    const res = await fetch(
-      `https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(query)}&embed=images`,
+    const searchRes = await fetch(
+      `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(query)}`,
       { signal: AbortSignal.timeout(6000) }
     );
-    if (!res.ok) return null;
-    const data = (await res.json()) as {
+    if (!searchRes.ok) return null;
+    const candidates = (await searchRes.json()) as Array<{
+      score?: number;
+      show?: {
+        id?: number;
+        name?: string;
+        premiered?: string;
+      };
+    }>;
+    if (!Array.isArray(candidates) || candidates.length === 0) return null;
+
+    let bestId = 0;
+    let bestMatchScore = 0;
+    let bestName = '';
+
+    for (const entry of candidates.slice(0, 8)) {
+      const show = entry.show;
+      if (!show?.id || !show.name) continue;
+      const check = scoreExternalTitleMatch({
+        queryTitle: title,
+        englishTitle,
+        expectedYear: year,
+        expectedYearExplicit: Boolean(year && year !== '2026'),
+        candidateTitles: [show.name],
+        candidateYear: show.premiered?.slice(0, 4),
+      });
+      if (check.matched && check.score > bestMatchScore) {
+        bestMatchScore = check.score;
+        bestId = show.id;
+        bestName = show.name;
+      }
+    }
+
+    if (!bestId) return null;
+
+    const showRes = await fetch(
+      `https://api.tvmaze.com/shows/${bestId}?embed=images`,
+      { signal: AbortSignal.timeout(6000) }
+    );
+    if (!showRes.ok) return null;
+
+    const data = (await showRes.json()) as {
       image?: { original?: string; medium?: string };
       _embedded?: {
         images?: Array<{
@@ -425,38 +472,69 @@ async function queryTvmazeImagesInBrowser(
       backdrop: bestBg?.url || '',
       bw: bestBg?.width || 0,
       bh: bestBg?.height || 0,
+      matchedTitle: bestName,
     };
   } catch {
     return null;
   }
 }
 
-async function queryItunesPosterInBrowser(
-  query: string,
-  kind: MediaKind
-): Promise<string> {
-  if (!query || query.length < 2) return '';
+async function queryItunesPosterInBrowser(params: {
+  query: string;
+  title: string;
+  englishTitle: string;
+  year: string;
+  kind: MediaKind;
+}): Promise<{ url: string; matchedTitle: string } | null> {
+  const { query, title, englishTitle, year, kind } = params;
+  // iTunes tvSeason artwork is 1:1 square cover art rather than 2:3 poster; only query movies
+  if (!query || query.length < 2 || kind !== 'movie') return null;
   try {
-    const entity = kind === 'series' ? 'tvSeason' : 'movie';
     const res = await fetch(
-      `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=${kind === 'series' ? 'tvShow' : 'movie'}&entity=${entity}&limit=3`,
+      `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=movie&entity=movie&limit=8`,
       { signal: AbortSignal.timeout(6000) }
     );
-    if (!res.ok) return '';
+    if (!res.ok) return null;
     const json = (await res.json()) as {
-      results?: Array<{ artworkUrl100?: string }>;
+      results?: Array<{
+        trackName?: string;
+        collectionName?: string;
+        releaseDate?: string;
+        artworkUrl100?: string;
+      }>;
     };
-    const art = json.results?.[0]?.artworkUrl100 || '';
-    return art ? upgradeKnownImageUrl(art) : '';
+    const results = json.results || [];
+    let bestArt = '';
+    let bestTitle = '';
+    let bestScore = 0;
+
+    for (const r of results) {
+      if (!r.artworkUrl100) continue;
+      const check = scoreExternalTitleMatch({
+        queryTitle: title,
+        englishTitle,
+        expectedYear: year,
+        expectedYearExplicit: Boolean(year && year !== '2026'),
+        candidateTitles: [r.trackName, r.collectionName],
+        candidateYear: r.releaseDate?.slice(0, 4),
+      });
+      if (check.matched && check.score > bestScore) {
+        bestScore = check.score;
+        bestArt = upgradeKnownImageUrl(r.artworkUrl100);
+        bestTitle = r.trackName || r.collectionName || '';
+      }
+    }
+
+    return bestArt ? { url: bestArt, matchedTitle: bestTitle } : null;
   } catch {
-    return '';
+    return null;
   }
 }
 
 /**
  * Resolves independent high-res 2:3 Portrait Poster & 16:9 Landscape Backdrop with measured pixel verification.
  * Uses server /api/images/resolve (TMDB + public metadata + binary dimension probing) when available,
- * and safely falls back to browser-native dimension probing + TVmaze / iTunes + URL upgrades on static deployments.
+ * and safely falls back to browser-native dimension probing + strictly-verified TVmaze / iTunes + URL upgrades.
  */
 export async function resolveHighResImagesClient(params: {
   title: string;
@@ -475,6 +553,9 @@ export async function resolveHighResImagesClient(params: {
     currentBackdrop = '',
   } = params;
 
+  const sanitizedCurrentPoster = isJunkImageCandidate(currentPoster) ? '' : currentPoster;
+  const sanitizedCurrentBackdrop = isJunkImageCandidate(currentBackdrop) ? '' : currentBackdrop;
+
   // 1. Prefer server-side resolution (TMDB API key kept strictly server-side + binary dimension check)
   if (!shouldSkipBackendApiCalls()) {
     try {
@@ -486,8 +567,8 @@ export async function resolveHighResImagesClient(params: {
           englishTitle,
           year,
           kind,
-          currentPoster,
-          currentBackdrop,
+          currentPoster: sanitizedCurrentPoster,
+          currentBackdrop: sanitizedCurrentBackdrop,
         }),
       });
       const ct = response.headers.get('content-type') || '';
@@ -505,16 +586,16 @@ export async function resolveHighResImagesClient(params: {
     }
   }
 
-  // 2. Client fallback: upgrade known CDN URLs & query public CORS-friendly metadata sources
+  // 2. Client fallback: upgrade known CDN URLs & query strictly-verified public metadata sources
   const notes: string[] = [];
-  let posterUrl = upgradeKnownImageUrl(currentPoster);
+  let posterUrl = sanitizedCurrentPoster ? upgradeKnownImageUrl(sanitizedCurrentPoster) : '';
   let backdropUrl =
-    currentBackdrop && currentBackdrop !== currentPoster
-      ? upgradeKnownImageUrl(currentBackdrop)
+    sanitizedCurrentBackdrop && sanitizedCurrentBackdrop !== sanitizedCurrentPoster
+      ? upgradeKnownImageUrl(sanitizedCurrentBackdrop)
       : '';
   let imageSource = posterUrl ? 'upgraded_url' : 'none';
 
-  const cleanQuery = cleanSearchQueryForExternalApis(title, englishTitle);
+  const cleanQuery = cleanExternalSearchTitle(title, englishTitle);
 
   const [posterProbeInitial, backdropProbeInitial] = await Promise.all([
     posterUrl ? probeImageDimensionsInBrowser(posterUrl) : Promise.resolve(null),
@@ -537,13 +618,21 @@ export async function resolveHighResImagesClient(params: {
     notes.push('تم رفض الخلفية الحالية لأنها طولية وليست 16:9 أفقية');
   }
 
-  // Try TVmaze (for series or anime/shows) when backdrop is missing or poster is low-res
-  if (cleanQuery && (!backdropUrl || pw < 800)) {
-    const tvm = await queryTvmazeImagesInBrowser(cleanQuery);
+  const hasValidUnmeasuredScrapedPoster = Boolean(posterUrl && !posterProbeInitial?.ok);
+
+  // TVmaze fallback ONLY for series/TV shows, verified strictly against title & year
+  if (cleanQuery && kind === 'series' && (!backdropUrl || pw < 800)) {
+    const tvm = await queryTvmazeImagesInBrowser({
+      query: cleanQuery,
+      title,
+      englishTitle,
+      year,
+    });
     if (tvm) {
       if (tvm.poster) {
         const pTest = await probeImageDimensionsInBrowser(tvm.poster);
-        if (pTest.ok && pTest.width >= Math.max(500, pw)) {
+        const minAcceptWidth = hasValidUnmeasuredScrapedPoster ? 600 : Math.max(400, pw);
+        if (pTest.ok && pTest.height >= pTest.width && pTest.width >= minAcceptWidth) {
           posterUrl = tvm.poster;
           pw = pTest.width;
           ph = pTest.height;
@@ -556,19 +645,28 @@ export async function resolveHighResImagesClient(params: {
           backdropUrl = tvm.backdrop;
           bw = bTest.width;
           bh = bTest.height;
-          imageSource = 'tvmaze';
+          if (imageSource === 'none' || imageSource === 'upgraded_url') {
+            imageSource = 'tvmaze';
+          }
         }
       }
     }
   }
 
-  // Try iTunes high-res poster if poster is still missing or low-res
-  if (cleanQuery && pw < 800) {
-    const itunesPoster = await queryItunesPosterInBrowser(cleanQuery, kind);
-    if (itunesPoster) {
-      const itProbe = await probeImageDimensionsInBrowser(itunesPoster);
-      if (itProbe.ok && itProbe.width > pw) {
-        posterUrl = itunesPoster;
+  // iTunes fallback ONLY for movies, verified strictly against movie title & year (never overwrite an unmeasured scraped poster unless >=600px portrait match)
+  if (cleanQuery && kind === 'movie' && pw < 800) {
+    const itunesMatch = await queryItunesPosterInBrowser({
+      query: cleanQuery,
+      title,
+      englishTitle,
+      year,
+      kind,
+    });
+    if (itunesMatch?.url) {
+      const itProbe = await probeImageDimensionsInBrowser(itunesMatch.url);
+      const minAcceptWidth = hasValidUnmeasuredScrapedPoster ? 600 : pw + 1;
+      if (itProbe.ok && itProbe.height >= itProbe.width && itProbe.width >= minAcceptWidth) {
+        posterUrl = itunesMatch.url;
         pw = itProbe.width;
         ph = itProbe.height;
         if (imageSource === 'none' || imageSource === 'upgraded_url') {
@@ -578,8 +676,8 @@ export async function resolveHighResImagesClient(params: {
     }
   }
 
-  if (!posterUrl && currentPoster) {
-    posterUrl = currentPoster;
+  if (!posterUrl && sanitizedCurrentPoster) {
+    posterUrl = sanitizedCurrentPoster;
   }
 
   const qualityStatus = evaluateImageQuality({
