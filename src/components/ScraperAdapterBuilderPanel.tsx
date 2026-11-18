@@ -31,7 +31,15 @@ import {
   XCircle,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
-import { resolveApiEndpoint, shouldSkipBackendApiCalls } from '../lib/clientScraper';
+import {
+  getCustomApiBaseUrl,
+  resolveApiEndpoint,
+  shouldSkipBackendApiCalls,
+} from '../lib/clientScraper';
+import {
+  analyzeSiteStructureInBrowser,
+  testAdapterCandidateInBrowser,
+} from '../lib/clientAdapterEngine';
 import {
   buildAdapterIdFromDomain,
   createDefaultScraperAdapter,
@@ -209,17 +217,10 @@ export function ScraperAdapterBuilderPanel({
     return counts;
   }, [adapters]);
 
-  const ensureBackendAvailableError = (): boolean => {
-    if (shouldSkipBackendApiCalls()) {
-      setWorkflowError(
-        'محرك تحليل البنية والاختبار يتطلب خادم Node.js المدمج (/api/adapters/*) ولا يعمل في وضع GitHub Pages الثابت دون خادم Backend.'
-      );
-      return true;
-    }
-    return false;
-  };
+  const hasCustomWorker = Boolean(getCustomApiBaseUrl());
+  const isStaticBrowserMode = shouldSkipBackendApiCalls();
 
-  // 1. Analyze Site Structure
+  // 1. Analyze Site Structure (Backend when available, Browser/Worker/CORS engine on GitHub Pages)
   const runAnalyzeSite = async (e?: FormEvent) => {
     e?.preventDefault();
     setWorkflowError(null);
@@ -227,24 +228,55 @@ export function ScraperAdapterBuilderPanel({
       setWorkflowError('يرجى إدخال رابط الموقع أولاً أو لصق كود HTML.');
       return;
     }
-    if (ensureBackendAvailableError()) return;
 
     setAnalyzing(true);
     setTestResult(null);
     setConfirmOverwriteChecked(false);
 
     try {
-      const response = await fetch(resolveApiEndpoint('/api/adapters/analyze'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: targetUrl.trim() || undefined,
+      let data: ScraperSiteAnalysisReport | null = null;
+      let usedBackend = false;
+
+      if (!shouldSkipBackendApiCalls()) {
+        try {
+          const response = await fetch(resolveApiEndpoint('/api/adapters/analyze'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: targetUrl.trim() || undefined,
+              rawHtml: rawHtml.trim().length > 30 ? rawHtml : undefined,
+              contentTypeHint,
+              existingAdapters: adapters,
+            }),
+          });
+          const contentType = response.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const json = (await response.json()) as ScraperSiteAnalysisReport & {
+              service?: string;
+            };
+            const isRealAnalyzeApi =
+              Boolean(json && typeof json === 'object') &&
+              json.service !== 'RahaL TV Proxy Worker' &&
+              ('proposedAdapter' in json || 'diagnostics' in json);
+            if (isRealAnalyzeApi) {
+              data = json;
+              usedBackend = true;
+            }
+          }
+        } catch {
+          // Static hosting or unreachable backend -> fall back seamlessly to browser engine
+        }
+      }
+
+      if (!usedBackend || !data) {
+        data = await analyzeSiteStructureInBrowser({
+          url: targetUrl.trim(),
           rawHtml: rawHtml.trim().length > 30 ? rawHtml : undefined,
           contentTypeHint,
           existingAdapters: adapters,
-        }),
-      });
-      const data = (await response.json()) as ScraperSiteAnalysisReport;
+        });
+      }
+
       setAnalysisReport(data);
 
       const existingMatch = data.matchedExistingAdapterId
@@ -267,12 +299,12 @@ export function ScraperAdapterBuilderPanel({
         setWorkflowError(data.error || 'فشل تحليل الصفحة المستهدفة — راجع التقرير التشخيصي.');
       } else {
         onNotify(
-          `تم تحليل ${data.domain} واكتشاف ${data.diagnostics.length} ملاحظات تقنية — يمكنك الآن اختبار الجلب قبل الحفظ.`
+          `تم تحليل ${data.domain} (${usedBackend ? 'الخادم' : 'محرك المتصفح'}) واكتشاف ${data.diagnostics.length} ملاحظات تقنية — يمكنك الآن اختبار الجلب قبل الحفظ.`
         );
       }
     } catch (err) {
       setWorkflowError(
-        err instanceof Error ? err.message : 'تعذر الاتصال بنقطة تحليل المواقع (/api/adapters/analyze).'
+        err instanceof Error ? err.message : 'تعذر تحليل بنية الموقع المستهدف.'
       );
     } finally {
       setAnalyzing(false);
@@ -313,7 +345,7 @@ export function ScraperAdapterBuilderPanel({
     onNotify('تم تجهيز مسودة قواعد الـ Adapter — نفّذ "اختبار الجلب" للتحقق من النتائج قبل الاعتماد.');
   };
 
-  // 3. Test Candidate Adapter BEFORE Saving
+  // 3. Test Candidate Adapter BEFORE Saving (Backend when available, Browser/Worker engine on GitHub Pages)
   const runTestCandidate = async (overrideAdapter?: ScraperAdapter, overrideUrl?: string) => {
     setWorkflowError(null);
     const urlToTest = (overrideUrl ?? targetUrl).trim() || overrideAdapter?.sampleUrl || '';
@@ -321,7 +353,6 @@ export function ScraperAdapterBuilderPanel({
       setWorkflowError('يرجى إدخال رابط صفحة الاختبار أولاً.');
       return;
     }
-    if (ensureBackendAvailableError()) return;
 
     const existing =
       editingBaseAdapter ||
@@ -340,21 +371,56 @@ export function ScraperAdapterBuilderPanel({
     setConfirmOverwriteChecked(false);
 
     try {
-      const response = await fetch(resolveApiEndpoint('/api/adapters/test'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: urlToTest || undefined,
+      let result: ScraperTestResult | null = null;
+      let usedBackend = false;
+
+      if (!shouldSkipBackendApiCalls()) {
+        try {
+          const response = await fetch(resolveApiEndpoint('/api/adapters/test'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: urlToTest || undefined,
+              rawHtml: rawHtml.trim().length > 30 ? rawHtml : undefined,
+              adapter: adapterToTest,
+              previousAdapter: existing && existing.id === adapterToTest.id ? existing : undefined,
+              contentTypeHint,
+            }),
+          });
+          const contentType = response.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const json = (await response.json()) as Partial<ScraperTestResult> & {
+              error?: string;
+              service?: string;
+            };
+            const isRealTestApi =
+              Boolean(json && typeof json === 'object') &&
+              json.service !== 'RahaL TV Proxy Worker' &&
+              ('episodesDiscovered' in json ||
+                'testedAt' in json ||
+                (!response.ok && typeof json.error === 'string'));
+            if (isRealTestApi) {
+              if (!response.ok && !json.testedAt) {
+                setWorkflowError(json.error || 'فشل تشغيل الاختبار.');
+                return;
+              }
+              result = json as ScraperTestResult;
+              usedBackend = true;
+            }
+          }
+        } catch {
+          // Static hosting or unreachable backend -> fall back seamlessly to browser engine
+        }
+      }
+
+      if (!usedBackend || !result) {
+        result = await testAdapterCandidateInBrowser({
+          url: urlToTest,
           rawHtml: rawHtml.trim().length > 30 ? rawHtml : undefined,
           adapter: adapterToTest,
           previousAdapter: existing && existing.id === adapterToTest.id ? existing : undefined,
           contentTypeHint,
-        }),
-      });
-      const result = (await response.json()) as ScraperTestResult;
-      if (!response.ok && !result.testedAt) {
-        setWorkflowError((result as unknown as { error?: string }).error || 'فشل تشغيل الاختبار.');
-        return;
+        });
       }
 
       setTestResult(result);
@@ -391,11 +457,11 @@ export function ScraperAdapterBuilderPanel({
       }
 
       onNotify(
-        `اكتمل الاختبار: ${result.episodesDiscovered} حلقة • ${result.totalServersExtracted} سيرفر (الحالة المقترحة: ${STATUS_META[result.recommendedStatus].label})`
+        `اكتمل الاختبار (${usedBackend ? 'الخادم' : 'المتصفح'}): ${result.episodesDiscovered} حلقة • ${result.totalServersExtracted} سيرفر (الحالة المقترحة: ${STATUS_META[result.recommendedStatus].label})`
       );
     } catch (err) {
       setWorkflowError(
-        err instanceof Error ? err.message : 'تعذر إتمام اختبار الجلب من الخادم.'
+        err instanceof Error ? err.message : 'تعذر إتمام اختبار الجلب.'
       );
     } finally {
       setTesting(false);
@@ -633,7 +699,16 @@ export function ScraperAdapterBuilderPanel({
               <span
                 className={`h-2 w-2 rounded-full ${cloudSynced ? 'bg-[#4CAF50]' : 'bg-[#f9c400]'}`}
               />
-              {cloudSynced ? 'متزامن مع Firestore والخادم' : 'وضع المزامنة المحلية + الخادم'}
+              {cloudSynced ? 'متزامن مع Firestore' : 'مزامنة محلية + المتصفح'}
+            </span>
+            <span className="text-white/25">·</span>
+            <span className="inline-flex items-center gap-1.5 font-bold text-sky-300">
+              <Globe className="w-3.5 h-3.5" />
+              {hasCustomWorker
+                ? 'محرك المتصفح + Cloudflare Worker'
+                : isStaticBrowserMode
+                  ? 'محرك المتصفح المستقل (GitHub Pages)'
+                  : 'محرك تلقائي (خادم + متصفح)'}
             </span>
             <span className="text-white/25">·</span>
             <span className="font-latin tabular-nums font-bold text-white">
@@ -641,6 +716,16 @@ export function ScraperAdapterBuilderPanel({
             </span>
           </div>
         </div>
+
+        {isStaticBrowserMode && !hasCustomWorker && (
+          <div className="rounded-2xl bg-sky-500/10 border border-sky-400/30 px-4 py-3 text-xs text-sky-100 leading-relaxed flex items-start gap-2.5">
+            <Globe className="w-4 h-4 text-sky-300 shrink-0 mt-0.5" />
+            <div>
+              <strong className="text-white">يعمل الآن عبر محرك المتصفح المستقل (GitHub Pages):</strong>{' '}
+              يمكنك تحليل الروابط واختبار الجلب مباشرة من المتصفح. بالنسبة للمواقع التي تمنع CORS أو Cloudflare، الصق كود الصفحة (<span className="font-latin">Ctrl+U</span>) أو فعّل <span className="font-latin">Cloudflare Worker</span> المجاني من الإعدادات.
+            </div>
+          </div>
+        )}
 
         <form onSubmit={runAnalyzeSite} className="space-y-4">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-end">

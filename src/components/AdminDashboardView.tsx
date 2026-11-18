@@ -1193,6 +1193,11 @@ export function AdminDashboardView({
 
     setScraping(true);
     try {
+      const matchedHtmlAdapter =
+        scrapeMode === 'html' && scrapeUrl.trim()
+          ? matchAdapterForUrl(scrapeUrl, scraperAdapters) || undefined
+          : undefined;
+
       const payload =
         scrapeMode === 'url'
           ? {
@@ -1202,9 +1207,7 @@ export function AdminDashboardView({
           : {
               rawHtml: scrapeRawHtml,
               url: scrapeUrl.trim() || undefined,
-              ...(scrapeUrl.trim() && matchAdapterForUrl(scrapeUrl, scraperAdapters)
-                ? { adapter: matchAdapterForUrl(scrapeUrl, scraperAdapters) }
-                : {}),
+              ...(matchedHtmlAdapter ? { adapter: matchedHtmlAdapter } : {}),
             };
 
       let data: {

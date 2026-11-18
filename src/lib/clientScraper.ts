@@ -5,6 +5,7 @@ import {
   ImageQualityStatus,
   MediaItem,
   MediaKind,
+  ScraperAdapter,
   SeasonItem,
   StreamServer,
 } from '../types/media';
@@ -450,7 +451,7 @@ export default {
   },
 };`;
 
-function isBlockedHost(hostname: string): boolean {
+export function isBlockedHostBrowser(hostname: string): boolean {
   const h = hostname.toLowerCase();
   if (
     h === 'localhost' ||
@@ -472,17 +473,23 @@ function isBlockedHost(hostname: string): boolean {
   return false;
 }
 
-function cleanText(val: string | undefined | null): string {
+const isBlockedHost = isBlockedHostBrowser;
+
+export function cleanTextBrowser(val: string | undefined | null): string {
   return (val || '').replace(/\s+/g, ' ').trim();
 }
 
-function normalizeArabicDigits(val: string): string {
+const cleanText = cleanTextBrowser;
+
+export function normalizeArabicDigitsBrowser(val: string): string {
   return val
     .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
     .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
 }
 
-function resolveUrl(baseUrl: string, maybeRelative: string | undefined | null): string {
+const normalizeArabicDigits = normalizeArabicDigitsBrowser;
+
+export function resolveUrlBrowser(baseUrl: string, maybeRelative: string | undefined | null): string {
   if (!maybeRelative) return '';
   const trimmed = maybeRelative.trim();
   if (
@@ -505,7 +512,9 @@ function resolveUrl(baseUrl: string, maybeRelative: string | undefined | null): 
   }
 }
 
-function decodeBase64Safe(val: string): string {
+const resolveUrl = resolveUrlBrowser;
+
+export function decodeBase64SafeBrowser(val: string): string {
   const trimmed = val.trim();
   if (/^(https?:)?\/\//i.test(trimmed) || /<iframe/i.test(trimmed)) return trimmed;
   if (/^[A-Za-z0-9+/=]{16,}$/.test(trimmed)) {
@@ -520,6 +529,8 @@ function decodeBase64Safe(val: string): string {
   }
   return trimmed;
 }
+
+const decodeBase64Safe = decodeBase64SafeBrowser;
 
 function isYoutubeUrlBrowser(rawUrl: string): boolean {
   return /(?:youtube\.com\/(?:watch|embed|shorts|v\/)|youtube-nocookie\.com\/embed\/|youtu\.be\/)/i.test(
@@ -723,7 +734,7 @@ function pickFirstValidImageFromSelectorsBrowser(
   return lowTrustFallback;
 }
 
-function parseHtmlToMediaWithHintsBrowser(
+export function parseHtmlToMediaWithHintsBrowser(
   html: string,
   sourceUrl: string,
   options?: { isDownloadPage?: boolean }
@@ -2522,8 +2533,23 @@ async function tryWordPressSinglePostBrowser(
 export async function scrapeSingleInBrowser(params: {
   url?: string;
   rawHtml?: string;
-}): Promise<{ ok: boolean; error?: string; extracted?: ScrapedPayload }> {
-  const { url, rawHtml } = params;
+  adapter?: ScraperAdapter;
+}): Promise<{
+  ok: boolean;
+  error?: string;
+  extracted?: ScrapedPayload;
+  adapterUsed?: { id: string; name: string; version: number };
+}> {
+  const { url, rawHtml, adapter } = params;
+
+  if (adapter && adapter.enabled) {
+    try {
+      const { scrapeSingleWithAdapterInBrowser } = await import('./clientAdapterEngine');
+      return await scrapeSingleWithAdapterInBrowser({ url, rawHtml, adapter });
+    } catch {
+      // Fall back to generic browser extraction if dynamic import fails
+    }
+  }
 
   if (rawHtml && rawHtml.trim().length > 20) {
     const canonicalInHtml =
@@ -2617,6 +2643,7 @@ export async function scrapeSiteInBrowser(params: {
   maxItems?: number;
   maxPages?: number;
   deepScrape?: boolean;
+  adapter?: ScraperAdapter;
 }): Promise<{
   ok: boolean;
   error?: string;
@@ -2624,8 +2651,9 @@ export async function scrapeSiteInBrowser(params: {
   siteTitle?: string;
   totalDiscovered?: number;
   items?: ScrapedPayload[];
+  adapterUsed?: { id: string; name: string; version: number };
 }> {
-  const { siteUrl, rawHtml, maxItems = 30, maxPages = 3, deepScrape = true } = params;
+  const { siteUrl, rawHtml, maxItems = 30, maxPages = 3, deepScrape = true, adapter } = params;
   const itemLimit = Math.min(80, Math.max(1, Number(maxItems) || 30));
   const pageLimit = Math.min(8, Math.max(1, Number(maxPages) || 3));
 
@@ -2779,6 +2807,21 @@ export async function scrapeSiteInBrowser(params: {
       const results = await Promise.all(
         chunk.map(async (card) => {
           try {
+            if (adapter && adapter.enabled) {
+              const { scrapeSingleWithAdapterInBrowser } = await import('./clientAdapterEngine');
+              const adpRes = await scrapeSingleWithAdapterInBrowser({ url: card.url, adapter });
+              if (adpRes.ok && adpRes.extracted) {
+                const parsed = adpRes.extracted;
+                if (!parsed.poster && card.poster) {
+                  parsed.poster = upgradeKnownImageUrlScraper(card.poster);
+                  parsed.poster_url = parsed.poster;
+                }
+                if ((!parsed.title || parsed.title === 'عمل مستورد جديد') && card.title) {
+                  parsed.title = card.title;
+                }
+                return parsed;
+              }
+            }
             const detailRes = await fetchViaBrowserOrCorsRelay(card.url, 9000);
             if (detailRes.ok && detailRes.text.length > 150) {
               const parsed = await scrapeFullItemInBrowser(card.url, detailRes.text);
@@ -2814,6 +2857,9 @@ export async function scrapeSiteInBrowser(params: {
     siteTitle,
     totalDiscovered: finalItems.length,
     items: finalItems,
+    ...(adapter && adapter.enabled
+      ? { adapterUsed: { id: adapter.id, name: adapter.name, version: adapter.version } }
+      : {}),
   };
 }
 
