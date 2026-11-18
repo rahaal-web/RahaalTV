@@ -78,6 +78,8 @@ import {
   scrapeSingleInBrowser,
   scrapeSiteInBrowser,
   setCustomApiBaseUrl,
+  shouldSkipBackendApiCalls,
+  testCloudflareWorkerConnection,
   verifyAndFilterItemServers,
 } from '../lib/clientScraper';
 import {
@@ -453,6 +455,11 @@ export function AdminDashboardView({
     homeConfig: normalizeHomeConfig(siteSettings.homeConfig || loadStoredHomeConfig()),
   }));
   const [customApiUrl, setCustomApiUrl] = useState<string>(() => getCustomApiBaseUrl());
+  const [testingProxy, setTestingProxy] = useState(false);
+  const [proxyTestResult, setProxyTestResult] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
   useEffect(() => {
     setSettingsForm({
       ...siteSettings,
@@ -520,26 +527,28 @@ export function AdminDashboardView({
       for (let i = 0; i < targetsToCheck.length; i += 35) {
         const chunk = targetsToCheck.slice(i, i + 35);
         let handledByApi = false;
-        try {
-          const response = await fetch(resolveApiEndpoint('/api/check-servers'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ urls: chunk }),
-          });
-          const contentType = response.headers.get('content-type') || '';
-          const data = contentType.includes('application/json')
-            ? ((await response.json()) as {
-                ok?: boolean;
-                results?: Record<string, ServerStatusEntry>;
-              })
-            : null;
-          if (response.ok && data?.ok && data.results) {
-            serverStatusesRef.current = { ...serverStatusesRef.current, ...data.results };
-            setServerStatuses(serverStatusesRef.current);
-            handledByApi = true;
+        if (!shouldSkipBackendApiCalls()) {
+          try {
+            const response = await fetch(resolveApiEndpoint('/api/check-servers'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ urls: chunk }),
+            });
+            const contentType = response.headers.get('content-type') || '';
+            const data = contentType.includes('application/json')
+              ? ((await response.json()) as {
+                  ok?: boolean;
+                  results?: Record<string, ServerStatusEntry>;
+                })
+              : null;
+            if (response.ok && data?.ok && data.results) {
+              serverStatusesRef.current = { ...serverStatusesRef.current, ...data.results };
+              setServerStatuses(serverStatusesRef.current);
+              handledByApi = true;
+            }
+          } catch {
+            // Fall through to browser check when static hosting is active
           }
-        } catch {
-          // Fall through to browser check when static hosting is active
         }
 
         if (!handledByApi) {
@@ -906,35 +915,37 @@ export function AdminDashboardView({
       let data: { ok?: boolean; error?: string; extracted?: ScrapedPayload } | null = null;
       let usedBackend = false;
 
-      try {
-        const response = await fetch(resolveApiEndpoint('/api/scrape'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        const contentType = response.headers.get('content-type') || '';
-        if (contentType.includes('application/json')) {
-          const json = (await response.json()) as {
-            ok?: boolean;
-            error?: string;
-            service?: string;
-            extracted?: ScrapedPayload;
-          };
-          const isRealScrapeApi =
-            Boolean(json && typeof json === 'object') &&
-            json.service !== 'RahaL TV Proxy Worker' &&
-            ('extracted' in json || (!response.ok && typeof json.error === 'string'));
-          if (isRealScrapeApi) {
-            data = json;
-            usedBackend = true;
-            if (!response.ok && data.error) {
-              setScrapeError(data.error);
-              return;
+      if (!shouldSkipBackendApiCalls()) {
+        try {
+          const response = await fetch(resolveApiEndpoint('/api/scrape'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const contentType = response.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const json = (await response.json()) as {
+              ok?: boolean;
+              error?: string;
+              service?: string;
+              extracted?: ScrapedPayload;
+            };
+            const isRealScrapeApi =
+              Boolean(json && typeof json === 'object') &&
+              json.service !== 'RahaL TV Proxy Worker' &&
+              ('extracted' in json || (!response.ok && typeof json.error === 'string'));
+            if (isRealScrapeApi) {
+              data = json;
+              usedBackend = true;
+              if (!response.ok && data.error) {
+                setScrapeError(data.error);
+                return;
+              }
             }
           }
+        } catch {
+          // Static hosting or unreachable backend -> fall back seamlessly to browser engine
         }
-      } catch {
-        // Static hosting or unreachable backend -> fall back seamlessly to browser engine
       }
 
       if (!usedBackend || !data) {
@@ -1051,38 +1062,40 @@ export function AdminDashboardView({
       } | null = null;
       let usedBackend = false;
 
-      try {
-        const response = await fetch(resolveApiEndpoint('/api/scrape-site'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        const contentType = response.headers.get('content-type') || '';
-        if (contentType.includes('application/json')) {
-          const json = (await response.json()) as {
-            ok?: boolean;
-            error?: string;
-            service?: string;
-            strategy?: string;
-            siteTitle?: string;
-            totalDiscovered?: number;
-            items?: ScrapedPayload[];
-          };
-          const isRealSiteApi =
-            Boolean(json && typeof json === 'object') &&
-            json.service !== 'RahaL TV Proxy Worker' &&
-            (Array.isArray(json.items) || (!response.ok && typeof json.error === 'string'));
-          if (isRealSiteApi) {
-            data = json;
-            usedBackend = true;
-            if (!response.ok && data.error) {
-              setSiteCrawlError(data.error);
-              return;
+      if (!shouldSkipBackendApiCalls()) {
+        try {
+          const response = await fetch(resolveApiEndpoint('/api/scrape-site'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const contentType = response.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const json = (await response.json()) as {
+              ok?: boolean;
+              error?: string;
+              service?: string;
+              strategy?: string;
+              siteTitle?: string;
+              totalDiscovered?: number;
+              items?: ScrapedPayload[];
+            };
+            const isRealSiteApi =
+              Boolean(json && typeof json === 'object') &&
+              json.service !== 'RahaL TV Proxy Worker' &&
+              (Array.isArray(json.items) || (!response.ok && typeof json.error === 'string'));
+            if (isRealSiteApi) {
+              data = json;
+              usedBackend = true;
+              if (!response.ok && data.error) {
+                setSiteCrawlError(data.error);
+                return;
+              }
             }
           }
+        } catch {
+          // Static hosting or unreachable backend -> fall back seamlessly to browser engine
         }
-      } catch {
-        // Static hosting or unreachable backend -> fall back seamlessly to browser engine
       }
 
       if (!usedBackend || !data) {
@@ -4213,26 +4226,97 @@ export function AdminDashboardView({
                       type="url"
                       dir="ltr"
                       value={customApiUrl}
-                      onChange={(e) => setCustomApiUrl(e.target.value)}
+                      onChange={(e) => {
+                        setCustomApiUrl(e.target.value);
+                        setProxyTestResult(null);
+                      }}
                       placeholder="https://rahaltv-proxy.yourname.workers.dev"
                       className="font-latin flex-1 rounded-xl bg-[#0c1821] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:border-[#f9c400] focus:outline-none"
                     />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const saved = setCustomApiBaseUrl(customApiUrl);
-                        setCustomApiUrl(saved);
-                        onNotify(
-                          saved
-                            ? `تم حفظ رابط بروكسي السحب: ${saved}`
-                            : 'تم مسح الرابط — سيعمل السحب بالوضع المدمج في المتصفح'
-                        );
-                      }}
-                      className="rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] px-4 py-2.5 text-xs font-black text-[#06131c] cursor-pointer shrink-0"
-                    >
-                      حفظ رابط البروكسي
-                    </button>
+                    <div className="flex flex-wrap gap-2 shrink-0">
+                      <button
+                        type="button"
+                        disabled={testingProxy}
+                        onClick={async () => {
+                          setTestingProxy(true);
+                          setProxyTestResult(null);
+                          try {
+                            const res = await testCloudflareWorkerConnection(customApiUrl);
+                            if (res.normalizedUrl) {
+                              setCustomApiUrl(res.normalizedUrl);
+                            }
+                            setProxyTestResult({ ok: res.ok, message: res.message });
+                            if (res.ok) {
+                              const saved = setCustomApiBaseUrl(res.normalizedUrl);
+                              setCustomApiUrl(saved);
+                              onNotify('تم فحص وحفظ رابط Cloudflare Worker بنجاح!');
+                            }
+                          } finally {
+                            setTestingProxy(false);
+                          }
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 hover:bg-white/20 disabled:opacity-50 border border-white/15 px-3.5 py-2.5 text-xs font-extrabold text-white cursor-pointer"
+                      >
+                        {testingProxy ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-[#f9c400]" />
+                        ) : (
+                          <RefreshCw className="w-3.5 h-3.5 text-[#4CAF50]" />
+                        )}
+                        <span>{testingProxy ? 'جارٍ الفحص...' : 'اختبار البروكسي'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const saved = setCustomApiBaseUrl(customApiUrl);
+                          setCustomApiUrl(saved);
+                          if (!saved) {
+                            setProxyTestResult(null);
+                            onNotify('تم مسح الرابط — سيعمل السحب بالوضع المدمج في المتصفح');
+                            return;
+                          }
+                          onNotify(`تم حفظ رابط بروكسي السحب: ${saved}`);
+                          setTestingProxy(true);
+                          try {
+                            const res = await testCloudflareWorkerConnection(saved);
+                            setProxyTestResult({ ok: res.ok, message: res.message });
+                          } finally {
+                            setTestingProxy(false);
+                          }
+                        }}
+                        className="rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] px-4 py-2.5 text-xs font-black text-[#06131c] cursor-pointer"
+                      >
+                        حفظ رابط البروكسي
+                      </button>
+
+                      {customApiUrl.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCustomApiBaseUrl('');
+                            setCustomApiUrl('');
+                            setProxyTestResult(null);
+                            onNotify('تم مسح رابط البروكسي — يعمل السحب بالوضع المدمج في المتصفح.');
+                          }}
+                          className="rounded-xl bg-[#0c1821] hover:bg-[#D92321]/20 border border-white/10 px-3 py-2.5 text-xs font-bold text-[#b7c9ef] hover:text-white cursor-pointer"
+                        >
+                          مسح
+                        </button>
+                      )}
+                    </div>
                   </div>
+
+                  {proxyTestResult && (
+                    <div
+                      className={`rounded-xl border px-3.5 py-2.5 text-[11px] font-bold leading-relaxed ${
+                        proxyTestResult.ok
+                          ? 'bg-[#4CAF50]/15 border-[#4CAF50]/40 text-[#b6f2b9]'
+                          : 'bg-[#D92321]/15 border-[#D92321]/45 text-[#ffb3b1]'
+                      }`}
+                    >
+                      {proxyTestResult.message}
+                    </div>
+                  )}
                 </div>
 
                 {/* Internal Video Player Theme Customizer */}

@@ -1,10 +1,9 @@
-import { FormEvent, useMemo, useRef, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
   Check,
   CheckCircle2,
-  Clock,
   Database,
   Eye,
   Film,
@@ -33,6 +32,7 @@ import {
   hasPlanAlreadyExecuted,
   loadActivityLog,
   loadLastUndoSnapshot,
+  subscribeActivityLogsFromFirestore,
   undoAssistantBatchInDatabase,
   UndoBatchSnapshot,
 } from '../lib/adminAssistantDb';
@@ -45,6 +45,7 @@ import {
 } from '../lib/localAdminNlp';
 import { buildDedicatedMediaUrl, generateCleanSlug } from '../lib/permalink';
 import { MediaItem, MediaKind } from '../types/media';
+import { AdminActivityLog } from './AdminActivityLog';
 
 interface AdminAiBulkEditorProps {
   user: User;
@@ -121,7 +122,6 @@ export function AdminAiBulkEditor({
   const [executing, setExecuting] = useState<boolean>(false);
   const [undoing, setUndoing] = useState<boolean>(false);
   const [awaitingConfirm, setAwaitingConfirm] = useState<boolean>(false);
-  const [showActivityLog, setShowActivityLog] = useState<boolean>(true);
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [previewPlan, setPreviewPlan] = useState<ExecutionPreviewPlan | null>(null);
@@ -140,8 +140,18 @@ export function AdminAiBulkEditor({
   const [activityLog, setActivityLog] = useState<AdminActivityLogEntry[]>(() =>
     loadActivityLog()
   );
+  const [logSyncMode, setLogSyncMode] = useState<'firestore+local' | 'local'>('local');
 
   const executionLockRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    const unsubscribe = subscribeActivityLogsFromFirestore(
+      (mergedLogs) => setActivityLog(mergedLogs),
+      (mode) => setLogSyncMode(mode)
+    );
+    return () => unsubscribe();
+  }, [user?.uid]);
 
   const allCategories = useMemo(() => {
     const set = new Set<string>();
@@ -1040,80 +1050,20 @@ export function AdminAiBulkEditor({
         </div>
       )}
 
-      {/* Admin Activity Log */}
-      <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 sm:p-6 space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <button
-            type="button"
-            onClick={() => setShowActivityLog((v) => !v)}
-            className="flex items-center gap-2 text-sm sm:text-base font-extrabold text-white cursor-pointer"
-          >
-            <History className="w-4 h-4 text-[#f9c400]" />
-            <span>سجل نشاطات المساعد الإداري ({activityLog.length})</span>
-          </button>
-
-          {activityLog.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setActivityLog(clearActivityLog())}
-              className="rounded-xl bg-[#1a242e] hover:bg-[#D92321]/20 border border-white/10 px-3 py-1.5 text-[11px] font-bold text-[#b7c9ef] hover:text-white cursor-pointer"
-            >
-              مسح السجل
-            </button>
-          )}
-        </div>
-
-        {showActivityLog && (
-          <>
-            {activityLog.length === 0 ? (
-              <p className="text-xs text-[#b7c9ef]">
-                لم يتم تسجيل أي عمليات بعد. كل أمر يتم تنفيذه أو استعلامه سيظهر هنا مع التفاصيل.
-              </p>
-            ) : (
-              <div className="space-y-2 max-h-[340px] overflow-y-auto pl-1">
-                {activityLog.slice(0, 30).map((log) => (
-                  <div
-                    key={log.id}
-                    className="rounded-2xl bg-[#15222d]/80 border border-white/[0.06] p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
-                  >
-                    <div className="space-y-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span
-                          className={`rounded-md px-2 py-0.5 text-[10px] font-black ${
-                            log.status === 'executed'
-                              ? 'bg-[#4CAF50]/20 text-[#4CAF50]'
-                              : log.status === 'undone'
-                                ? 'bg-[#f9c400]/20 text-[#f9c400]'
-                                : log.status === 'blocked' || log.status === 'failed'
-                                  ? 'bg-[#D92321]/20 text-[#ff6b69]'
-                                  : 'bg-white/10 text-[#b7c9ef]'
-                          }`}
-                        >
-                          {log.operationLabel}
-                        </span>
-                        <span className="font-bold text-white truncate">{log.rawCommand}</span>
-                      </div>
-                      <p className="text-[11px] text-[#b7c9ef]">
-                        {log.understoodCommand} • المتأثر:{' '}
-                        <strong className="text-white">{log.affectedCount}</strong>
-                        {log.sampleTitles.length > 0
-                          ? ` • أمثلة: ${log.sampleTitles.join('، ')}`
-                          : ''}
-                        {log.note ? ` • ملاحظة: ${log.note}` : ''}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1.5 text-[10px] text-[#b7c9ef] shrink-0">
-                      <Clock className="w-3 h-3" />
-                      <span>{formatTimestamp(log.timestamp)}</span>
-                      <span>• {log.adminName}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
-      </div>
+      {/* Dedicated AdminActivityLog Component (localStorage + Firestore) */}
+      <AdminActivityLog
+        logs={activityLog}
+        syncMode={logSyncMode}
+        onClearLogs={async () => {
+          const cleared = await clearActivityLog(true);
+          setActivityLog(cleared);
+          onNotify('تم مسح سجل نشاطات المساعد الإداري.');
+        }}
+        onRerunCommand={(cmd) => {
+          setInstruction(cmd);
+          onNotify('تمت تعبئة الأمر في الحقل — اضغط "تحليل الأمر ومعاينة النتيجة".');
+        }}
+      />
     </div>
   );
 }

@@ -177,6 +177,39 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "mediaId", "userId", "stars", "createdAt", "updatedAt"]
+    },
+    "AdminActivityLog": {
+      "title": "AdminActivityLog",
+      "description": "Audit log entry recording operations executed or queried by the Local Admin Assistant.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "adminUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "adminName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "rawCommand": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "understoodCommand": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "operationType": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "operationLabel": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "affectedCount": { "type": "number" },
+        "sampleTitles": { "type": "array", "description": "Up to 10 sample titles affected by the operation" },
+        "status": { "type": "string", "enum": ["executed", "queried", "undone", "blocked", "failed"] },
+        "note": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "adminUid",
+        "adminName",
+        "rawCommand",
+        "understoodCommand",
+        "operationType",
+        "operationLabel",
+        "affectedCount",
+        "sampleTitles",
+        "status",
+        "note",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -207,6 +240,10 @@
     "/ratings/{ratingId}": {
       "schema": { "$ref": "#/entities/MediaRating" },
       "description": "User star ratings (1 to 5 stars) keyed deterministically by mediaId and userId."
+    },
+    "/admin_activity_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AdminActivityLog" },
+      "description": "Immutable admin audit log of Local Admin Assistant commands and executions."
     }
   }
 }

@@ -36,19 +36,39 @@ export interface ScrapedPayload {
 
 const STORAGE_API_BASE_URL = 'rahaltv_api_base_url';
 
+export function normalizeCustomApiBaseUrl(rawUrl: string): string {
+  const trimmed = (rawUrl || '').trim();
+  if (!trimmed) return '';
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const parsed = new URL(withScheme);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+    const cleanPath = parsed.pathname.replace(/\/+$/, '');
+    return `${parsed.origin}${cleanPath}`;
+  } catch {
+    return trimmed.replace(/\/+$/, '');
+  }
+}
+
+export function isProxyWorkerUrl(url: string): boolean {
+  const clean = (url || '').trim().toLowerCase();
+  if (!clean) return false;
+  return /\.workers\.dev(?:\/|$)/i.test(clean);
+}
+
 export function getCustomApiBaseUrl(): string {
   try {
     const saved = localStorage.getItem(STORAGE_API_BASE_URL) || '';
-    if (saved.trim()) return saved.trim().replace(/\/+$/, '');
+    if (saved.trim()) return normalizeCustomApiBaseUrl(saved);
   } catch {
     // Ignore storage access issues
   }
   const envBase = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '';
-  return envBase.trim().replace(/\/+$/, '');
+  return normalizeCustomApiBaseUrl(envBase);
 }
 
 export function setCustomApiBaseUrl(url: string): string {
-  const cleaned = url.trim().replace(/\/+$/, '');
+  const cleaned = normalizeCustomApiBaseUrl(url);
   try {
     if (cleaned) {
       localStorage.setItem(STORAGE_API_BASE_URL, cleaned);
@@ -61,13 +81,128 @@ export function setCustomApiBaseUrl(url: string): string {
   return cleaned;
 }
 
+export function shouldSkipBackendApiCalls(): boolean {
+  const customBase = getCustomApiBaseUrl();
+  if (customBase && isProxyWorkerUrl(customBase)) {
+    return true;
+  }
+  if (!customBase && typeof window !== 'undefined' && window.location.hostname.endsWith('.github.io')) {
+    return true;
+  }
+  return false;
+}
+
 export function resolveApiEndpoint(endpointPath: string): string {
   const base = getCustomApiBaseUrl();
   const normalized = endpointPath.startsWith('/') ? endpointPath : `/${endpointPath}`;
   return base ? `${base}${normalized}` : normalized;
 }
 
-export const CLOUDFLARE_WORKER_SOURCE = `// RahaL TV — Free Cloudflare Worker CORS Proxy
+export async function testCloudflareWorkerConnection(rawInput: string): Promise<{
+  ok: boolean;
+  normalizedUrl: string;
+  workerDetected: boolean;
+  proxyFetchOk: boolean;
+  status?: number;
+  message: string;
+}> {
+  const normalizedUrl = normalizeCustomApiBaseUrl(rawInput);
+  if (!normalizedUrl) {
+    return {
+      ok: false,
+      normalizedUrl: '',
+      workerDetected: false,
+      proxyFetchOk: false,
+      message: 'يرجى إدخال رابط Cloudflare Worker أولاً (مثال: https://rahaltv-proxy.yourname.workers.dev).',
+    };
+  }
+
+  let workerDetected = false;
+  let pingStatus = 0;
+  try {
+    const pingRes = await fetchWithTimeout(`${normalizedUrl}/?ping=1`, 8000);
+    pingStatus = pingRes.status;
+    const ct = pingRes.headers.get('content-type') || '';
+    if (ct.includes('application/json')) {
+      const json = (await pingRes.json().catch(() => null)) as {
+        ok?: boolean;
+        service?: string;
+      } | null;
+      if (json?.service === 'RahaL TV Proxy Worker') {
+        workerDetected = true;
+      } else {
+        return {
+          ok: false,
+          normalizedUrl,
+          workerDetected: false,
+          proxyFetchOk: false,
+          status: pingStatus,
+          message:
+            'الرابط يستجيب لكنه لا يعمل بكود RahaL TV Proxy Worker الصحيح (ربما ما زال بالكود الافتراضي Hello World). انسخ كود Cloudflare Worker من الزر أعلاه والصقه في Worker ثم اضغط Deploy.',
+        };
+      }
+    } else {
+      const txt = await pingRes.text().catch(() => '');
+      return {
+        ok: false,
+        normalizedUrl,
+        workerDetected: false,
+        proxyFetchOk: false,
+        status: pingStatus,
+        message: txt.toLowerCase().includes('hello world')
+          ? 'الـ Worker ما زال يعمل بكود Hello World الافتراضي. استبدل الكود بالكود المنسوخ أعلاه ثم اضغط Deploy.'
+          : `الرابط استجاب بحالة HTTP ${pingStatus} لكنه لم يُرجع استجابة RahaL TV Proxy Worker. تأكد من لصق كود cloudflare-worker.js بالكامل ونشره.`,
+      };
+    }
+  } catch {
+    return {
+      ok: false,
+      normalizedUrl,
+      workerDetected: false,
+      proxyFetchOk: false,
+      message:
+        'تعذر الاتصال برابط Cloudflare Worker من متصفحك (فشل الشبكة أو CORS أو حجب نطاق workers.dev في شبكتك). تأكد من صحة الرابط، وإذا كان نطاق workers.dev محجوباً في منطقتك اربط الـ Worker بـ Custom Domain من لوحة Cloudflare أو امسح الرابط لاستخدام السحب المدمج.',
+    };
+  }
+
+  try {
+    const proxyRes = await fetchWithTimeout(
+      `${normalizedUrl}/?url=${encodeURIComponent('https://example.com')}`,
+      9000
+    );
+    const body = await proxyRes.text().catch(() => '');
+    const proxyFetchOk = proxyRes.ok && body.toLowerCase().includes('example domain');
+    if (proxyFetchOk) {
+      return {
+        ok: true,
+        normalizedUrl,
+        workerDetected,
+        proxyFetchOk: true,
+        status: proxyRes.status,
+        message: 'الرابط متصل ويعمل بنجاح 100% لجلب صفحات المواقع وفحص السيرفرات!',
+      };
+    }
+    return {
+      ok: true,
+      normalizedUrl,
+      workerDetected,
+      proxyFetchOk: proxyRes.ok,
+      status: proxyRes.status,
+      message: `الـ Worker متصل (HTTP ${proxyRes.status}) وجاهز للاستخدام.`,
+    };
+  } catch {
+    return {
+      ok: false,
+      normalizedUrl,
+      workerDetected,
+      proxyFetchOk: false,
+      status: pingStatus,
+      message: 'الـ Worker يستجيب للفحص الأولي لكنه تعذر عليه جلب صفحة خارجية الاختبارية.',
+    };
+  }
+}
+
+export const CLOUDFLARE_WORKER_SOURCE = `// RahaL TV — Free Cloudflare Worker CORS Proxy (v2)
 // Deploy for free at https://dash.cloudflare.com (Workers & Pages -> Create Worker)
 // Free tier: 100,000 requests/day, zero sleep/cold-start, works permanently with GitHub Pages.
 
@@ -95,9 +230,11 @@ function isBlockedHost(hostname) {
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, HEAD, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Expose-Headers': 'X-Final-Url, X-Upstream-X-Frame-Options, X-Upstream-CSP',
+  'Access-Control-Expose-Headers':
+    'X-Final-Url, X-Upstream-Status, X-Upstream-X-Frame-Options, X-Upstream-CSP, X-Proxy-Worker',
+  'X-Proxy-Worker': 'rahaltv-v2',
 };
 
 export default {
@@ -107,12 +244,39 @@ export default {
     }
 
     const reqUrl = new URL(request.url);
-    const target = reqUrl.searchParams.get('url');
+    let target = (reqUrl.searchParams.get('url') || '').trim();
+
+    if (!target && request.method === 'POST') {
+      try {
+        const ct = request.headers.get('content-type') || '';
+        if (ct.includes('application/json')) {
+          const body = await request.json();
+          if (body && typeof body.url === 'string') {
+            target = body.url.trim();
+          }
+        }
+      } catch {
+        // Ignore invalid POST body
+      }
+    }
 
     if (!target) {
       return new Response(
-        JSON.stringify({ ok: true, service: 'RahaL TV Proxy Worker', usage: '?url=https://...' }),
-        { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json; charset=utf-8' } }
+        JSON.stringify({
+          ok: true,
+          service: 'RahaL TV Proxy Worker',
+          version: 2,
+          usage: '?url=https://...',
+          note: 'هذا رابط بروكسي السحب الخاص بـ RahaL TV. الصقه في لوحة الإدارة -> الإعدادات -> رابط بروكسي السحب.',
+        }),
+        {
+          status: 200,
+          headers: {
+            ...CORS_HEADERS,
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-store',
+          },
+        }
       );
     }
 
@@ -135,17 +299,20 @@ export default {
 
     try {
       const upstream = await fetch(parsedTarget.toString(), {
+        method: request.method === 'HEAD' ? 'HEAD' : 'GET',
         redirect: 'follow',
         headers: {
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7',
+          Accept:
+            'text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7',
           'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8',
+          'Upgrade-Insecure-Requests': '1',
           Referer: \`\${parsedTarget.origin}/\`,
         },
       });
 
-      const body = await upstream.arrayBuffer();
+      const body = request.method === 'HEAD' ? null : await upstream.arrayBuffer();
       const contentType = upstream.headers.get('content-type') || 'text/html; charset=utf-8';
       const upstreamXFrame = upstream.headers.get('x-frame-options') || '';
       const upstreamCsp = upstream.headers.get('content-security-policy') || '';
@@ -154,7 +321,10 @@ export default {
         headers: {
           ...CORS_HEADERS,
           'Content-Type': contentType,
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'public, max-age=120, stale-while-revalidate=300',
           'X-Final-Url': upstream.url || parsedTarget.toString(),
+          'X-Upstream-Status': String(upstream.status),
           ...(upstreamXFrame ? { 'X-Upstream-X-Frame-Options': upstreamXFrame } : {}),
           ...(upstreamCsp ? { 'X-Upstream-CSP': upstreamCsp } : {}),
         },
@@ -1468,19 +1638,21 @@ export async function findTrailerInBrowser(params: {
 }): Promise<string> {
   const { title = '', englishTitle = '', year = '', kind = 'movie' } = params;
 
-  try {
-    const res = await fetch(resolveApiEndpoint('/api/find-trailer'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, englishTitle, year, kind }),
-    });
-    const ct = res.headers.get('content-type') || '';
-    if (res.ok && ct.includes('application/json')) {
-      const json = (await res.json()) as { ok?: boolean; trailerUrl?: string };
-      if (json.ok && json.trailerUrl) return json.trailerUrl;
+  if (!shouldSkipBackendApiCalls()) {
+    try {
+      const res = await fetch(resolveApiEndpoint('/api/find-trailer'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, englishTitle, year, kind }),
+      });
+      const ct = res.headers.get('content-type') || '';
+      if (res.ok && ct.includes('application/json')) {
+        const json = (await res.json()) as { ok?: boolean; trailerUrl?: string };
+        if (json.ok && json.trailerUrl) return json.trailerUrl;
+      }
+    } catch {
+      // Static hosting fallback below
     }
-  } catch {
-    // Static hosting fallback below
   }
 
   const cleanEn = cleanText(englishTitle)
@@ -1648,15 +1820,21 @@ export async function filterServersInBrowser(urls: string[]): Promise<ServerFilt
           const xFrame = res.headers.get('X-Upstream-X-Frame-Options') || '';
           const csp = res.headers.get('X-Upstream-CSP') || '';
           const text = await res.text().catch(() => '');
-          return evaluateFetchedServerResponse(rawUrl, finalUrl, res.status, xFrame, csp, text.slice(0, 28000));
+          const isWorkerTransportError =
+            (res.status === 502 || res.status === 403 || res.status === 400) &&
+            text.includes('"ok":false');
+          if (!isWorkerTransportError) {
+            return evaluateFetchedServerResponse(
+              rawUrl,
+              finalUrl,
+              res.status,
+              xFrame,
+              csp,
+              text.slice(0, 28000)
+            );
+          }
         } catch {
-          return {
-            url: rawUrl,
-            ok: false,
-            faultType: 'error' as const,
-            httpStatus: 0,
-            reason: 'تعذر الوصول إلى السيرفر (السيرفر لا يستجيب)',
-          };
+          // Worker unreachable or blocked -> fall through to AllOrigins / no-cors fallback below
         }
       }
 
@@ -2321,24 +2499,26 @@ async function runFilterServersUnified(urls: string[]): Promise<Record<string, S
   for (let i = 0; i < uniqueUrls.length; i += 45) {
     const chunk = uniqueUrls.slice(i, i + 45);
     let backendResults: ServerFilterEntryResult[] | null = null;
-    try {
-      const response = await fetch(resolveApiEndpoint('/api/filter-servers'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ urls: chunk }),
-      });
-      const ct = response.headers.get('content-type') || '';
-      if (response.ok && ct.includes('application/json')) {
-        const json = (await response.json()) as {
-          ok?: boolean;
-          results?: ServerFilterEntryResult[];
-        };
-        if (json.ok && Array.isArray(json.results)) {
-          backendResults = json.results;
+    if (!shouldSkipBackendApiCalls()) {
+      try {
+        const response = await fetch(resolveApiEndpoint('/api/filter-servers'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls: chunk }),
+        });
+        const ct = response.headers.get('content-type') || '';
+        if (response.ok && ct.includes('application/json')) {
+          const json = (await response.json()) as {
+            ok?: boolean;
+            results?: ServerFilterEntryResult[];
+          };
+          if (json.ok && Array.isArray(json.results)) {
+            backendResults = json.results;
+          }
         }
+      } catch {
+        // Static hosting -> fall back to browser/Worker filter
       }
-    } catch {
-      // Static hosting -> fall back to browser/Worker filter
     }
 
     const entries = backendResults || (await filterServersInBrowser(chunk));

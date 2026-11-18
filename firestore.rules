@@ -233,6 +233,31 @@ service cloud.firestore {
       && data.updatedAt is timestamp;
     }
 
+    function isValidAdminActivityLog(data) {
+      return data.keys().hasAll([
+        'id', 'adminUid', 'adminName', 'rawCommand', 'understoodCommand',
+        'operationType', 'operationLabel', 'affectedCount', 'sampleTitles',
+        'status', 'note', 'createdAt'
+      ])
+      && data.keys().hasOnly([
+        'id', 'adminUid', 'adminName', 'rawCommand', 'understoodCommand',
+        'operationType', 'operationLabel', 'affectedCount', 'sampleTitles',
+        'status', 'note', 'createdAt'
+      ])
+      && isValidId(data.id)
+      && data.adminUid is string && data.adminUid.size() >= 1 && data.adminUid.size() <= 128
+      && data.adminName is string && data.adminName.size() >= 1 && data.adminName.size() <= 120
+      && data.rawCommand is string && data.rawCommand.size() >= 1 && data.rawCommand.size() <= 500
+      && data.understoodCommand is string && data.understoodCommand.size() >= 1 && data.understoodCommand.size() <= 500
+      && data.operationType is string && data.operationType.size() >= 1 && data.operationType.size() <= 80
+      && data.operationLabel is string && data.operationLabel.size() >= 1 && data.operationLabel.size() <= 120
+      && (data.affectedCount is int || data.affectedCount is float) && data.affectedCount >= 0
+      && data.sampleTitles is list && data.sampleTitles.size() <= 10 && (data.sampleTitles.size() == 0 || data.sampleTitles[0] is string)
+      && data.status in ['executed', 'queried', 'undone', 'blocked', 'failed']
+      && data.note is string && data.note.size() <= 500
+      && data.createdAt is timestamp;
+    }
+
     // 4. Collection Rules
     match /media/{mediaId} {
       allow get: if isValidId(mediaId);
@@ -359,6 +384,19 @@ service cloud.firestore {
         && incoming().diff(existing()).affectedKeys().hasOnly(['stars', 'updatedAt']);
       allow delete: if isValidRatingId(ratingId)
         && ((isSignedIn() && existing().userId == request.auth.uid) || isAdmin());
+    }
+
+    match /admin_activity_logs/{logId} {
+      allow get: if isAdmin() && isValidId(logId);
+      allow list: if isAdmin();
+      allow create: if isAdmin()
+        && isValidId(logId)
+        && isValidAdminActivityLog(incoming())
+        && incoming().id == logId
+        && incoming().adminUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(logId);
     }
   }
 }

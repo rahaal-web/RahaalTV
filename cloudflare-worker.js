@@ -1,4 +1,4 @@
-// RahaL TV — Free Cloudflare Worker CORS Proxy
+// RahaL TV — Free Cloudflare Worker CORS Proxy (v2)
 // Deploy for free at https://dash.cloudflare.com (Workers & Pages -> Create Worker)
 // Free tier: 100,000 requests/day, zero sleep/cold-start, works permanently with GitHub Pages.
 
@@ -26,9 +26,11 @@ function isBlockedHost(hostname) {
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, HEAD, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Expose-Headers': 'X-Final-Url, X-Upstream-X-Frame-Options, X-Upstream-CSP',
+  'Access-Control-Expose-Headers':
+    'X-Final-Url, X-Upstream-Status, X-Upstream-X-Frame-Options, X-Upstream-CSP, X-Proxy-Worker',
+  'X-Proxy-Worker': 'rahaltv-v2',
 };
 
 export default {
@@ -38,12 +40,39 @@ export default {
     }
 
     const reqUrl = new URL(request.url);
-    const target = reqUrl.searchParams.get('url');
+    let target = (reqUrl.searchParams.get('url') || '').trim();
+
+    if (!target && request.method === 'POST') {
+      try {
+        const ct = request.headers.get('content-type') || '';
+        if (ct.includes('application/json')) {
+          const body = await request.json();
+          if (body && typeof body.url === 'string') {
+            target = body.url.trim();
+          }
+        }
+      } catch {
+        // Ignore invalid POST body
+      }
+    }
 
     if (!target) {
       return new Response(
-        JSON.stringify({ ok: true, service: 'RahaL TV Proxy Worker', usage: '?url=https://...' }),
-        { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json; charset=utf-8' } }
+        JSON.stringify({
+          ok: true,
+          service: 'RahaL TV Proxy Worker',
+          version: 2,
+          usage: '?url=https://...',
+          note: 'هذا رابط بروكسي السحب الخاص بـ RahaL TV. الصقه في لوحة الإدارة -> الإعدادات -> رابط بروكسي السحب.',
+        }),
+        {
+          status: 200,
+          headers: {
+            ...CORS_HEADERS,
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-store',
+          },
+        }
       );
     }
 
@@ -66,17 +95,20 @@ export default {
 
     try {
       const upstream = await fetch(parsedTarget.toString(), {
+        method: request.method === 'HEAD' ? 'HEAD' : 'GET',
         redirect: 'follow',
         headers: {
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7',
+          Accept:
+            'text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7',
           'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8',
+          'Upgrade-Insecure-Requests': '1',
           Referer: `${parsedTarget.origin}/`,
         },
       });
 
-      const body = await upstream.arrayBuffer();
+      const body = request.method === 'HEAD' ? null : await upstream.arrayBuffer();
       const contentType = upstream.headers.get('content-type') || 'text/html; charset=utf-8';
       const xFrame = upstream.headers.get('x-frame-options') || '';
       const csp = upstream.headers.get('content-security-policy') || '';
@@ -86,9 +118,9 @@ export default {
           ...CORS_HEADERS,
           'Content-Type': contentType,
           'X-Content-Type-Options': 'nosniff',
-          'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
           'Cache-Control': 'public, max-age=120, stale-while-revalidate=300',
           'X-Final-Url': upstream.url || parsedTarget.toString(),
+          'X-Upstream-Status': String(upstream.status),
           ...(xFrame ? { 'X-Upstream-X-Frame-Options': xFrame } : {}),
           ...(csp ? { 'X-Upstream-CSP': csp } : {}),
         },

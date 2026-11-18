@@ -1,15 +1,20 @@
 import {
   collection,
+  doc,
   DocumentData,
   getCountFromServer,
   getDocs,
   limit,
+  onSnapshot,
   orderBy,
   query,
   QueryConstraint,
   QueryDocumentSnapshot,
+  serverTimestamp,
+  setDoc,
   startAfter,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 import {
   bulkDeleteMediaFromFirestore,
@@ -39,6 +44,7 @@ export interface AdminActivityLogEntry {
   sampleTitles: string[];
   status: 'executed' | 'queried' | 'undone' | 'blocked' | 'failed';
   note?: string;
+  storageSource?: 'local' | 'firestore';
 }
 
 export interface UndoBatchSnapshot {
@@ -48,6 +54,11 @@ export interface UndoBatchSnapshot {
   commandText: string;
   operationLabel: string;
   beforeItems: MediaItem[];
+}
+
+function sanitizeLogId(rawId: string): string {
+  const clean = rawId.replace(/[^a-zA-Z0-9_\-]/g, '_').slice(0, 128);
+  return clean || `log_${Date.now()}`;
 }
 
 export function loadActivityLog(): AdminActivityLogEntry[] {
@@ -62,32 +73,173 @@ export function loadActivityLog(): AdminActivityLogEntry[] {
   }
 }
 
-export function appendActivityLog(
-  entry: Omit<AdminActivityLogEntry, 'id' | 'timestamp'>
-): AdminActivityLogEntry[] {
-  const fullEntry: AdminActivityLogEntry = {
-    ...entry,
-    id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-    timestamp: Date.now(),
-  };
-  const current = loadActivityLog();
-  const next = [fullEntry, ...current].slice(0, MAX_LOG_ENTRIES);
+export function saveActivityLogLocal(entries: AdminActivityLogEntry[]): AdminActivityLogEntry[] {
+  const bounded = entries.slice(0, MAX_LOG_ENTRIES);
   if (typeof window !== 'undefined') {
     try {
-      localStorage.setItem(STORAGE_ACTIVITY_LOG, JSON.stringify(next));
+      localStorage.setItem(STORAGE_ACTIVITY_LOG, JSON.stringify(bounded));
     } catch {
       // Ignore quota errors
     }
   }
+  return bounded;
+}
+
+export function mergeActivityLogs(
+  cloudEntries: AdminActivityLogEntry[],
+  localEntries: AdminActivityLogEntry[]
+): AdminActivityLogEntry[] {
+  const map = new Map<string, AdminActivityLogEntry>();
+  for (const item of localEntries) {
+    map.set(item.id, item);
+  }
+  for (const item of cloudEntries) {
+    map.set(item.id, { ...item, storageSource: 'firestore' });
+  }
+  return Array.from(map.values())
+    .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+    .slice(0, MAX_LOG_ENTRIES);
+}
+
+export async function persistActivityLogToFirestore(
+  entry: AdminActivityLogEntry
+): Promise<boolean> {
+  if (!entry.adminUid) return false;
+  const cleanId = sanitizeLogId(entry.id);
+  const path = `admin_activity_logs/${cleanId}`;
+  try {
+    await setDoc(doc(db, 'admin_activity_logs', cleanId), {
+      id: cleanId,
+      adminUid: entry.adminUid.slice(0, 128),
+      adminName: (entry.adminName || 'مشرف').slice(0, 120) || 'مشرف',
+      rawCommand: (entry.rawCommand || '-').slice(0, 500) || '-',
+      understoodCommand: (entry.understoodCommand || '-').slice(0, 500) || '-',
+      operationType: (entry.operationType || 'unknown').slice(0, 80) || 'unknown',
+      operationLabel: (entry.operationLabel || 'عملية إدارية').slice(0, 120) || 'عملية إدارية',
+      affectedCount: Math.max(0, Math.round(Number(entry.affectedCount) || 0)),
+      sampleTitles: (entry.sampleTitles || [])
+        .slice(0, 10)
+        .map((t) => String(t || '').slice(0, 160))
+        .filter(Boolean),
+      status: entry.status,
+      note: (entry.note || '').slice(0, 500),
+      createdAt: serverTimestamp(),
+    });
+    return true;
+  } catch (error) {
+    try {
+      handleFirestoreError(error, OperationType.CREATE, path);
+    } catch {
+      // Keep localStorage copy active when Firestore rules are not deployed or offline
+    }
+    return false;
+  }
+}
+
+export function subscribeActivityLogsFromFirestore(
+  onUpdate: (entries: AdminActivityLogEntry[]) => void,
+  onSyncStatus?: (status: 'firestore+local' | 'local') => void
+): () => void {
+  const logsQuery = query(
+    collection(db, 'admin_activity_logs'),
+    orderBy('createdAt', 'desc'),
+    limit(60)
+  );
+
+  return onSnapshot(
+    logsQuery,
+    (snapshot) => {
+      const cloudEntries: AdminActivityLogEntry[] = snapshot.docs.map((docSnap) => {
+        const d = docSnap.data() as {
+          id?: string;
+          adminUid?: string;
+          adminName?: string;
+          rawCommand?: string;
+          understoodCommand?: string;
+          operationType?: string;
+          operationLabel?: string;
+          affectedCount?: number;
+          sampleTitles?: string[];
+          status?: AdminActivityLogEntry['status'];
+          note?: string;
+          createdAt?: { toMillis?: () => number };
+        };
+        const ts =
+          d.createdAt && typeof d.createdAt.toMillis === 'function'
+            ? d.createdAt.toMillis()
+            : Date.now();
+        return {
+          id: d.id || docSnap.id,
+          timestamp: ts,
+          adminUid: d.adminUid || '',
+          adminName: d.adminName || 'مشرف',
+          rawCommand: d.rawCommand || '',
+          understoodCommand: d.understoodCommand || '',
+          operationType: d.operationType || 'unknown',
+          operationLabel: d.operationLabel || '',
+          affectedCount: Number(d.affectedCount) || 0,
+          sampleTitles: Array.isArray(d.sampleTitles) ? d.sampleTitles : [],
+          status: d.status || 'executed',
+          note: d.note || undefined,
+          storageSource: 'firestore',
+        };
+      });
+      const merged = mergeActivityLogs(cloudEntries, loadActivityLog());
+      saveActivityLogLocal(merged);
+      onUpdate(merged);
+      onSyncStatus?.('firestore+local');
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, 'admin_activity_logs');
+      } catch {
+        // Fallback smoothly to localStorage if Firestore rules haven't been published yet
+      }
+      onSyncStatus?.('local');
+    }
+  );
+}
+
+export function appendActivityLog(
+  entry: Omit<AdminActivityLogEntry, 'id' | 'timestamp'>,
+  options?: { syncToFirestore?: boolean }
+): AdminActivityLogEntry[] {
+  const fullEntry: AdminActivityLogEntry = {
+    ...entry,
+    id: sanitizeLogId(`log_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`),
+    timestamp: Date.now(),
+    storageSource: 'local',
+  };
+  const current = loadActivityLog();
+  const next = saveActivityLogLocal([fullEntry, ...current]);
+  if (options?.syncToFirestore !== false && fullEntry.adminUid) {
+    void persistActivityLogToFirestore(fullEntry);
+  }
   return next;
 }
 
-export function clearActivityLog(): AdminActivityLogEntry[] {
+export async function clearActivityLog(syncToFirestore = true): Promise<AdminActivityLogEntry[]> {
   if (typeof window !== 'undefined') {
     try {
       localStorage.removeItem(STORAGE_ACTIVITY_LOG);
     } catch {
       // Ignore
+    }
+  }
+  if (syncToFirestore) {
+    try {
+      const snap = await getDocs(query(collection(db, 'admin_activity_logs'), limit(80)));
+      if (!snap.empty) {
+        const batch = writeBatch(db);
+        snap.docs.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+      }
+    } catch (error) {
+      try {
+        handleFirestoreError(error, OperationType.DELETE, 'admin_activity_logs');
+      } catch {
+        // Ignore if Firestore rules not yet deployed
+      }
     }
   }
   return [];
