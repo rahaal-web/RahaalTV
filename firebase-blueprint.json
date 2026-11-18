@@ -170,7 +170,8 @@
         "maintenanceMode": { "type": "boolean" },
         "maintenanceMessage": { "type": "string", "maxLength": 500 },
         "playerTheme": { "type": "object", "description": "Customizable internal video player theme configuration" },
-        "homeConfig": { "type": "object", "description": "Customizable homepage layout, hero, and ordered sections configuration" },
+        "homeConfig": { "type": "object", "description": "Customizable homepage layout, hero slider controls, and ordered sections configuration" },
+        "typography": { "type": "object", "description": "Customizable global font families and font sizes configuration" },
         "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -222,6 +223,21 @@
         "note",
         "createdAt"
       ]
+    },
+    "CustomFont": {
+      "title": "CustomFont",
+      "description": "Admin-uploaded or linked custom Arabic/English font asset stored per language slot.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "enum": ["arabic", "english"] },
+        "family": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "fileName": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "format": { "type": "string", "enum": ["woff2", "woff", "truetype", "opentype", "css"] },
+        "sourceUrl": { "type": "string", "minLength": 10, "maxLength": 950000 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "family", "fileName", "format", "sourceUrl", "updatedBy", "updatedAt"]
     }
   },
   "firestore": {
@@ -256,6 +272,10 @@
     "/admin_activity_logs/{logId}": {
       "schema": { "$ref": "#/entities/AdminActivityLog" },
       "description": "Immutable admin audit log of Local Admin Assistant commands and executions."
+    },
+    "/fonts/{fontId}": {
+      "schema": { "$ref": "#/entities/CustomFont" },
+      "description": "Publicly readable custom Arabic and English webfont assets uploaded by owner admins."
     }
   }
 }

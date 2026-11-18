@@ -12,6 +12,7 @@ import {
   Info,
   Layers,
   MessageSquarePlus,
+  Pause,
   Play,
   ShieldCheck,
   SlidersHorizontal,
@@ -267,41 +268,80 @@ export function HomeView({
   );
 
   const pinnedList = useMemo(() => catalog.filter((i) => i.pinned), [catalog]);
+  const maxHeroSlides = Math.min(12, Math.max(1, Number(homeConfig.heroMaxSlides) || 8));
+  const slideIntervalSec = Math.min(30, Math.max(2, Number(homeConfig.heroSlideIntervalSec) || 6));
+  const autoPlayEnabled = homeConfig.heroAutoPlay ?? true;
+  const showProgressBar = homeConfig.heroShowProgressBar ?? true;
+  const showThumbnails = homeConfig.heroShowThumbnails ?? true;
+  const showArrows = homeConfig.heroShowArrows ?? true;
+  const pauseOnHover = homeConfig.heroPauseOnHover ?? true;
+
   const heroSlides = useMemo(() => {
     if (catalog.length === 0) return [];
+    const byId = new Map(catalog.map((i) => [i.id, i]));
+    const customSelected = (homeConfig.heroSlideIds || [])
+      .map((id) => byId.get(id))
+      .filter((item): item is MediaItem => Boolean(item));
+
+    // When admin explicitly picked movies for the slider in manual mode, show strictly those in order
+    if (homeConfig.heroMode === 'manual' && customSelected.length > 0) {
+      return customSelected.slice(0, maxHeroSlides);
+    }
+
     const ordered: MediaItem[] = [];
     const seen = new Set<string>();
+
     if ((homeConfig.heroMode === 'manual' || homeConfig.heroMode === 'brand') && homeConfig.heroMediaId) {
-      const manualItem = catalog.find((i) => i.id === homeConfig.heroMediaId);
+      const manualItem = byId.get(homeConfig.heroMediaId);
       if (manualItem) {
         ordered.push(manualItem);
         seen.add(manualItem.id);
       }
     }
+
+    for (const item of customSelected) {
+      if (ordered.length >= maxHeroSlides) break;
+      if (!seen.has(item.id)) {
+        ordered.push(item);
+        seen.add(item.id);
+      }
+    }
+
     for (const item of pinnedList) {
-      if (ordered.length >= 8) break;
+      if (ordered.length >= maxHeroSlides) break;
       if (!seen.has(item.id)) {
         ordered.push(item);
         seen.add(item.id);
       }
     }
     for (const item of catalog) {
-      if (ordered.length >= 8) break;
+      if (ordered.length >= maxHeroSlides) break;
       if (!seen.has(item.id)) {
         ordered.push(item);
         seen.add(item.id);
       }
     }
-    return ordered.slice(0, 8);
-  }, [pinnedList, catalog, homeConfig.heroMode, homeConfig.heroMediaId]);
+    return ordered.slice(0, maxHeroSlides);
+  }, [
+    pinnedList,
+    catalog,
+    homeConfig.heroMode,
+    homeConfig.heroMediaId,
+    homeConfig.heroSlideIds,
+    maxHeroSlides,
+  ]);
 
   const [heroIndex, setHeroIndex] = useState(0);
-  const [heroPaused, setHeroPaused] = useState(false);
+  const [heroHovered, setHeroHovered] = useState(false);
+  const [heroPausedManual, setHeroPausedManual] = useState(false);
   const [dismissedBanner, setDismissedBanner] = useState(false);
 
   // Full Paginated Library (optional when toggled on by admin)
   const [libraryFilter, setLibraryFilter] = useState<'all' | 'movie' | 'series' | 'other'>('all');
   const [libraryPage, setLibraryPage] = useState(1);
+
+  const activeSlideIndex = heroSlides.length ? heroIndex % heroSlides.length : 0;
+  const isTimerPaused = heroPausedManual || (pauseOnHover && heroHovered);
 
   useEffect(() => {
     if (heroSlides.length > 0 && heroIndex >= heroSlides.length) {
@@ -310,18 +350,16 @@ export function HomeView({
   }, [heroSlides.length, heroIndex]);
 
   useEffect(() => {
-    if (homeConfig.heroMode !== 'auto' || heroSlides.length <= 1 || heroPaused) return;
-    const interval = setInterval(() => {
+    if (!autoPlayEnabled || heroSlides.length <= 1 || isTimerPaused) return;
+    const timer = setTimeout(() => {
       setHeroIndex((prev) => (prev + 1) % heroSlides.length);
-    }, 6500);
-    return () => clearInterval(interval);
-  }, [homeConfig.heroMode, heroSlides.length, heroPaused]);
+    }, slideIntervalSec * 1000);
+    return () => clearTimeout(timer);
+  }, [autoPlayEnabled, heroSlides.length, isTimerPaused, slideIntervalSec, activeSlideIndex]);
 
   useEffect(() => {
     setLibraryPage(1);
   }, [libraryFilter, catalog.length]);
-
-  const activeSlideIndex = heroSlides.length ? heroIndex % heroSlides.length : 0;
 
   const activeHero = useMemo(() => {
     if (catalog.length === 0) return null;
@@ -456,8 +494,8 @@ export function HomeView({
         return (
           <section
             className="relative overflow-hidden bg-[#0f0f0f]"
-            onMouseEnter={() => setHeroPaused(true)}
-            onMouseLeave={() => setHeroPaused(false)}
+            onMouseEnter={() => setHeroHovered(true)}
+            onMouseLeave={() => setHeroHovered(false)}
           >
             <div className="relative min-h-[540px] sm:min-h-[600px] lg:min-h-[660px] flex flex-col justify-end">
               {/* Background Visual Layer */}
@@ -503,7 +541,10 @@ export function HomeView({
                     </div>
 
                     {/* Balanced Compact Headline */}
-                    <h1 className="font-display text-base sm:text-lg lg:text-[22px] font-extrabold text-white leading-[1.3] line-clamp-2">
+                    <h1
+                      style={{ fontSize: 'var(--rtv-hero-title-size, 22px)' }}
+                      className="font-display font-extrabold text-white leading-[1.3] line-clamp-2"
+                    >
                       {heroTitle}
                     </h1>
 
@@ -600,53 +641,98 @@ export function HomeView({
                     )}
                   </div>
 
-                  {/* Left Controls: Circular Prev/Next Arrows + Progress Dots */}
-                  {heroSlides.length > 1 && (
+                  {/* Left Controls: Circular Prev/Next Arrows + Play/Pause + Animated Progress Bar + Dots */}
+                  {heroSlides.length > 1 && (showArrows || showProgressBar) && (
                     <div className="flex flex-col items-start lg:items-end gap-2.5 shrink-0">
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setHeroIndex(
-                              (prev) => (prev - 1 + heroSlides.length) % heroSlides.length
-                            )
-                          }
-                          aria-label="العرض السابق"
-                          className="inline-flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-black/65 border border-white/15 text-white hover:bg-[#E50914] hover:border-[#E50914] transition-colors cursor-pointer"
-                        >
-                          <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setHeroIndex((prev) => (prev + 1) % heroSlides.length)}
-                          aria-label="العرض التالي"
-                          className="inline-flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-black/65 border border-white/15 text-white hover:bg-[#E50914] hover:border-[#E50914] transition-colors cursor-pointer"
-                        >
-                          <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5" />
-                        </button>
-                      </div>
-
-                      <div className="flex items-center gap-1.5">
-                        {heroSlides.map((item, idx) => (
+                      {showArrows && (
+                        <div className="flex items-center gap-2">
                           <button
-                            key={item.id}
                             type="button"
-                            onClick={() => setHeroIndex(idx)}
-                            aria-label={`عرض ${item.title}`}
-                            className={`h-1 rounded-full transition-all cursor-pointer ${
-                              idx === activeSlideIndex
-                                ? 'w-6 bg-[#E50914]'
-                                : 'w-1.5 bg-white/35 hover:bg-white/65'
-                            }`}
-                          />
-                        ))}
-                      </div>
+                            onClick={() =>
+                              setHeroIndex(
+                                (prev) => (prev - 1 + heroSlides.length) % heroSlides.length
+                              )
+                            }
+                            aria-label="العرض السابق"
+                            className="inline-flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-black/65 border border-white/15 text-white hover:bg-[#E50914] hover:border-[#E50914] transition-colors cursor-pointer"
+                          >
+                            <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5" />
+                          </button>
+                          {autoPlayEnabled && (
+                            <button
+                              type="button"
+                              onClick={() => setHeroPausedManual((p) => !p)}
+                              aria-label={heroPausedManual ? 'تشغيل السلايدر التلقائي' : 'إيقاف السلايدر مؤقتاً'}
+                              title={heroPausedManual ? 'استئناف التقليب التلقائي' : 'إيقاف مؤقت'}
+                              className="inline-flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-black/65 border border-white/15 text-white hover:bg-white/20 transition-colors cursor-pointer"
+                            >
+                              {heroPausedManual ? (
+                                <Play className="w-3.5 h-3.5 fill-current" />
+                              ) : (
+                                <Pause className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setHeroIndex((prev) => (prev + 1) % heroSlides.length)}
+                            aria-label="العرض التالي"
+                            className="inline-flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-black/65 border border-white/15 text-white hover:bg-[#E50914] hover:border-[#E50914] transition-colors cursor-pointer"
+                          >
+                            <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5" />
+                          </button>
+                        </div>
+                      )}
+
+                      {showProgressBar && autoPlayEnabled && (
+                        <div className="w-44 sm:w-56 space-y-1">
+                          <div className="flex items-center justify-between text-[10px] font-bold text-white/80 font-latin tabular-nums">
+                            <span>
+                              {activeSlideIndex + 1} / {heroSlides.length}
+                            </span>
+                            <span>
+                              {isTimerPaused ? 'متوقف مؤقتاً' : `كل ${slideIntervalSec} ث`}
+                            </span>
+                          </div>
+                          <div className="h-1.5 w-full rounded-full bg-white/20 overflow-hidden shadow-inner">
+                            <div
+                              key={`hero-bar-${activeSlideIndex}-${slideIntervalSec}-${autoPlayEnabled}`}
+                              className="rtv-slider-progress-fill h-full w-full rounded-full bg-gradient-to-l from-[#E50914] via-[#ff3b30] to-[#f9c400]"
+                              style={{
+                                animationName: 'rtv-slider-progress',
+                                animationDuration: `${slideIntervalSec}s`,
+                                animationTimingFunction: 'linear',
+                                animationFillMode: 'forwards',
+                                animationPlayState: isTimerPaused ? 'paused' : 'running',
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {showArrows && (
+                        <div className="flex items-center gap-1.5">
+                          {heroSlides.map((item, idx) => (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => setHeroIndex(idx)}
+                              aria-label={`عرض ${item.title}`}
+                              className={`h-1 rounded-full transition-all cursor-pointer ${
+                                idx === activeSlideIndex
+                                  ? 'w-6 bg-[#E50914]'
+                                  : 'w-1.5 bg-white/35 hover:bg-white/65'
+                              }`}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
 
-                {/* 8 Square Poster Thumbnails Strip (Desktop: 64x64px, Gap: 12px, Radius: 8px, Active Border: 2px #E50914, Zero Text) */}
-                {heroSlides.length > 1 && (
+                {/* Square Poster Thumbnails Strip */}
+                {heroSlides.length > 1 && showThumbnails && (
                   <div className="flex items-center justify-center pt-1">
                     <div
                       className="flex items-center justify-center gap-[12px] overflow-x-auto no-scrollbar px-2 py-1.5 max-w-full"
@@ -685,6 +771,23 @@ export function HomeView({
                   </div>
                 )}
               </div>
+
+              {/* Full-Width Moving Slider Progress Bar along the bottom edge */}
+              {heroSlides.length > 1 && showProgressBar && autoPlayEnabled && (
+                <div className="relative z-20 h-[3px] w-full bg-white/10 overflow-hidden">
+                  <div
+                    key={`hero-bottom-bar-${activeSlideIndex}-${slideIntervalSec}-${autoPlayEnabled}`}
+                    className="rtv-slider-progress-fill h-full w-full bg-gradient-to-l from-[#E50914] via-[#ff453a] to-[#f9c400] shadow-[0_0_12px_rgba(229,9,20,0.75)]"
+                    style={{
+                      animationName: 'rtv-slider-progress',
+                      animationDuration: `${slideIntervalSec}s`,
+                      animationTimingFunction: 'linear',
+                      animationFillMode: 'forwards',
+                      animationPlayState: isTimerPaused ? 'paused' : 'running',
+                    }}
+                  />
+                </div>
+              )}
             </div>
           </section>
         );
@@ -786,7 +889,10 @@ export function HomeView({
               <div className="space-y-1">
                 <div className="flex items-center gap-2.5">
                   {getSectionIcon(section.source)}
-                  <h2 className="font-display text-xl sm:text-2xl font-extrabold text-white">
+                  <h2
+                    style={{ fontSize: 'var(--rtv-section-title-size, 22px)' }}
+                    className="font-display font-extrabold text-white"
+                  >
                     {section.title}
                   </h2>
                 </div>

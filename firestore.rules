@@ -209,6 +209,9 @@ service cloud.firestore {
         && cfg.keys().hasOnly([
           'showHero', 'heroMode', 'heroMediaId', 'heroBadgeText', 'heroHeadline',
           'heroDescription', 'heroPrimaryCta', 'heroShowHighlights',
+          'heroAutoPlay', 'heroSlideIntervalSec', 'heroShowProgressBar',
+          'heroShowThumbnails', 'heroShowArrows', 'heroPauseOnHover',
+          'heroMaxSlides', 'heroSlideIds',
           'showQuickFilters', 'showCategoryBar', 'showFullLibrary',
           'showRequestBanner', 'cardsPerRow', 'cardStyle', 'sections'
         ])
@@ -220,6 +223,14 @@ service cloud.firestore {
         && cfg.heroDescription is string && cfg.heroDescription.size() <= 320
         && cfg.heroPrimaryCta is string && cfg.heroPrimaryCta.size() >= 1 && cfg.heroPrimaryCta.size() <= 40
         && cfg.heroShowHighlights is bool
+        && (!('heroAutoPlay' in cfg) || cfg.heroAutoPlay is bool)
+        && (!('heroSlideIntervalSec' in cfg) || ((cfg.heroSlideIntervalSec is int || cfg.heroSlideIntervalSec is float) && cfg.heroSlideIntervalSec >= 2 && cfg.heroSlideIntervalSec <= 30))
+        && (!('heroShowProgressBar' in cfg) || cfg.heroShowProgressBar is bool)
+        && (!('heroShowThumbnails' in cfg) || cfg.heroShowThumbnails is bool)
+        && (!('heroShowArrows' in cfg) || cfg.heroShowArrows is bool)
+        && (!('heroPauseOnHover' in cfg) || cfg.heroPauseOnHover is bool)
+        && (!('heroMaxSlides' in cfg) || ((cfg.heroMaxSlides is int || cfg.heroMaxSlides is float) && cfg.heroMaxSlides >= 1 && cfg.heroMaxSlides <= 12))
+        && (!('heroSlideIds' in cfg) || (cfg.heroSlideIds is list && cfg.heroSlideIds.size() <= 12 && (cfg.heroSlideIds.size() == 0 || cfg.heroSlideIds[0] is string)))
         && cfg.showQuickFilters is bool
         && cfg.showCategoryBar is bool
         && cfg.showFullLibrary is bool
@@ -230,12 +241,47 @@ service cloud.firestore {
         && cfg.sections[0] is map;
     }
 
+    function isValidTypographyConfig(typo) {
+      return typo is map
+        && typo.keys().hasAll([
+          'arabicFont', 'englishFont', 'baseFontSizePx', 'heroTitleSizePx',
+          'detailTitleSizePx', 'cardTitleSizePx', 'sectionTitleSizePx'
+        ])
+        && typo.keys().hasOnly([
+          'arabicFont', 'englishFont', 'baseFontSizePx', 'heroTitleSizePx',
+          'detailTitleSizePx', 'cardTitleSizePx', 'sectionTitleSizePx'
+        ])
+        && typo.arabicFont is string && typo.arabicFont.size() >= 1 && typo.arabicFont.size() <= 60
+        && typo.englishFont is string && typo.englishFont.size() >= 1 && typo.englishFont.size() <= 60
+        && (typo.baseFontSizePx is int || typo.baseFontSizePx is float) && typo.baseFontSizePx >= 13 && typo.baseFontSizePx <= 20
+        && (typo.heroTitleSizePx is int || typo.heroTitleSizePx is float) && typo.heroTitleSizePx >= 16 && typo.heroTitleSizePx <= 42
+        && (typo.detailTitleSizePx is int || typo.detailTitleSizePx is float) && typo.detailTitleSizePx >= 16 && typo.detailTitleSizePx <= 38
+        && (typo.cardTitleSizePx is int || typo.cardTitleSizePx is float) && typo.cardTitleSizePx >= 11 && typo.cardTitleSizePx <= 20
+        && (typo.sectionTitleSizePx is int || typo.sectionTitleSizePx is float) && typo.sectionTitleSizePx >= 16 && typo.sectionTitleSizePx <= 32;
+    }
+
+    function isValidCustomFont(data) {
+      return data.keys().hasAll([
+        'id', 'family', 'fileName', 'format', 'sourceUrl', 'updatedBy', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'id', 'family', 'fileName', 'format', 'sourceUrl', 'updatedBy', 'updatedAt'
+      ])
+      && data.id in ['arabic', 'english']
+      && data.family is string && data.family.size() >= 1 && data.family.size() <= 80
+      && data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 160
+      && data.format in ['woff2', 'woff', 'truetype', 'opentype', 'css']
+      && data.sourceUrl is string && data.sourceUrl.size() >= 10 && data.sourceUrl.size() <= 950000
+      && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
+      && data.updatedAt is timestamp;
+    }
+
     function isValidSiteSettings(data) {
       return data.keys().hasAll([
         'siteName', 'tagline', 'announcementText', 'tickerEnabled', 'featuredLimit', 'maintenanceMode', 'maintenanceMessage', 'updatedBy', 'updatedAt'
       ])
       && data.keys().hasOnly([
-        'siteName', 'tagline', 'announcementText', 'tickerEnabled', 'featuredLimit', 'maintenanceMode', 'maintenanceMessage', 'updatedBy', 'updatedAt', 'playerTheme', 'homeConfig'
+        'siteName', 'tagline', 'announcementText', 'tickerEnabled', 'featuredLimit', 'maintenanceMode', 'maintenanceMessage', 'updatedBy', 'updatedAt', 'playerTheme', 'homeConfig', 'typography'
       ])
       && data.siteName is string && data.siteName.size() >= 1 && data.siteName.size() <= 80
       && data.tagline is string && data.tagline.size() >= 1 && data.tagline.size() <= 300
@@ -246,6 +292,7 @@ service cloud.firestore {
       && data.maintenanceMessage is string && data.maintenanceMessage.size() <= 500
       && (!('playerTheme' in data) || isValidPlayerTheme(data.playerTheme))
       && (!('homeConfig' in data) || isValidHomeConfig(data.homeConfig))
+      && (!('typography' in data) || isValidTypographyConfig(data.typography))
       && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
       && data.updatedAt is timestamp;
     }
@@ -431,6 +478,18 @@ service cloud.firestore {
         && incoming().createdAt == request.time;
       allow update: if false;
       allow delete: if isOwnerAdmin() && isValidId(logId);
+    }
+
+    match /fonts/{fontId} {
+      allow get: if isValidId(fontId);
+      allow list: if true;
+      allow create, update: if isOwnerAdmin()
+        && fontId in ['arabic', 'english']
+        && isValidCustomFont(incoming())
+        && incoming().id == fontId
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+      allow delete: if isOwnerAdmin() && fontId in ['arabic', 'english'];
     }
   }
 }

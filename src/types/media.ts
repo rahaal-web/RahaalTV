@@ -191,6 +191,14 @@ export interface HomeLayoutConfig {
   heroDescription: string;
   heroPrimaryCta: string;
   heroShowHighlights: boolean;
+  heroAutoPlay?: boolean;
+  heroSlideIntervalSec?: number;
+  heroShowProgressBar?: boolean;
+  heroShowThumbnails?: boolean;
+  heroShowArrows?: boolean;
+  heroPauseOnHover?: boolean;
+  heroMaxSlides?: number;
+  heroSlideIds?: string[];
   showQuickFilters: boolean;
   showCategoryBar: boolean;
   showFullLibrary: boolean;
@@ -198,6 +206,29 @@ export interface HomeLayoutConfig {
   cardsPerRow: 4 | 5 | 6;
   cardStyle: 'clean' | 'classic';
   sections: HomeSectionConfig[];
+}
+
+export type CustomFontSlot = 'arabic' | 'english';
+
+export type CustomFontFormat = 'woff2' | 'woff' | 'truetype' | 'opentype' | 'css';
+
+export interface CustomFontRecord {
+  id: CustomFontSlot;
+  family: string;
+  fileName: string;
+  format: CustomFontFormat;
+  sourceUrl: string;
+  updatedBy?: string;
+}
+
+export interface TypographyConfig {
+  arabicFont: string;
+  englishFont: string;
+  baseFontSizePx: number;
+  heroTitleSizePx: number;
+  detailTitleSizePx: number;
+  cardTitleSizePx: number;
+  sectionTitleSizePx: number;
 }
 
 export interface SiteSettings {
@@ -210,6 +241,7 @@ export interface SiteSettings {
   maintenanceMessage: string;
   playerTheme?: PlayerThemeConfig;
   homeConfig?: HomeLayoutConfig;
+  typography?: TypographyConfig;
 }
 
 export interface UserProfileRecord {

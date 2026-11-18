@@ -48,6 +48,14 @@ export const DEFAULT_HOME_CONFIG: HomeLayoutConfig = {
   heroDescription: '',
   heroPrimaryCta: 'مشاهدة الآن',
   heroShowHighlights: true,
+  heroAutoPlay: true,
+  heroSlideIntervalSec: 6,
+  heroShowProgressBar: true,
+  heroShowThumbnails: true,
+  heroShowArrows: true,
+  heroPauseOnHover: true,
+  heroMaxSlides: 8,
+  heroSlideIds: [],
   showQuickFilters: true,
   showCategoryBar: false,
   showFullLibrary: false,
@@ -135,6 +143,26 @@ export function normalizeHomeConfig(
     ? raw.sections.slice(0, 12).map((sec, idx) => normalizeHomeSection(sec, idx))
     : DEFAULT_HOME_SECTIONS.map((s) => ({ ...s }));
 
+  const intervalNum = Number(raw.heroSlideIntervalSec);
+  const heroSlideIntervalSec = Number.isFinite(intervalNum)
+    ? Math.min(30, Math.max(2, Math.round(intervalNum)))
+    : DEFAULT_HOME_CONFIG.heroSlideIntervalSec!;
+
+  const maxSlidesNum = Number(raw.heroMaxSlides);
+  const heroMaxSlides = Number.isFinite(maxSlidesNum)
+    ? Math.min(12, Math.max(1, Math.round(maxSlidesNum)))
+    : DEFAULT_HOME_CONFIG.heroMaxSlides!;
+
+  const heroSlideIds = Array.isArray(raw.heroSlideIds)
+    ? Array.from(
+        new Set(
+          raw.heroSlideIds
+            .map((id) => String(id || '').trim().slice(0, 128))
+            .filter(Boolean)
+        )
+      ).slice(0, 12)
+    : [];
+
   return {
     showHero: raw.showHero ?? true,
     heroMode,
@@ -152,6 +180,14 @@ export function normalizeHomeConfig(
         ? raw.heroPrimaryCta.trim().slice(0, 40)
         : DEFAULT_HOME_CONFIG.heroPrimaryCta,
     heroShowHighlights: raw.heroShowHighlights ?? true,
+    heroAutoPlay: raw.heroAutoPlay ?? true,
+    heroSlideIntervalSec,
+    heroShowProgressBar: raw.heroShowProgressBar ?? true,
+    heroShowThumbnails: raw.heroShowThumbnails ?? true,
+    heroShowArrows: raw.heroShowArrows ?? true,
+    heroPauseOnHover: raw.heroPauseOnHover ?? true,
+    heroMaxSlides,
+    heroSlideIds,
     showQuickFilters: raw.showQuickFilters ?? true,
     showCategoryBar: raw.showCategoryBar ?? false,
     showFullLibrary: raw.showFullLibrary ?? false,

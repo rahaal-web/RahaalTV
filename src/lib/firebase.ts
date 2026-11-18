@@ -27,6 +27,8 @@ import fallbackBackdropImg from '../assets/images/hero_scifi_backdrop_1794813333
 import fallbackPosterImg from '../assets/images/poster_running_man_1794813333683.jpg';
 import {
   AdminPrivilegeRole,
+  CustomFontRecord,
+  CustomFontSlot,
   MediaItem,
   RequestStatus,
   SiteSettings,
@@ -42,6 +44,10 @@ import {
 } from './permalink';
 import { DEFAULT_PLAYER_THEME, saveStoredPlayerTheme } from './playerTheme';
 import { DEFAULT_HOME_CONFIG, saveStoredHomeConfig } from './homeConfig';
+import {
+  DEFAULT_TYPOGRAPHY_CONFIG,
+  saveStoredTypographyConfig,
+} from './typographyConfig';
 import { evaluateImageQuality } from './mediaImages';
 
 const app = initializeApp(firebaseConfig);
@@ -842,6 +848,9 @@ export async function saveSiteSettingsToFirestore(
   const path = 'settings/general';
   const normalizedTheme = saveStoredPlayerTheme(settings.playerTheme || DEFAULT_PLAYER_THEME);
   const normalizedHome = saveStoredHomeConfig(settings.homeConfig || DEFAULT_HOME_CONFIG);
+  const normalizedTypography = saveStoredTypographyConfig(
+    settings.typography || DEFAULT_TYPOGRAPHY_CONFIG
+  );
   const corePayload = {
     siteName: settings.siteName.trim().slice(0, 80) || 'RahaL TV',
     tagline: settings.tagline.trim().slice(0, 300) || 'منصة RahaL TV الترفيهية',
@@ -859,6 +868,7 @@ export async function saveSiteSettingsToFirestore(
     await setDoc(doc(db, 'settings', 'general'), {
       ...corePayload,
       homeConfig: normalizedHome,
+      typography: normalizedTypography,
     });
     return { syncedHomeToCloud: true };
   } catch (error) {
@@ -875,6 +885,37 @@ export async function saveSiteSettingsToFirestore(
       }
     }
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function saveCustomFontToFirestore(
+  font: CustomFontRecord,
+  uid: string
+): Promise<void> {
+  const slot: CustomFontSlot = font.id === 'english' ? 'english' : 'arabic';
+  const path = `fonts/${slot}`;
+  try {
+    await setDoc(doc(db, 'fonts', slot), {
+      id: slot,
+      family: String(font.family || `RahaLCustom_${slot}`).trim().slice(0, 80),
+      fileName: String(font.fileName || 'custom-font').trim().slice(0, 160),
+      format: font.format,
+      sourceUrl: String(font.sourceUrl || '').trim().slice(0, 950000),
+      updatedBy: uid,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteCustomFontFromFirestore(slot: CustomFontSlot): Promise<void> {
+  const cleanSlot: CustomFontSlot = slot === 'english' ? 'english' : 'arabic';
+  const path = `fonts/${cleanSlot}`;
+  try {
+    await deleteDoc(doc(db, 'fonts', cleanSlot));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 

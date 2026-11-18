@@ -23,6 +23,13 @@ import { loadStoredHomeConfig, saveStoredHomeConfig } from './lib/homeConfig';
 import { FALLBACK_BACKDROP, FALLBACK_POSTER, resolveMediaAssetUrl } from './lib/mediaFilters';
 import { loadStoredPlayerTheme, saveStoredPlayerTheme } from './lib/playerTheme';
 import {
+  applyTypographyToDocument,
+  loadStoredCustomFonts,
+  loadStoredTypographyConfig,
+  saveStoredCustomFonts,
+  saveStoredTypographyConfig,
+} from './lib/typographyConfig';
+import {
   findMediaByRouteKey,
   getAppBasePrefix,
   readWatchRouteFromLocation,
@@ -43,6 +50,8 @@ import {
   AdminPrivilegeRole,
   AdminRoleRecord,
   CatalogFilterState,
+  CustomFontRecord,
+  CustomFontSlot,
   MediaItem,
   SiteSettings,
   UserProfileRecord,
@@ -73,6 +82,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
     'نقوم حاليًا بإجراء أعمال صيانة وتحديثات تقنية لتحسين جودة السيرفرات وتجربة المشاهدة. سنعود للعمل قريبًا، شكرًا لتفهمكم.',
   playerTheme: loadStoredPlayerTheme(),
   homeConfig: loadStoredHomeConfig(),
+  typography: loadStoredTypographyConfig(),
 };
 
 const STORAGE_WATCHLIST = 'moov_watchlist_ids';
@@ -127,6 +137,9 @@ export default function App() {
   >({});
   const [initialMediaLoaded, setInitialMediaLoaded] = useState(false);
   const [siteSettings, setSiteSettings] = useState<SiteSettings>(DEFAULT_SETTINGS);
+  const [customFonts, setCustomFonts] = useState<
+    Partial<Record<CustomFontSlot, CustomFontRecord>>
+  >(() => loadStoredCustomFonts());
   const [visitorRequests, setVisitorRequests] = useState<VisitorRequest[]>([]);
   const [usersList, setUsersList] = useState<UserProfileRecord[]>([]);
   const [adminsList, setAdminsList] = useState<AdminRoleRecord[]>([]);
@@ -221,6 +234,10 @@ export default function App() {
       document.title = `${siteSettings.siteName} — افلام ومسلسلات بجودة عالية بدون تقطيع`;
     }
   }, [view, selectedMedia, siteSettings.siteName]);
+
+  useEffect(() => {
+    applyTypographyToDocument(siteSettings.typography, customFonts);
+  }, [siteSettings.typography, customFonts]);
 
   useEffect(() => {
     try {
@@ -321,6 +338,9 @@ export default function App() {
           const syncedHome = data.homeConfig
             ? saveStoredHomeConfig(data.homeConfig)
             : loadStoredHomeConfig();
+          const syncedTypography = data.typography
+            ? saveStoredTypographyConfig(data.typography)
+            : loadStoredTypographyConfig();
           setSiteSettings({
             siteName: data.siteName || DEFAULT_SETTINGS.siteName,
             tagline: data.tagline || DEFAULT_SETTINGS.tagline,
@@ -334,6 +354,7 @@ export default function App() {
                 : DEFAULT_SETTINGS.maintenanceMessage,
             playerTheme: syncedTheme,
             homeConfig: syncedHome,
+            typography: syncedTypography,
           });
         }
       },
@@ -342,6 +363,40 @@ export default function App() {
           handleFirestoreError(error, OperationType.GET, settingsPath);
         } catch {
           // Fallback to default settings if settings doc cannot be fetched
+        }
+      }
+    );
+
+    const fontsPath = 'fonts';
+    const unsubFonts = onSnapshot(
+      collection(db, fontsPath),
+      (snapshot) => {
+        const nextFonts: Partial<Record<CustomFontSlot, CustomFontRecord>> = {};
+        snapshot.docs.forEach((d) => {
+          const raw = d.data() as Partial<CustomFontRecord>;
+          const slot: CustomFontSlot | null =
+            d.id === 'arabic' || raw.id === 'arabic'
+              ? 'arabic'
+              : d.id === 'english' || raw.id === 'english'
+                ? 'english'
+                : null;
+          if (!slot || !raw.sourceUrl || !raw.family) return;
+          nextFonts[slot] = {
+            id: slot,
+            family: String(raw.family),
+            fileName: String(raw.fileName || 'custom-font'),
+            format: raw.format || 'woff2',
+            sourceUrl: String(raw.sourceUrl),
+          };
+        });
+        saveStoredCustomFonts(nextFonts);
+        setCustomFonts(nextFonts);
+      },
+      (error) => {
+        try {
+          handleFirestoreError(error, OperationType.LIST, fontsPath);
+        } catch {
+          // Keep locally stored custom fonts if cloud rules for /fonts are not yet deployed
         }
       }
     );
@@ -384,6 +439,7 @@ export default function App() {
     return () => {
       unsubMedia();
       unsubSettings();
+      unsubFonts();
       unsubRatings();
     };
   }, []);
@@ -646,6 +702,11 @@ export default function App() {
           usersList={usersList}
           adminsList={adminsList}
           siteSettings={siteSettings}
+          customFonts={customFonts}
+          onCustomFontsChange={(next) => {
+            saveStoredCustomFonts(next);
+            setCustomFonts(next);
+          }}
           requestedTab={adminRequestedTab}
           onExitDashboard={navigateHome}
           onPreviewMedia={(item) => handleSelectMedia(item, false)}

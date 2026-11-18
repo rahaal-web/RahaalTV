@@ -39,6 +39,7 @@ import {
   Star,
   Trash2,
   Tv,
+  Type,
   Users,
   Wand2,
   Wrench,
@@ -50,6 +51,7 @@ import { AdminAiBulkEditor } from './AdminAiBulkEditor';
 import { AdminImageManagerPanel } from './AdminImageManagerPanel';
 import { HomeBuilderPanel } from './HomeBuilderPanel';
 import { MediaPreviewModal } from './MediaPreviewModal';
+import { TypographyPanel } from './TypographyPanel';
 import {
   evaluateImageQuality,
   getBackdropInfo,
@@ -65,12 +67,14 @@ import {
   bulkDeleteMediaFromFirestore,
   bulkSaveMediaToFirestore,
   createAdminAccountInFirebase,
+  deleteCustomFontFromFirestore,
   deleteMediaFromFirestore,
   deleteVisitorRequestFromFirestore,
   formatFirestoreWriteError,
   getFirebaseAuthErrorMessage,
   grantAdminRoleInFirestore,
   revokeAdminRoleFromFirestore,
+  saveCustomFontToFirestore,
   saveMediaToFirestore,
   saveSiteSettingsToFirestore,
   seedCatalogToFirestore,
@@ -113,9 +117,19 @@ import {
   saveStoredHomeConfig,
 } from '../lib/homeConfig';
 import {
+  applyTypographyToDocument,
+  loadStoredCustomFonts,
+  loadStoredTypographyConfig,
+  normalizeTypographyConfig,
+  saveStoredCustomFonts,
+  saveStoredTypographyConfig,
+} from '../lib/typographyConfig';
+import {
   AdminPrivilegeRole,
   AdminRoleRecord,
   CastMember,
+  CustomFontRecord,
+  CustomFontSlot,
   DownloadMirror,
   EpisodeItem,
   HomeLayoutConfig,
@@ -126,6 +140,7 @@ import {
   SeasonItem,
   SiteSettings,
   StreamServer,
+  TypographyConfig,
   UserProfileRecord,
   VisitorRequest,
 } from '../types/media';
@@ -133,6 +148,7 @@ import {
 export type AdminTab =
   | 'overview'
   | 'home_builder'
+  | 'typography'
   | 'catalog'
   | 'images'
   | 'ai_editor'
@@ -156,6 +172,8 @@ interface AdminDashboardViewProps {
   usersList: UserProfileRecord[];
   adminsList: AdminRoleRecord[];
   siteSettings: SiteSettings;
+  customFonts?: Partial<Record<CustomFontSlot, CustomFontRecord>>;
+  onCustomFontsChange?: (next: Partial<Record<CustomFontSlot, CustomFontRecord>>) => void;
   requestedTab?: { tab: AdminTab; nonce: number };
   onExitDashboard: () => void;
   onPreviewMedia: (item: MediaItem) => void;
@@ -435,6 +453,8 @@ export function AdminDashboardView({
   usersList,
   adminsList,
   siteSettings,
+  customFonts,
+  onCustomFontsChange,
   requestedTab,
   onExitDashboard,
   onPreviewMedia,
@@ -548,6 +568,7 @@ export function AdminDashboardView({
     ...siteSettings,
     playerTheme: normalizePlayerTheme(siteSettings.playerTheme || loadStoredPlayerTheme()),
     homeConfig: normalizeHomeConfig(siteSettings.homeConfig || loadStoredHomeConfig()),
+    typography: normalizeTypographyConfig(siteSettings.typography || loadStoredTypographyConfig()),
   }));
   const [customApiUrl, setCustomApiUrl] = useState<string>(() => getCustomApiBaseUrl());
   const [testingProxy, setTestingProxy] = useState(false);
@@ -560,6 +581,7 @@ export function AdminDashboardView({
       ...siteSettings,
       playerTheme: normalizePlayerTheme(siteSettings.playerTheme || loadStoredPlayerTheme()),
       homeConfig: normalizeHomeConfig(siteSettings.homeConfig || loadStoredHomeConfig()),
+      typography: normalizeTypographyConfig(siteSettings.typography || loadStoredTypographyConfig()),
     });
   }, [siteSettings]);
 
@@ -570,6 +592,23 @@ export function AdminDashboardView({
   const activePlayerTheme = normalizePlayerTheme(
     settingsForm.playerTheme || siteSettings.playerTheme || loadStoredPlayerTheme()
   );
+
+  const activeTypography = useMemo(
+    () =>
+      normalizeTypographyConfig(
+        settingsForm.typography || siteSettings.typography || loadStoredTypographyConfig()
+      ),
+    [settingsForm.typography, siteSettings.typography]
+  );
+
+  const effectiveCustomFonts = useMemo(
+    () => customFonts || loadStoredCustomFonts(),
+    [customFonts]
+  );
+
+  useEffect(() => {
+    applyTypographyToDocument(activeTypography, effectiveCustomFonts);
+  }, [activeTypography, effectiveCustomFonts]);
 
   const updatePlayerTheme = (patch: Partial<PlayerThemeConfig>, keepPreset = false) => {
     const next = normalizePlayerTheme({
@@ -1571,14 +1610,20 @@ export function AdminDashboardView({
     try {
       const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
       const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
+      const normalizedTypography = saveStoredTypographyConfig(activeTypography);
       const res = await saveSiteSettingsToFirestore(
-        { ...settingsForm, playerTheme: normalizedTheme, homeConfig: normalizedHome },
+        {
+          ...settingsForm,
+          playerTheme: normalizedTheme,
+          homeConfig: normalizedHome,
+          typography: normalizedTypography,
+        },
         user.uid
       );
       onNotify(
         res?.syncedHomeToCloud === false
-          ? 'تم حفظ الإعدادات في Firestore وحفظ تخطيط الرئيسية محلياً (حدث قواعد Firestore للمزامنة السحابية)'
-          : 'تم حفظ الإعدادات وتخصيص الرئيسية وثيم المشغّل بنجاح'
+          ? 'تم حفظ الإعدادات الأساسية في Firestore وحفظ التخصيصات محلياً (حدث قواعد Firestore للمزامنة السحابية)'
+          : 'تم حفظ الإعدادات وتخصيص الرئيسية والخطوط وثيم المشغّل بنجاح'
       );
     } catch {
       onNotify('تعذر حفظ الإعدادات');
@@ -1597,17 +1642,120 @@ export function AdminDashboardView({
     setBusyAction(true);
     try {
       const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
+      const normalizedTypography = saveStoredTypographyConfig(activeTypography);
       const res = await saveSiteSettingsToFirestore(
-        { ...settingsForm, playerTheme: normalizedTheme, homeConfig: cleanHome },
+        {
+          ...settingsForm,
+          playerTheme: normalizedTheme,
+          homeConfig: cleanHome,
+          typography: normalizedTypography,
+        },
         user.uid
       );
       onNotify(
         res?.syncedHomeToCloud === false
-          ? 'تم تطبيق تخطيط الرئيسية محلياً — يرجى تحديث firestore.rules في لوحة Firebase لمزامنتها لكل الزوار'
-          : 'تم حفظ تخطيط الصفحة الرئيسية ومزامنته للجميع في Firestore بنجاح!'
+          ? 'تم تطبيق تخطيط الرئيسية والسلايدر محلياً — يرجى تحديث firestore.rules في لوحة Firebase لمزامنتها لكل الزوار'
+          : 'تم حفظ تخطيط الصفحة الرئيسية وإعدادات السلايدر ومزامنتها للجميع في Firestore بنجاح!'
       );
     } catch {
       onNotify('تم حفظ التعديلات محلياً — تعذرت المزامنة مع Firestore');
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleSaveTypography = async (nextTypography: TypographyConfig) => {
+    const cleanTypography = saveStoredTypographyConfig(nextTypography);
+    setSettingsForm((prev) => ({ ...prev, typography: cleanTypography }));
+    applyTypographyToDocument(cleanTypography, effectiveCustomFonts);
+    if (!user) {
+      onNotify('تم تطبيق الخطوط وأحجام النصوص محلياً — سجّل الدخول كمشرف لحفظها للجميع');
+      return;
+    }
+    setBusyAction(true);
+    try {
+      const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
+      const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
+      const res = await saveSiteSettingsToFirestore(
+        {
+          ...settingsForm,
+          playerTheme: normalizedTheme,
+          homeConfig: normalizedHome,
+          typography: cleanTypography,
+        },
+        user.uid
+      );
+      onNotify(
+        res?.syncedHomeToCloud === false
+          ? 'تم تطبيق الخطوط وأحجام النصوص محلياً — حدّث firestore.rules في Firebase لمزامنتها مع كل الزوار'
+          : 'تم حفظ أحجام وأنواع الخطوط ومزامنتها لجميع الزوار بنجاح!'
+      );
+    } catch {
+      onNotify('تم تطبيق الخطوط محلياً — تعذرت المزامنة السحابية مع Firestore');
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleUploadCustomFont = async (font: CustomFontRecord) => {
+    const nextFonts = saveStoredCustomFonts({
+      ...effectiveCustomFonts,
+      [font.id]: font,
+    });
+    onCustomFontsChange?.(nextFonts);
+
+    const nextTypo = saveStoredTypographyConfig({
+      ...activeTypography,
+      ...(font.id === 'arabic' ? { arabicFont: 'custom' } : { englishFont: 'custom' }),
+    });
+    setSettingsForm((prev) => ({ ...prev, typography: nextTypo }));
+    applyTypographyToDocument(nextTypo, nextFonts);
+
+    if (!user) {
+      onNotify(`تم تفعيل الخط "${font.fileName}" محلياً — سجّل الدخول للمزامنة السحابية`);
+      return;
+    }
+    setBusyAction(true);
+    try {
+      await saveCustomFontToFirestore(font, user.uid);
+      const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
+      const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
+      await saveSiteSettingsToFirestore(
+        {
+          ...settingsForm,
+          playerTheme: normalizedTheme,
+          homeConfig: normalizedHome,
+          typography: nextTypo,
+        },
+        user.uid
+      );
+      onNotify(`تم رفع وحفظ الخط "${font.fileName}" في السحابة وتفعيله بنجاح!`);
+    } catch {
+      onNotify(
+        `تم تفعيل الخط "${font.fileName}" محلياً على جهازك — يرجى نشر تحديث firestore.rules في Firebase Console لمزامنة الخطوط مع الزوار.`
+      );
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleDeleteCustomFont = async (slot: CustomFontSlot) => {
+    const clone = { ...effectiveCustomFonts };
+    delete clone[slot];
+    const nextFonts = saveStoredCustomFonts(clone);
+    onCustomFontsChange?.(nextFonts);
+    applyTypographyToDocument(activeTypography, nextFonts);
+
+    if (!user) {
+      onNotify('تم حذف الخط المخصص محلياً');
+      return;
+    }
+    setBusyAction(true);
+    try {
+      await deleteCustomFontFromFirestore(slot);
+      onNotify('تم حذف الخط المخصص من السحابة بنجاح');
+    } catch {
+      onNotify('تم حذف الخط المخصص محلياً');
     } finally {
       setBusyAction(false);
     }
@@ -1623,8 +1771,14 @@ export function AdminDashboardView({
     setBusyAction(true);
     try {
       const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
+      const normalizedTypography = saveStoredTypographyConfig(activeTypography);
       await saveSiteSettingsToFirestore(
-        { ...settingsForm, playerTheme: clean, homeConfig: normalizedHome },
+        {
+          ...settingsForm,
+          playerTheme: clean,
+          homeConfig: normalizedHome,
+          typography: normalizedTypography,
+        },
         user.uid
       );
       onNotify('تم حفظ وتطبيق ثيم المشغّل الداخلي تلقائياً على جميع مشغّلات الموقع!');
@@ -2411,9 +2565,15 @@ export function AdminDashboardView({
                 { id: 'overview', label: 'نظرة عامة والإحصائيات', icon: BarChart3 },
                 {
                   id: 'home_builder',
-                  label: 'تخصيص الصفحة الرئيسية',
+                  label: 'تخصيص الصفحة الرئيسية والسلايدر',
                   icon: SlidersHorizontal,
                   badge: 'تحكم كامل',
+                },
+                {
+                  id: 'typography',
+                  label: 'الخطوط وحجم النصوص',
+                  icon: Type,
+                  badge: 'فونت',
                 },
                 { id: 'catalog', label: `الأفلام والمسلسلات (${catalog.length})`, icon: Film },
                 {
@@ -2455,7 +2615,11 @@ export function AdminDashboardView({
                   type="button"
                   onClick={() => {
                     setActiveTab(tab.id);
-                    if (tab.id === 'settings' || tab.id === 'home_builder') {
+                    if (
+                      tab.id === 'settings' ||
+                      tab.id === 'home_builder' ||
+                      tab.id === 'typography'
+                    ) {
                       setSettingsForm({
                         ...siteSettings,
                         playerTheme: normalizePlayerTheme(
@@ -2463,6 +2627,9 @@ export function AdminDashboardView({
                         ),
                         homeConfig: normalizeHomeConfig(
                           siteSettings.homeConfig || loadStoredHomeConfig()
+                        ),
+                        typography: normalizeTypographyConfig(
+                          siteSettings.typography || loadStoredTypographyConfig()
                         ),
                       });
                     }
@@ -2661,6 +2828,24 @@ export function AdminDashboardView({
                   setSettingsForm((prev) => ({ ...prev, tickerEnabled: enabled }))
                 }
                 onSaveHomeConfig={handleSaveHomeConfig}
+                onPreviewHome={onExitDashboard}
+                onOpenTypographyTab={() => setActiveTab('typography')}
+                onNotify={onNotify}
+              />
+            )}
+
+            {/* TAB 1B-2: TYPOGRAPHY & CUSTOM FONTS (OWNER ONLY) */}
+            {isOwner && activeTab === 'typography' && (
+              <TypographyPanel
+                typography={activeTypography}
+                customFonts={effectiveCustomFonts}
+                busyAction={busyAction}
+                onChangeTypography={(next) =>
+                  setSettingsForm((prev) => ({ ...prev, typography: next }))
+                }
+                onSaveTypography={handleSaveTypography}
+                onUploadCustomFont={handleUploadCustomFont}
+                onDeleteCustomFont={handleDeleteCustomFont}
                 onPreviewHome={onExitDashboard}
                 onNotify={onNotify}
               />

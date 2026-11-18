@@ -1,16 +1,21 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
   CheckCircle2,
+  Clock,
   Eye,
+  Film,
   LayoutGrid,
   Monitor,
   Plus,
   RotateCcw,
+  Search,
   SlidersHorizontal,
   Sparkles,
   Trash2,
+  Type,
+  X,
 } from 'lucide-react';
 import {
   DEFAULT_HOME_CONFIG,
@@ -34,6 +39,7 @@ interface HomeBuilderPanelProps {
   onChangeTickerEnabled: (enabled: boolean) => void;
   onSaveHomeConfig: (next: HomeLayoutConfig) => Promise<void>;
   onPreviewHome: () => void;
+  onOpenTypographyTab?: () => void;
   onNotify: (msg: string) => void;
 }
 
@@ -58,9 +64,11 @@ export function HomeBuilderPanel({
   onChangeTickerEnabled,
   onSaveHomeConfig,
   onPreviewHome,
+  onOpenTypographyTab,
   onNotify,
 }: HomeBuilderPanelProps) {
   const cfg = useMemo(() => normalizeHomeConfig(homeConfig), [homeConfig]);
+  const [sliderSearch, setSliderSearch] = useState('');
 
   const availableCategories = useMemo(() => {
     const set = new Set<string>();
@@ -229,6 +237,17 @@ export function HomeBuilderPanel({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          {onOpenTypographyTab && (
+            <button
+              type="button"
+              onClick={onOpenTypographyTab}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-[#f9c400]/35 px-4 py-2.5 text-xs font-bold text-[#f9c400] cursor-pointer"
+            >
+              <Type className="w-4 h-4" />
+              <span>الخطوط وحجم النصوص</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={onPreviewHome}
@@ -292,13 +311,13 @@ export function HomeBuilderPanel({
 
       {/* Grid: Hero Control + Visual Layout Toggles */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
-        {/* Hero Section Controller */}
+        {/* Hero Slider Full Controller */}
         <div className="xl:col-span-7 rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 space-y-4">
           <div className="flex items-center justify-between border-b border-white/10 pb-3">
             <div className="flex items-center gap-2">
               <Monitor className="w-5 h-5 text-[#D92321]" />
               <h3 className="font-display text-base font-extrabold text-white">
-                التحكم في قسم البطل (Hero Banner)
+                التحكم الكامل في السلايدر الرئيسي (Hero Slider)
               </h3>
             </div>
             <label className="inline-flex items-center gap-2 text-xs font-bold text-white cursor-pointer">
@@ -308,15 +327,15 @@ export function HomeBuilderPanel({
                 onChange={(e) => updateCfg({ showHero: e.target.checked })}
                 className="h-4 w-4 accent-[#D92321]"
               />
-              <span>إظهار البطل</span>
+              <span>إظهار السلايدر</span>
             </label>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             {(
               [
-                { id: 'auto', label: 'تلقائي (المثبتة)' },
-                { id: 'manual', label: 'عمل محدد يدوياً' },
+                { id: 'auto', label: 'تلقائي (المثبتة والأحدث)' },
+                { id: 'manual', label: 'اختيار الأفلام يدوياً' },
                 { id: 'brand', label: 'تعريف الموقع + عمل' },
               ] as Array<{ id: HomeHeroMode; label: string }>
             ).map((mode) => (
@@ -335,10 +354,279 @@ export function HomeBuilderPanel({
             ))}
           </div>
 
-          {(cfg.heroMode === 'manual' || cfg.heroMode === 'brand') && (
+          {/* Timing, Progress Bar & Slider Display Controls */}
+          <div className="rounded-2xl bg-[#1a242e]/80 border border-white/[0.08] p-4 space-y-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 text-xs font-extrabold text-[#f9c400]">
+                <Clock className="w-4 h-4" />
+                <span>توقيت التقليب وشريط التقدم المتحرك</span>
+              </span>
+              <label className="inline-flex items-center gap-2 text-xs font-bold text-white cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={cfg.heroAutoPlay ?? true}
+                  onChange={(e) => updateCfg({ heroAutoPlay: e.target.checked })}
+                  className="h-4 w-4 accent-[#4CAF50]"
+                />
+                <span>تشغيل التقليب التلقائي</span>
+              </label>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold text-[#b7c9ef]">مدة بقاء كل فيلم قبل التقليب:</span>
+                <span className="font-latin rounded-lg bg-[#0c1821] border border-white/10 px-2.5 py-0.5 font-black text-white tabular-nums">
+                  {cfg.heroSlideIntervalSec ?? 6} ثوانٍ
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={2}
+                  max={30}
+                  step={1}
+                  value={cfg.heroSlideIntervalSec ?? 6}
+                  onChange={(e) => updateCfg({ heroSlideIntervalSec: Number(e.target.value) })}
+                  className="flex-1 accent-[#D92321] cursor-pointer"
+                />
+                <div className="flex items-center gap-1 shrink-0">
+                  {[3, 5, 7, 10, 15].map((sec) => (
+                    <button
+                      key={sec}
+                      type="button"
+                      onClick={() => updateCfg({ heroSlideIntervalSec: sec })}
+                      className={`font-latin rounded-lg px-2 py-1 text-[10px] font-black border cursor-pointer ${
+                        (cfg.heroSlideIntervalSec ?? 6) === sec
+                          ? 'bg-[#D92321] border-[#D92321] text-white'
+                          : 'bg-[#0c1821] border-white/10 text-[#b7c9ef] hover:text-white'
+                      }`}
+                    >
+                      {sec}ث
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+              <label className="flex items-center justify-between rounded-xl bg-[#0c1821]/80 border border-white/[0.06] px-3 py-2 text-[11px] font-bold text-white cursor-pointer">
+                <span>شريط التقدم المتحرك حتى يقلب الفيلم</span>
+                <input
+                  type="checkbox"
+                  checked={cfg.heroShowProgressBar ?? true}
+                  onChange={(e) => updateCfg({ heroShowProgressBar: e.target.checked })}
+                  className="h-3.5 w-3.5 accent-[#D92321]"
+                />
+              </label>
+
+              <label className="flex items-center justify-between rounded-xl bg-[#0c1821]/80 border border-white/[0.06] px-3 py-2 text-[11px] font-bold text-white cursor-pointer">
+                <span>إيقاف مؤقت عند الوقوف بالماوس</span>
+                <input
+                  type="checkbox"
+                  checked={cfg.heroPauseOnHover ?? true}
+                  onChange={(e) => updateCfg({ heroPauseOnHover: e.target.checked })}
+                  className="h-3.5 w-3.5 accent-[#D92321]"
+                />
+              </label>
+
+              <label className="flex items-center justify-between rounded-xl bg-[#0c1821]/80 border border-white/[0.06] px-3 py-2 text-[11px] font-bold text-white cursor-pointer">
+                <span>إظهار المصغرات السفلية للصور</span>
+                <input
+                  type="checkbox"
+                  checked={cfg.heroShowThumbnails ?? true}
+                  onChange={(e) => updateCfg({ heroShowThumbnails: e.target.checked })}
+                  className="h-3.5 w-3.5 accent-[#D92321]"
+                />
+              </label>
+
+              <label className="flex items-center justify-between rounded-xl bg-[#0c1821]/80 border border-white/[0.06] px-3 py-2 text-[11px] font-bold text-white cursor-pointer">
+                <span>إظهار أسهم التنقل والنقاط</span>
+                <input
+                  type="checkbox"
+                  checked={cfg.heroShowArrows ?? true}
+                  onChange={(e) => updateCfg({ heroShowArrows: e.target.checked })}
+                  className="h-3.5 w-3.5 accent-[#D92321]"
+                />
+              </label>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 pt-1">
+              <span className="text-[11px] font-bold text-[#b7c9ef]">
+                أقصى عدد للأفلام في السلايدر:
+              </span>
+              <select
+                value={cfg.heroMaxSlides ?? 8}
+                onChange={(e) => updateCfg({ heroMaxSlides: Number(e.target.value) || 8 })}
+                className="font-latin rounded-xl bg-[#0c1821] border border-white/10 px-3 py-1.5 text-xs font-bold text-white focus:border-[#D92321] focus:outline-none"
+              >
+                {[3, 4, 5, 6, 8, 10, 12].map((count) => (
+                  <option key={count} value={count}>
+                    {count} شرائح
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Ordered Slider Movies Picker (works in manual mode & prioritizes selected movies) */}
+          {(() => {
+            const byId = new Map(catalog.map((i) => [i.id, i]));
+            const selectedIds = cfg.heroSlideIds || [];
+            const selectedItems = selectedIds
+              .map((id) => byId.get(id))
+              .filter((x): x is MediaItem => Boolean(x));
+
+            const q = sliderSearch.trim().toLowerCase();
+            const filteredCatalog = catalog
+              .filter((item) => {
+                if (!q) return true;
+                return (
+                  item.title.toLowerCase().includes(q) ||
+                  item.englishTitle.toLowerCase().includes(q) ||
+                  String(item.year || '').includes(q)
+                );
+              })
+              .slice(0, 45);
+
+            const moveSlide = (index: number, dir: -1 | 1) => {
+              const target = index + dir;
+              if (target < 0 || target >= selectedIds.length) return;
+              const copy = [...selectedIds];
+              const [moved] = copy.splice(index, 1);
+              copy.splice(target, 0, moved);
+              updateCfg({ heroSlideIds: copy });
+            };
+
+            const toggleSlideItem = (id: string) => {
+              if (selectedIds.includes(id)) {
+                updateCfg({ heroSlideIds: selectedIds.filter((x) => x !== id) });
+              } else {
+                if (selectedIds.length >= 12) {
+                  onNotify('الحد الأقصى لأفلام السلايدر هو 12 عملاً');
+                  return;
+                }
+                updateCfg({
+                  heroMode: 'manual',
+                  heroSlideIds: [...selectedIds, id],
+                });
+              }
+            };
+
+            return (
+              <div className="rounded-2xl bg-[#1a242e]/80 border border-white/[0.08] p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-extrabold text-white flex items-center gap-1.5">
+                      <Film className="w-4 h-4 text-[#D92321]" />
+                      <span>اختيار وترتيب أفلام السلايدر ({selectedItems.length} محدد)</span>
+                    </p>
+                    <p className="text-[11px] text-[#b7c9ef] mt-0.5">
+                      اختر الأعمال التي تريد عرضها في السلايدر ورتّب أولوية ظهورها.
+                    </p>
+                  </div>
+                  {selectedIds.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => updateCfg({ heroSlideIds: [] })}
+                      className="rounded-lg bg-[#D92321]/15 hover:bg-[#D92321] border border-[#D92321]/30 px-2.5 py-1 text-[11px] font-bold text-[#ff8a88] hover:text-white cursor-pointer"
+                    >
+                      مسح القائمة
+                    </button>
+                  )}
+                </div>
+
+                {selectedItems.length > 0 && (
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                    {selectedItems.map((item, idx) => (
+                      <div
+                        key={item.id}
+                        className="flex items-center justify-between gap-2 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-1.5"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-latin inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[#D92321] text-[10px] font-black text-white">
+                            {idx + 1}
+                          </span>
+                          <span className="text-xs font-bold text-white truncate">
+                            {item.title}
+                          </span>
+                          <span className="font-latin text-[10px] text-[#b7c9ef] shrink-0">
+                            ({item.year})
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            disabled={idx === 0}
+                            onClick={() => moveSlide(idx, -1)}
+                            title="تقديم للأعلى"
+                            className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-[#1a242e] text-white disabled:opacity-30 cursor-pointer"
+                          >
+                            <ArrowUp className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={idx === selectedItems.length - 1}
+                            onClick={() => moveSlide(idx, 1)}
+                            title="تأخير للأسفل"
+                            className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-[#1a242e] text-white disabled:opacity-30 cursor-pointer"
+                          >
+                            <ArrowDown className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => toggleSlideItem(item.id)}
+                            title="إزالة من السلايدر"
+                            className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-[#D92321]/15 text-[#ff8a88] hover:bg-[#D92321] hover:text-white cursor-pointer"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-[#b7c9ef] absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={sliderSearch}
+                    onChange={(e) => setSliderSearch(e.target.value)}
+                    placeholder="ابحث باسم الفيلم أو المسلسل لإضافته إلى السلايدر..."
+                    className="w-full rounded-xl bg-[#0c1821] border border-white/10 pr-8 pl-3 py-2 text-xs text-white focus:border-[#D92321] focus:outline-none"
+                  />
+                </div>
+
+                <div className="max-h-40 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                  {filteredCatalog.map((item) => {
+                    const picked = selectedIds.includes(item.id);
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => toggleSlideItem(item.id)}
+                        className={`flex items-center justify-between gap-2 rounded-xl px-2.5 py-1.5 text-right text-[11px] font-bold border transition-colors cursor-pointer ${
+                          picked
+                            ? 'bg-[#D92321]/20 border-[#D92321] text-white'
+                            : 'bg-[#0c1821]/70 border-white/5 text-[#b7c9ef] hover:text-white hover:border-white/20'
+                        }`}
+                      >
+                        <span className="truncate">{item.title}</span>
+                        <span className="shrink-0 font-latin text-[10px] text-[#f9c400]">
+                          {picked ? '✓ مضاف' : '+ إضافة'}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
+          {cfg.heroMode === 'brand' && (
             <div>
               <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
-                اختر العمل الظاهر في الواجهة الرئيسية
+                اختر العمل الأساسي بجانب تعريف الموقع
               </label>
               <select
                 value={cfg.heroMediaId}

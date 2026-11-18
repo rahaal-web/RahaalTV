@@ -17,6 +17,13 @@
   --color-muted: #a3a3a3;
 }
 
+:root {
+  --rtv-hero-title-size: 22px;
+  --rtv-detail-title-size: 20px;
+  --rtv-card-title-size: 13px;
+  --rtv-section-title-size: 22px;
+}
+
 @layer base {
   html {
     scroll-behavior: smooth;
@@ -271,4 +278,18 @@
 
 .moov-server-enter {
   animation: moov-server-enter 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes rtv-slider-progress {
+  0% {
+    transform: scaleX(0);
+  }
+  100% {
+    transform: scaleX(1);
+  }
+}
+
+.rtv-slider-progress-fill {
+  transform-origin: right center;
+  will-change: transform;
 }

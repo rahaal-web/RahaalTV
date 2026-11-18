@@ -211,7 +211,10 @@ export function MediaPreviewModal({
                         </span>
                       )}
                     </div>
-                    <h1 className="font-display text-base sm:text-lg lg:text-xl font-extrabold text-white leading-snug">
+                    <h1
+                      style={{ fontSize: 'var(--rtv-detail-title-size, 20px)' }}
+                      className="font-display font-extrabold text-white leading-snug"
+                    >
                       {item.title} بجودة عالية
                     </h1>
                     <p className="text-xs sm:text-sm text-[#b7c9ef]">

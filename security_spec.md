@@ -24,4 +24,5 @@
 11. Updating `/media/{id}` with forged past `createdAt` timestamp -> DENIED.
 12. Non-admin attempting `list` on `/requests` without `userId == request.auth.uid` filter -> DENIED.
 13. Rating payload with `stars: 10` or `stars: 4.5` or spoofed `userId` -> DENIED.
-
+14. Non-admin writing to `/fonts/arabic` or injecting invalid font slot `/fonts/malicious` -> DENIED.
+15. Typography config with out-of-bounds `baseFontSizePx: 120` -> DENIED.

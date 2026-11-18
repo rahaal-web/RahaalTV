@@ -84,7 +84,10 @@ export function MovieCard({
             <p className="text-[11px] font-semibold text-[#a3a3a3] truncate mb-0.5">
               {primaryCat}
             </p>
-            <h3 className="font-display text-xs sm:text-[13px] font-bold text-white leading-snug line-clamp-2">
+            <h3
+              style={{ fontSize: 'var(--rtv-card-title-size, 13px)' }}
+              className="font-display font-bold text-white leading-snug line-clamp-2"
+            >
               {item.title}
             </h3>
           </div>
@@ -117,7 +120,8 @@ export function MovieCard({
 
             <h3
               onClick={() => onSelect(item)}
-              className="font-display text-[11px] sm:text-xs font-extrabold text-white leading-snug mb-2 cursor-pointer hover:text-[#E50914] transition-colors line-clamp-2"
+              style={{ fontSize: 'calc(var(--rtv-card-title-size, 13px) - 1px)' }}
+              className="font-display font-extrabold text-white leading-snug mb-2 cursor-pointer hover:text-[#E50914] transition-colors line-clamp-2"
             >
               {item.title}
             </h3>
@@ -258,7 +262,10 @@ export function MovieCard({
         onClick={() => onSelect(item)}
         className="flex flex-1 flex-col justify-between p-3 text-right cursor-pointer"
       >
-        <h3 className="font-display text-xs sm:text-[13px] font-bold text-white leading-snug line-clamp-1 group-hover:text-[#E50914] transition-colors">
+        <h3
+          style={{ fontSize: 'var(--rtv-card-title-size, 13px)' }}
+          className="font-display font-bold text-white leading-snug line-clamp-1 group-hover:text-[#E50914] transition-colors"
+        >
           {item.title}
         </h3>
         <div className="mt-1.5 flex items-center gap-1.5 text-[11px] font-medium text-[#a3a3a3] truncate tabular-nums">
