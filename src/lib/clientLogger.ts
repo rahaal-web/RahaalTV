@@ -1,4 +1,5 @@
 import { getCustomApiBaseUrl } from './clientScraper';
+import { appendLocalClientErrorLog } from './adminPreferences';
 
 export type ClientLogLevel = 'warn' | 'error' | 'fatal';
 
@@ -67,9 +68,6 @@ export function reportClientError(report: ClientErrorReport): void {
   if (typeof window === 'undefined') return;
   if (sentCountThisSession >= MAX_LOGS_PER_SESSION) return;
 
-  const endpoint = resolveClientLogsEndpoint();
-  if (!endpoint) return;
-
   const extracted = report.error ? extractErrorDetails(report.error) : null;
   const finalMessage = (report.message || extracted?.message || 'Unknown client error').slice(0, 600);
   const signature = `${report.source}::${finalMessage}`;
@@ -80,6 +78,12 @@ export function reportClientError(report: ClientErrorReport): void {
   }
   recentSignatures.set(signature, now);
   sentCountThisSession += 1;
+
+  // Persist locally so the Admin Log Center always shows recent client runtime errors
+  appendLocalClientErrorLog(report.source, report.error || finalMessage);
+
+  const endpoint = resolveClientLogsEndpoint();
+  if (!endpoint) return;
 
   const payload = JSON.stringify({
     level: report.level || 'error',

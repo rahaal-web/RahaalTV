@@ -12,6 +12,16 @@ import {
   scoreExternalTitleMatch,
 } from './imageMatching';
 import { FALLBACK_BACKDROP, FALLBACK_POSTER, resolveMediaAssetUrl } from './mediaFilters';
+import { createTimeoutSignal } from './browserCompat';
+
+async function fetchWithCompatTimeout(url: string, ms: number): Promise<Response> {
+  const { signal, cleanup } = createTimeoutSignal(ms);
+  try {
+    return await fetch(url, { signal });
+  } finally {
+    cleanup();
+  }
+}
 
 export interface ImageDimensionResult {
   ok: boolean;
@@ -387,9 +397,9 @@ async function queryTvmazeImagesInBrowser(params: {
   const { query, title, englishTitle, year } = params;
   if (!query || query.length < 2) return null;
   try {
-    const searchRes = await fetch(
+    const searchRes = await fetchWithCompatTimeout(
       `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(query)}`,
-      { signal: AbortSignal.timeout(6000) }
+      6000
     );
     if (!searchRes.ok) return null;
     const candidates = (await searchRes.json()) as Array<{
@@ -426,9 +436,9 @@ async function queryTvmazeImagesInBrowser(params: {
 
     if (!bestId) return null;
 
-    const showRes = await fetch(
+    const showRes = await fetchWithCompatTimeout(
       `https://api.tvmaze.com/shows/${bestId}?embed=images`,
-      { signal: AbortSignal.timeout(6000) }
+      6000
     );
     if (!showRes.ok) return null;
 
@@ -493,9 +503,9 @@ async function queryItunesPosterInBrowser(params: {
   // iTunes tvSeason artwork is 1:1 square cover art rather than 2:3 poster; only query movies
   if (!query || query.length < 2 || kind !== 'movie') return null;
   try {
-    const res = await fetch(
+    const res = await fetchWithCompatTimeout(
       `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=movie&entity=movie&limit=8`,
-      { signal: AbortSignal.timeout(6000) }
+      6000
     );
     if (!res.ok) return null;
     const json = (await res.json()) as {
@@ -604,7 +614,7 @@ async function queryWikidataBridgeInBrowser(params: {
     for (const lang of langs) {
       try {
         const searchUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(term)}&language=${lang}&limit=6&format=json&origin=*`;
-        const searchRes = await fetch(searchUrl, { signal: AbortSignal.timeout(5500) });
+        const searchRes = await fetchWithCompatTimeout(searchUrl, 5500);
         if (!searchRes.ok) continue;
         const searchJson = (await searchRes.json()) as {
           search?: Array<{ id?: string; label?: string }>;
@@ -613,7 +623,7 @@ async function queryWikidataBridgeInBrowser(params: {
         if (ids.length === 0) continue;
 
         const entUrl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${ids.join('|')}&props=labels|aliases|claims&languages=ar|en&format=json&origin=*`;
-        const entRes = await fetch(entUrl, { signal: AbortSignal.timeout(5500) });
+        const entRes = await fetchWithCompatTimeout(entUrl, 5500);
         if (!entRes.ok) continue;
         const entJson = (await entRes.json()) as {
           entities?: Record<
@@ -802,9 +812,9 @@ async function queryCinemetaImagesInBrowser(params: {
 
   const resolveFromImdbId = async (ttId: string): Promise<OfficialExternalMatch | null> => {
     try {
-      const metaRes = await fetch(
+      const metaRes = await fetchWithCompatTimeout(
         `https://v3-cinemeta.strem.io/meta/${cmType}/${encodeURIComponent(ttId)}.json`,
-        { signal: AbortSignal.timeout(6000) }
+        6000
       );
       let metaPoster = '';
       let metaBackdrop = '';
@@ -878,9 +888,9 @@ async function queryCinemetaImagesInBrowser(params: {
 
   for (const q of queries.slice(0, 3)) {
     try {
-      const searchRes = await fetch(
+      const searchRes = await fetchWithCompatTimeout(
         `https://v3-cinemeta.strem.io/catalog/${cmType}/top/search=${encodeURIComponent(q)}.json`,
-        { signal: AbortSignal.timeout(6500) }
+        6500
       );
       if (!searchRes.ok) continue;
       const json = (await searchRes.json()) as {

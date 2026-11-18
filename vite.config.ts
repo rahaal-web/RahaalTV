@@ -140,6 +140,7 @@ export default defineConfig(() => {
       },
     },
     build: {
+      target: ['es2020', 'chrome90', 'firefox90', 'safari15', 'edge90'],
       cssMinify: true,
       sourcemap: false,
       rollupOptions: {

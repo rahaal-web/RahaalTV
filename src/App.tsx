@@ -1,12 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Wrench } from 'lucide-react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, doc, onSnapshot, orderBy, query, where } from 'firebase/firestore';
-import { AdminDashboardView, AdminTab } from './components/AdminDashboardView';
+import type { AdminTab } from './components/admin/adminNavigation';
 import { CatalogArchiveView } from './components/CatalogArchiveView';
 import { Footer, FooterTopic } from './components/Footer';
 import { Header } from './components/Header';
 import { HomeView } from './components/HomeView';
+
+const AdminDashboardView = lazy(() =>
+  import('./components/AdminDashboardView').then((m) => ({
+    default: m.AdminDashboardView,
+  }))
+);
 import { MaintenanceScreen } from './components/MaintenanceScreen';
 import {
   FooterInfoModal,
@@ -40,6 +46,8 @@ import {
   getAppBasePrefix,
   readWatchRouteFromLocation,
 } from './lib/permalink';
+import { applyDisplayDevicePrefs, loadDisplayDevicePrefs } from './lib/browserCompat';
+import { installTvSpatialNavigation } from './lib/tvNavigation';
 import {
   auth,
   db,
@@ -247,6 +255,47 @@ export default function App() {
   useEffect(() => {
     applyTypographyToDocument(siteSettings.typography, customFonts);
   }, [siteSettings.typography, customFonts]);
+
+  // Apply TV/Mobile/Low-Spec device display prefs and install D-pad spatial navigation
+  useEffect(() => {
+    applyDisplayDevicePrefs(loadDisplayDevicePrefs());
+  }, []);
+
+  useEffect(() => {
+    return installTvSpatialNavigation({
+      onBack: () => {
+        if (playerState) {
+          setPlayerState(null);
+          return true;
+        }
+        if (trailerItem) {
+          setTrailerItem(null);
+          return true;
+        }
+        if (searchOpen) {
+          setSearchOpen(false);
+          return true;
+        }
+        if (watchlistOpen) {
+          setWatchlistOpen(false);
+          return true;
+        }
+        if (loginOpen) {
+          setLoginOpen(false);
+          return true;
+        }
+        if (footerTopic) {
+          setFooterTopic(null);
+          return true;
+        }
+        if (view === 'single' || view === 'archive') {
+          setView('home');
+          return true;
+        }
+        return false;
+      },
+    });
+  }, [playerState, trailerItem, searchOpen, watchlistOpen, loginOpen, footerTopic, view]);
 
   useEffect(() => {
     setLiveShieldConfig(siteSettings.popupShield);
@@ -735,35 +784,44 @@ export default function App() {
   if (view === 'admin') {
     return (
       <>
-        <AdminDashboardView
-          user={firebaseUser}
-          isAdmin={canAccessAdmin}
-          adminRole={adminRole}
-          authLoading={authLoading}
-          catalog={activeCatalog}
-          isFirestoreSeeded={isFirestoreSeeded}
-          hasDismissedStarters={hasDismissedStarters}
-          requests={visitorRequests}
-          usersList={usersList}
-          adminsList={adminsList}
-          siteSettings={siteSettings}
-          customFonts={customFonts}
-          onCustomFontsChange={(next) => {
-            saveStoredCustomFonts(next);
-            setCustomFonts(next);
-          }}
-          onPopupShieldChange={(next) => {
-            const clean = saveStoredPopupShieldConfig(next);
-            setSiteSettings((prev) => ({ ...prev, popupShield: clean }));
-          }}
-          requestedTab={adminRequestedTab}
-          onExitDashboard={navigateHome}
-          onPreviewMedia={(item) => handleSelectMedia(item, false)}
-          onDeleteStarterItems={handleDeleteStarterItems}
-          onClearAllStarterItems={handleClearAllStarterItems}
-          onRestoreStarterItems={handleRestoreStarterItems}
-          onNotify={showToast}
-        />
+        <Suspense
+          fallback={
+            <div className="min-h-screen bg-[#06131c] flex flex-col items-center justify-center gap-3 text-white">
+              <div className="h-9 w-9 animate-spin rounded-full border-4 border-[#D92321] border-t-transparent" />
+              <span className="text-xs font-bold text-[#b7c9ef]">جاري تحميل لوحة الإدارة...</span>
+            </div>
+          }
+        >
+          <AdminDashboardView
+            user={firebaseUser}
+            isAdmin={canAccessAdmin}
+            adminRole={adminRole}
+            authLoading={authLoading}
+            catalog={activeCatalog}
+            isFirestoreSeeded={isFirestoreSeeded}
+            hasDismissedStarters={hasDismissedStarters}
+            requests={visitorRequests}
+            usersList={usersList}
+            adminsList={adminsList}
+            siteSettings={siteSettings}
+            customFonts={customFonts}
+            onCustomFontsChange={(next) => {
+              saveStoredCustomFonts(next);
+              setCustomFonts(next);
+            }}
+            onPopupShieldChange={(next) => {
+              const clean = saveStoredPopupShieldConfig(next);
+              setSiteSettings((prev) => ({ ...prev, popupShield: clean }));
+            }}
+            requestedTab={adminRequestedTab}
+            onExitDashboard={navigateHome}
+            onPreviewMedia={(item) => handleSelectMedia(item, false)}
+            onDeleteStarterItems={handleDeleteStarterItems}
+            onClearAllStarterItems={handleClearAllStarterItems}
+            onRestoreStarterItems={handleRestoreStarterItems}
+            onNotify={showToast}
+          />
+        </Suspense>
 
         {toastMessage && (
           <div

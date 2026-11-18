@@ -335,7 +335,9 @@
     border-width: 0 !important;
     width: 100% !important;
     max-width: 100vw !important;
+    height: 100vh;
     height: 100dvh;
+    max-height: 100vh !important;
     max-height: 100dvh !important;
     padding-top: env(safe-area-inset-top, 0px);
     overflow-x: hidden;
@@ -371,7 +373,9 @@
   }
 
   .rtv-mobile-player-stage.rtv-mobile-cinema-fill {
+    height: calc(100vh - 44px - env(safe-area-inset-top, 0px));
     height: calc(100dvh - 44px - env(safe-area-inset-top, 0px));
+    max-height: calc(100vh - 44px - env(safe-area-inset-top, 0px));
     max-height: calc(100dvh - 44px - env(safe-area-inset-top, 0px));
     aspect-ratio: auto;
   }
@@ -400,15 +404,48 @@
   }
 
   .rtv-mobile-player-stage {
+    width: min(100%, calc((100vh - 38px - env(safe-area-inset-top, 0px)) * 16 / 9));
     width: min(100%, calc((100dvh - 38px - env(safe-area-inset-top, 0px)) * 16 / 9));
+    max-height: calc(100vh - 38px - env(safe-area-inset-top, 0px));
     max-height: calc(100dvh - 38px - env(safe-area-inset-top, 0px));
     margin-inline: auto;
   }
 
   .rtv-mobile-player-stage.rtv-mobile-cinema-fill {
     width: 100%;
+    height: calc(100vh - 38px - env(safe-area-inset-top, 0px));
     height: calc(100dvh - 38px - env(safe-area-inset-top, 0px));
+    max-height: calc(100vh - 38px - env(safe-area-inset-top, 0px));
     max-height: calc(100dvh - 38px - env(safe-area-inset-top, 0px));
   }
 }
 
+/* TV / D-pad / Keyboard High-Contrast Focus Ring */
+html.rtv-keyboard-nav :focus-visible,
+html[data-rtv-tv-mode="true"] :focus-visible,
+html[data-rtv-high-focus="true"] :focus-visible {
+  outline: 3px solid #f9c400 !important;
+  outline-offset: 3px !important;
+  box-shadow: 0 0 0 6px rgba(229, 9, 20, 0.32) !important;
+}
+
+html[data-rtv-tv-mode="true"][data-rtv-tv-scale="large"] {
+  font-size: 17px;
+}
+
+html[data-rtv-tv-mode="true"][data-rtv-tv-scale="xlarge"] {
+  font-size: 18.5px;
+}
+
+/* Low-Spec Android / Smart TV Mode: strip costly backdrop blurs and heavy animations */
+html[data-rtv-low-spec="true"] [class*="backdrop-blur"] {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html[data-rtv-low-spec="true"] .rtv-fade-in,
+html[data-rtv-low-spec="true"] .moov-server-enter,
+html[data-rtv-low-spec="true"] .rtv-hero-cinematic-in,
+html[data-rtv-low-spec="true"] .rtv-hero-content-in {
+  animation: none !important;
+}

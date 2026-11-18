@@ -58,6 +58,12 @@ import {
   setActiveShieldPlayerContext,
 } from '../lib/popupShield';
 import { handlePosterError } from '../lib/mediaFilters';
+import {
+  exitAnyFullscreen,
+  getFullscreenElement,
+  requestElementFullscreen,
+  safeCopyToClipboard,
+} from '../lib/browserCompat';
 import { getPosterUrl } from '../lib/mediaImages';
 import {
   AdminPrivilegeRole,
@@ -507,8 +513,11 @@ export function PlayerModal({
   const [isTheaterMode, setIsTheaterMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isMobileCinemaFill, setIsMobileCinemaFill] = useState(false);
+  const [hlsLevels, setHlsLevels] = useState<Array<{ index: number; label: string }>>([]);
+  const [selectedHlsLevel, setSelectedHlsLevel] = useState<number>(-1);
   const playerBoxRef = useRef<HTMLDivElement | null>(null);
   const videoElementRef = useRef<HTMLVideoElement | null>(null);
+  const hlsInstanceRef = useRef<{ currentLevel: number; destroy: () => void } | null>(null);
   const lastBlurObservedRef = useRef<number>(0);
 
   // Lock background page scroll while Watch Modal is open (prevents iOS/Android bleed)
@@ -523,45 +532,36 @@ export function PlayerModal({
 
   useEffect(() => {
     const onFsChange = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement));
+      setIsFullscreen(Boolean(getFullscreenElement()));
     };
     document.addEventListener('fullscreenchange', onFsChange);
-    return () => document.removeEventListener('fullscreenchange', onFsChange);
+    document.addEventListener('webkitfullscreenchange', onFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange);
+      document.removeEventListener('webkitfullscreenchange', onFsChange);
+    };
   }, []);
 
-  const handleToggleFullscreen = async () => {
+  const handleToggleFullscreen = useCallback(async () => {
     const el = playerBoxRef.current;
-    const vid = videoElementRef.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
+    const vid = videoElementRef.current;
 
-    if (document.fullscreenElement) {
-      try {
-        await document.exitFullscreen();
-      } catch {
-        setIsMobileCinemaFill(false);
-      }
+    if (getFullscreenElement()) {
+      const exited = await exitAnyFullscreen();
+      if (!exited) setIsMobileCinemaFill(false);
       return;
     }
 
-    if (el && typeof el.requestFullscreen === 'function') {
-      try {
-        await el.requestFullscreen();
-        return;
-      } catch {
-        // Fallback below for iOS Safari / restricted frames
-      }
+    if (await requestElementFullscreen(el)) {
+      return;
     }
 
-    if (vid && typeof vid.webkitEnterFullscreen === 'function') {
-      try {
-        vid.webkitEnterFullscreen();
-        return;
-      } catch {
-        // Fallback to CSS cinema fill
-      }
+    if (await requestElementFullscreen(vid)) {
+      return;
     }
 
     setIsMobileCinemaFill((prev) => !prev);
-  };
+  }, []);
 
   // Reset selections when media item or initial props change
   useEffect(() => {
@@ -987,7 +987,141 @@ export function PlayerModal({
     activeFilterEntry && !activeFilterEntry.ok && !manualBypassFault[safeServerIndex]
   );
   const friendlyServerError = getFriendlyServerError(activeFilterEntry);
+  const isHlsVideoStream = Boolean(finalStreamSrc && /\.m3u8(\?|$)/i.test(finalStreamSrc));
   const isDirectVideoFile = Boolean(finalStreamSrc && /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(finalStreamSrc));
+
+  // Dynamic HLS (.m3u8) Engine Loader — only fetched when playing an .m3u8 stream on non-native browsers
+  useEffect(() => {
+    const videoEl = videoElementRef.current;
+    setHlsLevels([]);
+    setSelectedHlsLevel(-1);
+
+    if (hlsInstanceRef.current) {
+      try {
+        hlsInstanceRef.current.destroy();
+      } catch {
+        // Ignore cleanup errors
+      }
+      hlsInstanceRef.current = null;
+    }
+
+    if (!item || !finalStreamSrc || !isHlsVideoStream || !videoEl) return;
+    if (isBlockedHomepageUrl || isActiveServerFaulty) return;
+
+    // Safari / iOS supports HLS natively
+    if (
+      videoEl.canPlayType('application/vnd.apple.mpegurl') !== '' ||
+      videoEl.canPlayType('application/x-mpegURL') !== ''
+    ) {
+      videoEl.src = finalStreamSrc;
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { default: Hls } = await import('hls.js');
+        if (cancelled || !videoElementRef.current) return;
+        if (!Hls.isSupported()) {
+          videoElementRef.current.src = finalStreamSrc;
+          return;
+        }
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: false,
+        });
+        hlsInstanceRef.current = hls;
+        hls.loadSource(finalStreamSrc);
+        hls.attachMedia(videoElementRef.current);
+
+        hls.on(Hls.Events.MANIFEST_PARSED, (_evt, data) => {
+          if (cancelled) return;
+          const lvls = (data.levels || []).map((lvl, idx) => ({
+            index: idx,
+            label: lvl.height ? `${lvl.height}p` : `جودة ${idx + 1}`,
+          }));
+          setHlsLevels(lvls);
+        });
+
+        hls.on(Hls.Events.ERROR, (_evt, data) => {
+          if (cancelled || !data.fatal) return;
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            hls.startLoad();
+          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            hls.recoverMediaError();
+          } else {
+            hls.destroy();
+            handleServerFaultFailover(safeServerIndex, 'تعذر تشغيل بث HLS');
+          }
+        });
+      } catch {
+        if (!cancelled && videoElementRef.current) {
+          videoElementRef.current.src = finalStreamSrc;
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (hlsInstanceRef.current) {
+        try {
+          hlsInstanceRef.current.destroy();
+        } catch {
+          // Ignore
+        }
+        hlsInstanceRef.current = null;
+      }
+    };
+  }, [
+    item?.id,
+    finalStreamSrc,
+    isHlsVideoStream,
+    isBlockedHomepageUrl,
+    isActiveServerFaulty,
+    playerReloadKey,
+    safeServerIndex,
+    handleServerFaultFailover,
+  ]);
+
+  // Keyboard & Remote Control Player Shortcuts (f = Fullscreen, Space/k = Play/Pause, Arrows = Seek ±10s)
+  useEffect(() => {
+    if (!item) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        void handleToggleFullscreen();
+        return;
+      }
+
+      const vid = videoElementRef.current;
+      if (!vid || !isDirectVideoFile) return;
+
+      if (e.key === ' ' || e.key === 'k' || e.key === 'K') {
+        if (target === vid || target?.closest('[data-rtv-player-stage="true"]')) {
+          e.preventDefault();
+          if (vid.paused) void vid.play();
+          else vid.pause();
+        }
+      } else if (e.key === 'ArrowRight') {
+        if (target === vid || target?.closest('[data-rtv-player-stage="true"]')) {
+          e.preventDefault();
+          vid.currentTime = Math.min(vid.duration || vid.currentTime + 10, vid.currentTime + 10);
+        }
+      } else if (e.key === 'ArrowLeft') {
+        if (target === vid || target?.closest('[data-rtv-player-stage="true"]')) {
+          e.preventDefault();
+          vid.currentTime = Math.max(0, vid.currentTime - 10);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [item, isDirectVideoFile, handleToggleFullscreen]);
+
   const shieldDecision = resolveEffectiveShieldDecision(
     finalStreamSrc,
     effectiveShieldConfig,
@@ -1075,11 +1209,7 @@ export function PlayerModal({
         // User cancelled or share unsupported in embedded frame -> fallback to copy
       }
     }
-    try {
-      await navigator.clipboard.writeText(urlToShare);
-    } catch {
-      // Clipboard fallback ignored
-    }
+    await safeCopyToClipboard(urlToShare);
     onNotify?.('تم نسخ رابط المشاهدة بنجاح');
   };
 
@@ -1098,6 +1228,9 @@ export function PlayerModal({
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`مشغل ${item.title}`}
       className="fixed inset-0 z-[55] flex items-stretch lg:items-center justify-center p-0 lg:p-4 overflow-x-hidden"
       style={themeVars}
     >
@@ -1563,16 +1696,42 @@ export function PlayerModal({
                       </div>
                     ) : finalStreamSrc ? (
                       isDirectVideoFile ? (
-                        <video
-                          ref={videoElementRef}
-                          key={`${finalStreamSrc}-${playerReloadKey}`}
-                          src={finalStreamSrc}
-                          controls
-                          autoPlay
-                          playsInline
-                          onError={() => handleServerFaultFailover(safeServerIndex, 'تعذر تحميل ملف الفيديو')}
-                          className="h-full w-full max-w-full block bg-black"
-                        />
+                        <div data-rtv-player-stage="true" data-rtv-player-controls="true" className="relative h-full w-full bg-black">
+                          <video
+                            ref={videoElementRef}
+                            key={`${finalStreamSrc}-${playerReloadKey}`}
+                            src={isHlsVideoStream ? undefined : finalStreamSrc}
+                            controls
+                            autoPlay
+                            playsInline
+                            onError={() => handleServerFaultFailover(safeServerIndex, 'تعذر تحميل ملف الفيديو')}
+                            className="h-full w-full max-w-full block bg-black"
+                          />
+                          {hlsLevels.length > 1 && (
+                            <div className="absolute top-2.5 left-2.5 z-20 flex items-center gap-1 rounded-lg bg-black/75 border border-white/15 px-2 py-1 text-[10px] font-bold text-white">
+                              <span>الجودة:</span>
+                              <select
+                                value={selectedHlsLevel}
+                                onChange={(e) => {
+                                  const lvl = Number(e.target.value);
+                                  setSelectedHlsLevel(lvl);
+                                  if (hlsInstanceRef.current) {
+                                    hlsInstanceRef.current.currentLevel = lvl;
+                                  }
+                                }}
+                                aria-label="تغيير جودة البث"
+                                className="bg-transparent text-[#f9c400] font-latin font-black focus:outline-none cursor-pointer"
+                              >
+                                <option value={-1} className="bg-[#0c1821] text-white">Auto</option>
+                                {hlsLevels.map((l) => (
+                                  <option key={l.index} value={l.index} className="bg-[#0c1821] text-white">
+                                    {l.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                        </div>
                       ) : (
                         <iframe
                           key={`${finalStreamSrc}-${shieldDecision.mode}-${playerReloadKey}`}
