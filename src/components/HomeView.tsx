@@ -485,15 +485,15 @@ export function HomeView({
                 />
               )}
 
-              {/* Layered Gradient Scrims Matching Dark Mode + Seamless #0f0f0f Bottom Blend */}
-              <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-transparent to-transparent" />
-              <div className="absolute inset-0 bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/55 to-black/20" />
-              <div className="absolute inset-0 bg-gradient-to-l from-[#0f0f0f]/92 via-[#0f0f0f]/48 to-transparent" />
+              {/* Light Edge Scrims Keeping Widescreen Backdrop Crisp & Clearly Visible */}
+              <div className="absolute inset-0 bg-gradient-to-b from-black/25 via-transparent via-20% to-transparent" />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/20 via-30% to-transparent" />
+              <div className="absolute inset-0 bg-gradient-to-l from-[#0f0f0f]/65 via-[#0f0f0f]/15 via-38% to-transparent" />
 
               <div className="relative z-10 mx-auto w-full max-w-[1440px] px-4 sm:px-6 lg:px-10 pt-28 pb-6 sm:pb-8 flex flex-col gap-6 sm:gap-7">
                 {/* Main Info (Right Side in RTL) + Arrows & Progress (Left Side) */}
                 <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
-                  <div className="max-w-lg space-y-3 text-right">
+                  <div className="max-w-lg space-y-3 text-right drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)]">
                     {/* Compact Status Badge */}
                     <div>
                       <span className="inline-flex items-center gap-1.5 rounded-full bg-[#E50914] px-3 py-1 text-[11px] font-extrabold text-white shadow-[0_6px_18px_rgba(229,9,20,0.45)]">

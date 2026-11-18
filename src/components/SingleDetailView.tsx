@@ -288,16 +288,15 @@ export function SingleDetailView({
           alt={item.title}
           referrerPolicy="no-referrer"
           onError={handleBackdropError}
-          className="absolute inset-0 h-full w-full object-cover object-center opacity-35"
+          className="absolute inset-0 h-full w-full object-cover object-center opacity-90"
         />
-        <div className="absolute inset-0 bg-[#06131c]/80" />
-        <div className="moov-hex-pattern absolute inset-0" />
-        <div className="moov-spotlight absolute inset-0" />
+        <div className="absolute inset-0 bg-gradient-to-t from-[#06131c] via-[#06131c]/30 to-black/15" />
+        <div className="absolute inset-0 bg-gradient-to-l from-[#06131c]/70 via-[#06131c]/20 to-transparent" />
 
         <div className="relative z-10 mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 pt-24 pb-7">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
             {/* Breadcrumb & Page Title */}
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 drop-shadow-[0_2px_10px_rgba(0,0,0,0.9)]">
               <nav className="mb-2.5 flex flex-wrap items-center gap-1.5 text-xs font-bold text-[#b7c9ef]">
                 <button
                   type="button"

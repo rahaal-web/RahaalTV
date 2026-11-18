@@ -189,14 +189,13 @@ export function MediaPreviewModal({
                   alt={item.title}
                   referrerPolicy="no-referrer"
                   onError={handleBackdropError}
-                  className="absolute inset-0 h-full w-full object-cover object-center opacity-35"
+                  className="absolute inset-0 h-full w-full object-cover object-center opacity-90"
                 />
-                <div className="absolute inset-0 bg-[#06131c]/75" />
-                <div className="moov-hex-pattern absolute inset-0" />
-                <div className="moov-spotlight absolute inset-0" />
+                <div className="absolute inset-0 bg-gradient-to-t from-[#06131c] via-[#06131c]/30 to-black/15" />
+                <div className="absolute inset-0 bg-gradient-to-l from-[#06131c]/70 via-[#06131c]/20 to-transparent" />
 
                 <div className="relative z-10 flex flex-col md:flex-row md:items-end justify-between gap-4 p-6 pt-16 min-h-[250px]">
-                  <div className="space-y-2 max-w-2xl">
+                  <div className="space-y-2 max-w-2xl drop-shadow-[0_2px_10px_rgba(0,0,0,0.9)]">
                     <div className="flex flex-wrap gap-1.5">
                       {item.categories.map((cat) => (
                         <span
