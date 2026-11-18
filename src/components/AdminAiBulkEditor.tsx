@@ -211,9 +211,11 @@ export function AdminAiBulkEditor({
   const [regenerateSlugOnRename, setRegenerateSlugOnRename] = useState<boolean>(false);
 
   const [generating, setGenerating] = useState<boolean>(false);
+  const [progressText, setProgressText] = useState<string>('');
   const [saving, setSaving] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [noChangeInfo, setNoChangeInfo] = useState<string | null>(null);
   const [proposals, setProposals] = useState<ProposalEntry[]>([]);
 
   const allCategories = useMemo(() => {
@@ -256,6 +258,8 @@ export function AdminAiBulkEditor({
     }
 
     setGenerating(true);
+    setProgressText('');
+    setNoChangeInfo(null);
     setProposals([]);
 
     try {
@@ -278,32 +282,89 @@ export function AdminAiBulkEditor({
         comingSoon: Boolean(item.comingSoon),
       }));
 
-      const response = await fetch(resolveApiEndpoint('/api/ai-bulk-edit'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          instruction: instruction.trim(),
-          items: compactItems,
-        }),
-      });
+      const CLIENT_BATCH_SIZE = 20;
+      const chunks: typeof compactItems[] = [];
+      for (let i = 0; i < compactItems.length; i += CLIENT_BATCH_SIZE) {
+        chunks.push(compactItems.slice(i, i + CLIENT_BATCH_SIZE));
+      }
 
-      const data = (await response.json()) as {
-        ok?: boolean;
-        error?: string;
-        summary?: string;
-        processedCount?: number;
-        updates?: AiPatchProposal[];
+      const callAiEndpoint = async (batchItems: typeof compactItems) => {
+        const customUrl = resolveApiEndpoint('/api/ai-bulk-edit');
+        const endpoints = customUrl && customUrl !== '/api/ai-bulk-edit'
+          ? ['/api/ai-bulk-edit', customUrl]
+          : ['/api/ai-bulk-edit'];
+
+        let lastError = 'تعذر الاتصال بخدمة الذكاء الاصطناعي على الخادم.';
+        for (const endpoint of endpoints) {
+          try {
+            const response = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                instruction: instruction.trim(),
+                items: batchItems,
+              }),
+            });
+            const ct = response.headers.get('content-type') || '';
+            if (!ct.includes('application/json')) continue;
+
+            const json = (await response.json()) as {
+              ok?: boolean;
+              error?: string;
+              service?: string;
+              summary?: string;
+              processedCount?: number;
+              updates?: AiPatchProposal[];
+            };
+
+            // Ignore CORS proxy worker fallback responses that do not implement AI endpoints
+            if (json.service === 'RahaL TV Proxy Worker') {
+              lastError = 'رابط الـ API المخصص يشير إلى بروكسي خارجي لا يدعم الذكاء الاصطناعي.';
+              continue;
+            }
+
+            if (!response.ok || !json.ok || !Array.isArray(json.updates)) {
+              lastError = json.error || 'تعذر تنفيذ المعالجة بالذكاء الاصطناعي.';
+              throw new Error(lastError);
+            }
+
+            return json;
+          } catch (err) {
+            if (err instanceof Error && err.message) {
+              lastError = err.message;
+            }
+          }
+        }
+        throw new Error(lastError);
       };
 
-      if (!response.ok || !data.ok) {
-        setErrorMsg(data.error || 'تعذر تنفيذ المعالجة بالذكاء الاصطناعي.');
-        return;
+      const allUpdates: AiPatchProposal[] = [];
+      const summaries: string[] = [];
+
+      for (let i = 0; i < chunks.length; i++) {
+        setProgressText(
+          chunks.length > 1
+            ? `الدفعة ${i + 1} من ${chunks.length} (${Math.min((i + 1) * CLIENT_BATCH_SIZE, compactItems.length)} / ${compactItems.length} عمل)`
+            : `${compactItems.length} عمل`
+        );
+        const batchRes = await callAiEndpoint(chunks[i]);
+        if (batchRes.summary) summaries.push(batchRes.summary);
+        if (Array.isArray(batchRes.updates)) {
+          allUpdates.push(...batchRes.updates);
+        }
+      }
+
+      const mergedPatches = new Map<string, AiPatchProposal>();
+      for (const patch of allUpdates) {
+        if (!patch?.id) continue;
+        const prev = mergedPatches.get(patch.id) || { id: patch.id };
+        mergedPatches.set(patch.id, { ...prev, ...patch });
       }
 
       const byId = new Map(targetedItems.map((it) => [it.id, it]));
       const entries: ProposalEntry[] = [];
 
-      for (const patch of data.updates || []) {
+      for (const patch of mergedPatches.values()) {
         const original = byId.get(patch.id);
         if (!original) continue;
         const changedFields = buildDiffFields(original, patch);
@@ -351,18 +412,31 @@ export function AdminAiBulkEditor({
         });
       }
 
-      setAiSummary(data.summary || null);
+      const combinedSummary =
+        entries.length > 0
+          ? `تم فحص ${compactItems.length} عملًا وتجهيز التعديلات المقترحة لـ ${entries.length} عملًا.`
+          : summaries.filter(Boolean).slice(0, 2).join(' — ') || null;
+      setAiSummary(combinedSummary);
       setProposals(entries);
 
       if (entries.length === 0) {
+        const info =
+          combinedSummary ||
+          `تم فحص ${compactItems.length} عملًا، ولم يجد الذكاء الاصطناعي قيماً تحتاج تعديلاً بناءً على هذا الأمر. جرّب توضيح الحقل المطلوب تعديله (مثل العنوان أو القصة أو الجودة) أو التحقق من نطاق الأعمال المختار.`;
+        setNoChangeInfo(info);
         onNotify('لم تستدعِ أي أعمال تغييراً بناءً على الأمر المكتوب.');
       } else {
         onNotify(`تم تجهيز معاينة التعديلات على ${entries.length} عملًا — راجعها ثم اعتمد الحفظ.`);
       }
-    } catch {
-      setErrorMsg('تعذر الاتصال بخدمة الذكاء الاصطناعي على الخادم.');
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error && err.message
+          ? err.message
+          : 'تعذر الاتصال بخدمة الذكاء الاصطناعي على الخادم.'
+      );
     } finally {
       setGenerating(false);
+      setProgressText('');
     }
   };
 
@@ -585,7 +659,9 @@ export function AdminAiBulkEditor({
               {generating ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>جارٍ تحليل {targetedItems.length} عمل بالذكاء الاصطناعي...</span>
+                  <span>
+                    جارٍ معالجة {progressText || `${targetedItems.length} عمل`} بالذكاء الاصطناعي...
+                  </span>
                 </>
               ) : (
                 <>
@@ -601,6 +677,16 @@ export function AdminAiBulkEditor({
           <div className="flex items-start gap-2.5 rounded-2xl bg-[#D92321]/15 border border-[#D92321]/40 p-4 text-xs sm:text-sm font-bold text-white">
             <AlertTriangle className="w-4 h-4 text-[#D92321] shrink-0 mt-0.5" />
             <span>{errorMsg}</span>
+          </div>
+        )}
+
+        {noChangeInfo && !errorMsg && (
+          <div className="flex items-start gap-2.5 rounded-2xl bg-[#f9c400]/10 border border-[#f9c400]/35 p-4 text-xs sm:text-sm font-bold text-[#f9c400]">
+            <Sparkles className="w-4 h-4 shrink-0 mt-0.5" />
+            <div className="space-y-1 text-white">
+              <p className="font-extrabold text-[#f9c400]">نتيجة الفحص:</p>
+              <p className="text-xs sm:text-sm text-[#b7c9ef]">{noChangeInfo}</p>
+            </div>
           </div>
         )}
       </form>

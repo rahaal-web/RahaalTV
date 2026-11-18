@@ -2606,29 +2606,37 @@ async function startServer() {
         },
       });
 
-      const BATCH_SIZE = 25;
+      const BATCH_SIZE = 3;
       const chunks: AiInputItem[][] = [];
       for (let i = 0; i < sanitizedItems.length; i += BATCH_SIZE) {
         chunks.push(sanitizedItems.slice(i, i + BATCH_SIZE));
       }
 
       const systemInstruction = [
-        'أنت محرر محتوى متخصص لمنصة RahaL TV للأفلام والمسلسلات.',
-        'مهمتك تنفيذ أمر التعديل الشامل الذي يطلبه المشرف بدقة متناهية على قائمة الأعمال المرسلة.',
-        'القواعد الصارمة:',
-        '1. أرجع في مصفوفة updates فقط الأعمال التي تحتاج تعديلاً فعلياً بناءً على الأمر، واحتفظ بنفس حقل id لكل عمل.',
-        '2. في كل عنصر داخل updates، أدرج فقط الحقول التي تغيرت قيمتها فعلياً (لا تعيد الحقول غير المعدلة إلا إذا لزم، ولا تخترع أعمالاً جديدة).',
-        '3. إذا طُلب حذف كلمة أو بادئة مثل "فيلم" أو "مسلسل" أو عبارات مثل "مترجم اون لاين بجودة عالية"، أزلها بدقة ونظّف المسافات الزائدة دون إتلاف اسم العمل الأساسي أو السنة.',
-        '4. القيم المسموحة لحقل kind إن تم تغييره هي فقط: movie, series, tv, wrestling.',
-        '5. حافظ على اللغة العربية سليمة وجذابة، واجعل summary ملخصاً عربياً واضحاً لما تم تعديله.',
+        'أنت محرر بيانات ومحتوى دقيق لمنصة RahaL TV للأفلام والمسلسلات.',
+        'مهمتك مراجعة كل عنصر من العناصر المرسلة (من الأول حتى الأخير) وتنفيذ أمر المشرف بدقة 100% على كل عنصر ينطبق عليه الأمر.',
+        'القواعد الإلزامية:',
+        '1. افحص كل عنصر في القائمة المرسلة دون استثناء. أي عنصر ينطبق عليه الأمر يجب أن يظهر في مصفوفة updates مرة واحدة فقط بنفس قيمة id الحرفية.',
+        '2. لا تكرر نفس id أكثر من مرة في مصفوفة updates، ولا تتوقف بعد أول عنصر إذا كان هناك عناصر أخرى مطابقة.',
+        '3. داخل كل كائن في updates، ضمّن فقط الحقول التي تغيرت فعلياً عن قيمتها الأصلية (لا ترجع حقولاً لم تتغير مثل year أو kind إن لم تتغير).',
+        '4. عند طلب حذف أو استبدال كلمة أو عبارة (مثل حذف كلمة "فيلم" أو عبارات "مترجم اون لاين بجودة عالية"):',
+        '   - إذا ذكر الأمر "العناوين" فقط: عدّل حقل title.',
+        '   - إذا ذكر الأمر "كل المحتوى" أو "المحتوى" أو "جميع الحقول" أو لم يقيده بحقل معين: افحص وعدّل جميع الحقول النصية التي تحتوي الكلمة (title و tagline و story) في نفس الكائن بعد الحذف.',
+        '   - نظّف المسافات الزائدة بعد الحذف دون حذف اسم العمل الأساسي أو السنة إلا إذا طُلب ذلك.',
+        '5. القيم المسموحة لحقل kind إن تم تغييره هي فقط: movie, series, tv, wrestling.',
+        '6. اكتب summary بالعربية يطابق بالضبط عدد العناصر التي تم تعديلها فعلاً في updates.',
       ].join('\n');
 
       const processChunkWithRetry = async (chunk: AiInputItem[]) => {
-        const chunkIds = new Set(chunk.map((c) => c.id));
-        const userPrompt = JSON.stringify({
-          instruction: cleanInstruction,
-          items: chunk,
-        });
+        const chunkById = new Map(chunk.map((c) => [c.id, c]));
+        const idList = chunk.map((c) => c.id).join(', ');
+        const userPrompt = [
+          `الأمر المطلوب تنفيذه: ${cleanInstruction}`,
+          `عدد العناصر في هذه الدفعة: ${chunk.length}`,
+          `يجب فحص جميع هذه المعرفات كلها وإرجاع كل ما ينطبق عليه الأمر في updates: [${idList}]`,
+          'بيانات العناصر (JSON):',
+          JSON.stringify(chunk, null, 2),
+        ].join('\n\n');
 
         let lastErr: unknown = null;
         for (let attempt = 0; attempt < 3; attempt++) {
@@ -2643,10 +2651,6 @@ async function startServer() {
                 responseSchema: {
                   type: Type.OBJECT,
                   properties: {
-                    summary: {
-                      type: Type.STRING,
-                      description: 'ملخص عربي مختصر للتعديلات التي طُبقت على هذه المجموعة.',
-                    },
                     updates: {
                       type: Type.ARRAY,
                       items: {
@@ -2672,8 +2676,12 @@ async function startServer() {
                         required: ['id'],
                       },
                     },
+                    summary: {
+                      type: Type.STRING,
+                      description: 'ملخص عربي مختصر يصف التعديلات المطبقة فعلياً في مصفوفة updates أعلاه.',
+                    },
                   },
-                  required: ['summary', 'updates'],
+                  required: ['updates', 'summary'],
                 },
               },
             });
@@ -2683,71 +2691,97 @@ async function startServer() {
               updates?: AiPatchItem[];
             };
 
-            const validUpdates: AiPatchItem[] = [];
+            const mergedById = new Map<string, AiPatchItem>();
             if (Array.isArray(parsed.updates)) {
               for (const rawUpd of parsed.updates) {
-                if (!rawUpd || typeof rawUpd.id !== 'string' || !chunkIds.has(rawUpd.id)) continue;
-                const cleanUpd: AiPatchItem = { id: rawUpd.id };
+                if (!rawUpd || typeof rawUpd.id !== 'string') continue;
+                const orig = chunkById.get(rawUpd.id);
+                if (!orig) continue;
+
+                const cleanUpd: AiPatchItem = mergedById.get(rawUpd.id) || { id: rawUpd.id };
                 if (typeof rawUpd.title === 'string' && rawUpd.title.trim()) {
-                  cleanUpd.title = rawUpd.title.trim().slice(0, 200);
+                  const val = rawUpd.title.trim().slice(0, 200);
+                  if (val !== orig.title) cleanUpd.title = val;
                 }
                 if (typeof rawUpd.englishTitle === 'string' && rawUpd.englishTitle.trim()) {
-                  cleanUpd.englishTitle = rawUpd.englishTitle.trim().slice(0, 200);
+                  const val = rawUpd.englishTitle.trim().slice(0, 200);
+                  if (val !== orig.englishTitle) cleanUpd.englishTitle = val;
                 }
                 if (
                   typeof rawUpd.kind === 'string' &&
-                  ['movie', 'series', 'tv', 'wrestling'].includes(rawUpd.kind)
+                  ['movie', 'series', 'tv', 'wrestling'].includes(rawUpd.kind) &&
+                  rawUpd.kind !== orig.kind
                 ) {
-                  cleanUpd.kind = rawUpd.kind;
+                  cleanUpd.kind = rawUpd.kind as AiInputItem['kind'];
                 }
                 if (Array.isArray(rawUpd.categories) && rawUpd.categories.length > 0) {
                   const cats = rawUpd.categories
                     .map((c) => String(c || '').trim().slice(0, 60))
                     .filter(Boolean)
                     .slice(0, 10);
-                  if (cats.length > 0) cleanUpd.categories = cats;
+                  if (cats.length > 0 && cats.join('|') !== orig.categories.join('|')) {
+                    cleanUpd.categories = cats;
+                  }
                 }
                 if (Array.isArray(rawUpd.genres) && rawUpd.genres.length > 0) {
                   const gns = rawUpd.genres
                     .map((g) => String(g || '').trim().slice(0, 60))
                     .filter(Boolean)
                     .slice(0, 10);
-                  if (gns.length > 0) cleanUpd.genres = gns;
+                  if (gns.length > 0 && gns.join('|') !== orig.genres.join('|')) {
+                    cleanUpd.genres = gns;
+                  }
                 }
                 if (typeof rawUpd.year === 'string' && rawUpd.year.trim().length >= 4) {
-                  cleanUpd.year = rawUpd.year.trim().slice(0, 10);
+                  const val = rawUpd.year.trim().slice(0, 10);
+                  if (val !== orig.year) cleanUpd.year = val;
                 }
                 if (typeof rawUpd.country === 'string' && rawUpd.country.trim()) {
-                  cleanUpd.country = rawUpd.country.trim().slice(0, 80);
+                  const val = rawUpd.country.trim().slice(0, 80);
+                  if (val !== orig.country) cleanUpd.country = val;
                 }
                 if (typeof rawUpd.language === 'string' && rawUpd.language.trim()) {
-                  cleanUpd.language = rawUpd.language.trim().slice(0, 80);
+                  const val = rawUpd.language.trim().slice(0, 80);
+                  if (val !== orig.language) cleanUpd.language = val;
                 }
                 if (typeof rawUpd.quality === 'string' && rawUpd.quality.trim()) {
-                  cleanUpd.quality = rawUpd.quality.trim().slice(0, 40);
+                  const val = rawUpd.quality.trim().slice(0, 40);
+                  if (val !== orig.quality) cleanUpd.quality = val;
                 }
                 if (typeof rawUpd.duration === 'string' && rawUpd.duration.trim()) {
-                  cleanUpd.duration = rawUpd.duration.trim().slice(0, 40);
+                  const val = rawUpd.duration.trim().slice(0, 40);
+                  if (val !== orig.duration) cleanUpd.duration = val;
                 }
                 if (typeof rawUpd.tagline === 'string') {
-                  cleanUpd.tagline = rawUpd.tagline.trim().slice(0, 400);
+                  const val = rawUpd.tagline.trim().slice(0, 400);
+                  if (val !== orig.tagline) cleanUpd.tagline = val;
                 }
                 if (typeof rawUpd.story === 'string' && rawUpd.story.trim()) {
-                  cleanUpd.story = rawUpd.story.trim().slice(0, 3000);
+                  const val = rawUpd.story.trim().slice(0, 3000);
+                  if (val !== orig.story) cleanUpd.story = val;
                 }
-                if (typeof rawUpd.pinned === 'boolean') cleanUpd.pinned = rawUpd.pinned;
-                if (typeof rawUpd.isNew === 'boolean') cleanUpd.isNew = rawUpd.isNew;
-                if (typeof rawUpd.comingSoon === 'boolean') cleanUpd.comingSoon = rawUpd.comingSoon;
+                if (typeof rawUpd.pinned === 'boolean' && rawUpd.pinned !== orig.pinned) {
+                  cleanUpd.pinned = rawUpd.pinned;
+                }
+                if (typeof rawUpd.isNew === 'boolean' && rawUpd.isNew !== orig.isNew) {
+                  cleanUpd.isNew = rawUpd.isNew;
+                }
+                if (
+                  typeof rawUpd.comingSoon === 'boolean' &&
+                  rawUpd.comingSoon !== orig.comingSoon
+                ) {
+                  cleanUpd.comingSoon = rawUpd.comingSoon;
+                }
 
                 if (Object.keys(cleanUpd).length > 1) {
-                  validUpdates.push(cleanUpd);
+                  mergedById.set(rawUpd.id, cleanUpd);
                 }
               }
             }
 
             return {
               summary: typeof parsed.summary === 'string' ? parsed.summary.trim() : '',
-              updates: validUpdates,
+              updates: Array.from(mergedById.values()),
             };
           } catch (err) {
             lastErr = err;
@@ -2767,9 +2801,9 @@ async function startServer() {
       const allUpdates: AiPatchItem[] = [];
       const summaries: string[] = [];
 
-      // Process up to 3 batches concurrently for speed across large catalogs
-      for (let i = 0; i < chunks.length; i += 3) {
-        const wave = chunks.slice(i, i + 3);
+      // Process up to 4 small batches concurrently for speed and accuracy
+      for (let i = 0; i < chunks.length; i += 4) {
+        const wave = chunks.slice(i, i + 4);
         const results = await Promise.all(wave.map((c) => processChunkWithRetry(c)));
         for (const r of results) {
           if (r.summary) summaries.push(r.summary);
