@@ -30,6 +30,12 @@ import {
   saveStoredTypographyConfig,
 } from './lib/typographyConfig';
 import {
+  installGlobalPopupShieldGuards,
+  loadStoredPopupShieldConfig,
+  saveStoredPopupShieldConfig,
+  setLiveShieldConfig,
+} from './lib/popupShield';
+import {
   findMediaByRouteKey,
   getAppBasePrefix,
   readWatchRouteFromLocation,
@@ -41,6 +47,7 @@ import {
   handleFirestoreError,
   OperationType,
   sanitizeRatingMediaId,
+  saveSiteSettingsToFirestore,
   saveWatchlistToFirestore,
   signOutFirebase,
   submitVisitorRequestToFirestore,
@@ -53,6 +60,7 @@ import {
   CustomFontRecord,
   CustomFontSlot,
   MediaItem,
+  PopupShieldHostRule,
   SiteSettings,
   UserProfileRecord,
   VisitorRequest,
@@ -83,6 +91,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   playerTheme: loadStoredPlayerTheme(),
   homeConfig: loadStoredHomeConfig(),
   typography: loadStoredTypographyConfig(),
+  popupShield: loadStoredPopupShieldConfig(),
 };
 
 const STORAGE_WATCHLIST = 'moov_watchlist_ids';
@@ -240,6 +249,14 @@ export default function App() {
   }, [siteSettings.typography, customFonts]);
 
   useEffect(() => {
+    setLiveShieldConfig(siteSettings.popupShield);
+  }, [siteSettings.popupShield]);
+
+  useEffect(() => {
+    return installGlobalPopupShieldGuards();
+  }, []);
+
+  useEffect(() => {
     try {
       localStorage.setItem(STORAGE_WATCHLIST, JSON.stringify(watchlistIds));
     } catch {
@@ -341,6 +358,9 @@ export default function App() {
           const syncedTypography = data.typography
             ? saveStoredTypographyConfig(data.typography)
             : loadStoredTypographyConfig();
+          const syncedShield = data.popupShield
+            ? saveStoredPopupShieldConfig(data.popupShield)
+            : loadStoredPopupShieldConfig();
           setSiteSettings({
             siteName: data.siteName || DEFAULT_SETTINGS.siteName,
             tagline: data.tagline || DEFAULT_SETTINGS.tagline,
@@ -355,6 +375,7 @@ export default function App() {
             playerTheme: syncedTheme,
             homeConfig: syncedHome,
             typography: syncedTypography,
+            popupShield: syncedShield,
           });
         }
       },
@@ -684,6 +705,25 @@ export default function App() {
     setDismissedStarterIds([]);
   };
 
+  const handleUpdateHostRule = (rule: PopupShieldHostRule) => {
+    const baseShield = siteSettings.popupShield || loadStoredPopupShieldConfig();
+    const nextShield = saveStoredPopupShieldConfig({
+      ...baseShield,
+      hostRules: {
+        ...baseShield.hostRules,
+        [rule.hostname]: rule,
+      },
+    });
+    const nextSettings: SiteSettings = {
+      ...siteSettings,
+      popupShield: nextShield,
+    };
+    setSiteSettings(nextSettings);
+    if (isOwnerAdmin && firebaseUser) {
+      void saveSiteSettingsToFirestore(nextSettings, firebaseUser.uid).catch(() => undefined);
+    }
+  };
+
   const watchlistItems = activeCatalog.filter((i) => watchlistIds.includes(i.id));
 
   /* ---------------- Dedicated Standalone /admin Page (No Header / No Footer) ---------------- */
@@ -706,6 +746,10 @@ export default function App() {
           onCustomFontsChange={(next) => {
             saveStoredCustomFonts(next);
             setCustomFonts(next);
+          }}
+          onPopupShieldChange={(next) => {
+            const clean = saveStoredPopupShieldConfig(next);
+            setSiteSettings((prev) => ({ ...prev, popupShield: clean }));
           }}
           requestedTab={adminRequestedTab}
           onExitDashboard={navigateHome}
@@ -881,6 +925,7 @@ export default function App() {
       <TrailerModal
         item={trailerItem}
         playerTheme={siteSettings.playerTheme}
+        popupShieldConfig={siteSettings.popupShield}
         onClose={() => setTrailerItem(null)}
         onWatchFull={(item) => setPlayerState({ item, episode: 1 })}
       />
@@ -890,6 +935,8 @@ export default function App() {
         initialEpisode={playerState?.episode || 1}
         initialServerIndex={playerState?.serverIndex || 0}
         playerTheme={siteSettings.playerTheme}
+        popupShieldConfig={siteSettings.popupShield}
+        onUpdateHostRule={handleUpdateHostRule}
         onClose={() => setPlayerState(null)}
       />
 

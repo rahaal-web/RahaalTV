@@ -691,6 +691,7 @@ export function SingleDetailView({
                             href={dl.url}
                             target="_blank"
                             rel="noopener noreferrer"
+                            data-shield-allow="true"
                             onClick={() => handleDownload(dl.quality, dl.host)}
                             className="flex items-center justify-between gap-2 rounded-xl bg-[#0b1620] border border-white/10 px-3 py-2 text-right hover:border-[#10b981] transition-colors cursor-pointer"
                           >
@@ -1067,6 +1068,7 @@ export function SingleDetailView({
                             href={dl.url}
                             target="_blank"
                             rel="noopener noreferrer"
+                            data-shield-allow="true"
                             onClick={() => handleDownload(dl.quality, dl.host)}
                             className="flex items-center justify-between rounded-xl bg-[#0c1821] border border-white/10 px-4 py-3 text-right hover:border-[#4CAF50] transition-colors cursor-pointer"
                           >

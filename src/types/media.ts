@@ -231,6 +231,68 @@ export interface TypographyConfig {
   sectionTitleSizePx: number;
 }
 
+export type PopupShieldProfileMode =
+  | 'strict_sandbox'
+  | 'redirect_guard'
+  | 'direct_unrestricted'
+  | 'direct_media';
+
+export type PopupShieldCompatibility =
+  | 'compatible'
+  | 'partial'
+  | 'incompatible'
+  | 'untested';
+
+export interface PopupShieldHostRule {
+  hostname: string;
+  mode: Exclude<PopupShieldProfileMode, 'direct_media'>;
+  compatibility: PopupShieldCompatibility;
+  note?: string;
+  adSignals?: string[];
+  lastTestedAt?: string;
+}
+
+export interface PopupShieldConfig {
+  enabled: boolean;
+  defaultStrategy: 'adaptive' | 'strict_when_safe' | 'observe_only';
+  blockWindowOpen: boolean;
+  guardBlankLinks: boolean;
+  autoFallbackOnReject: boolean;
+  showPlayerBadge: boolean;
+  hostRules: Record<string, PopupShieldHostRule>;
+}
+
+export interface PopupShieldLogEntry {
+  id: string;
+  timestamp: string;
+  kind:
+    | 'blocked_window_open'
+    | 'blocked_blank_link'
+    | 'sandbox_rejected_fallback'
+    | 'observed_external_blur'
+    | 'compatibility_tested';
+  prevented: boolean;
+  serverHost: string;
+  serverName?: string;
+  mediaTitle?: string;
+  targetUrl?: string;
+  detail: string;
+}
+
+export interface PopupShieldServerInspection {
+  hostname: string;
+  url: string;
+  reachable: boolean;
+  compatibility: PopupShieldCompatibility;
+  recommendedMode: PopupShieldProfileMode;
+  antiSandboxDetected: boolean;
+  adScriptDetected: boolean;
+  adSignals: string[];
+  directStreamUrl?: string | null;
+  reason: string;
+  testedAt: string;
+}
+
 export interface SiteSettings {
   siteName: string;
   tagline: string;
@@ -242,6 +304,7 @@ export interface SiteSettings {
   playerTheme?: PlayerThemeConfig;
   homeConfig?: HomeLayoutConfig;
   typography?: TypographyConfig;
+  popupShield?: PopupShieldConfig;
 }
 
 export interface UserProfileRecord {

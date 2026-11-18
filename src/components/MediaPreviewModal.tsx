@@ -32,7 +32,11 @@ import {
   loadStoredPlayerTheme,
   normalizePlayerTheme,
 } from '../lib/playerTheme';
-import { MediaItem, PlayerThemeConfig } from '../types/media';
+import {
+  loadStoredPopupShieldConfig,
+  resolveEffectiveShieldDecision,
+} from '../lib/popupShield';
+import { MediaItem, PlayerThemeConfig, PopupShieldConfig } from '../types/media';
 import { MovieCard } from './MovieCard';
 
 interface MediaPreviewModalProps {
@@ -42,6 +46,7 @@ interface MediaPreviewModalProps {
   publishLabel?: string;
   busy?: boolean;
   playerTheme?: PlayerThemeConfig;
+  popupShieldConfig?: PopupShieldConfig;
 }
 
 function extractSafePreviewSrc(embedCode?: string, url?: string): string | null {
@@ -67,6 +72,7 @@ export function MediaPreviewModal({
   publishLabel = 'تأكيد النشر في قاعدة البيانات',
   busy = false,
   playerTheme,
+  popupShieldConfig,
 }: MediaPreviewModalProps) {
   const [previewMode, setPreviewMode] = useState<'page' | 'card'>('page');
   const [testServerIdx, setTestServerIdx] = useState<number | null>(null);
@@ -99,6 +105,10 @@ export function MediaPreviewModal({
     : null;
   const activeTestIsPortal = Boolean(activeTestSrc && isLikelyNonVideoWebsiteUrl(activeTestSrc));
   const isDirectVideo = Boolean(activeTestSrc && /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(activeTestSrc));
+  const shieldDecision = resolveEffectiveShieldDecision(
+    activeTestSrc,
+    popupShieldConfig || loadStoredPopupShieldConfig()
+  );
 
   return (
     <div className="fixed inset-0 z-[55] flex items-center justify-center p-2 sm:p-4">
@@ -425,6 +435,11 @@ export function MediaPreviewModal({
                               <span className="truncate">
                                 سيرفر {testServerIdx + 1} — {activeTheme.brandLabel}
                               </span>
+                              {activeTestSrc && (
+                                <span className="hidden sm:inline-flex items-center rounded bg-white/10 px-2 py-0.5 text-[10px] font-bold text-[#b7c9ef]">
+                                  {shieldDecision.shortLabel}
+                                </span>
+                              )}
                             </span>
                             <button
                               type="button"
@@ -442,9 +457,12 @@ export function MediaPreviewModal({
                               <video src={activeTestSrc} controls autoPlay playsInline className="w-full h-full" />
                             ) : (
                               <iframe
+                                key={`${activeTestSrc}-${shieldDecision.mode}`}
                                 src={activeTestSrc}
                                 title={`Preview Server ${testServerIdx + 1}`}
+                                sandbox={shieldDecision.sandboxAttr}
                                 allowFullScreen
+                                allow="autoplay; fullscreen; encrypted-media; picture-in-picture; accelerometer; gyroscope"
                                 referrerPolicy="no-referrer"
                                 className="w-full h-full border-0"
                               />

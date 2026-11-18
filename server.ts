@@ -3819,6 +3819,248 @@ async function startServer() {
     }
   });
 
+  // Smart Popup Shield Probe Endpoint (inspects embed headers, anti-sandbox JS checks, ad/popunder scripts, and direct streams)
+  app.post('/api/shield-probe', async (req, res) => {
+    try {
+      const { url } = (req.body || {}) as { url?: unknown };
+      const rawUrl = String(url || '').trim();
+      const testedAt = new Date().toISOString();
+
+      if (!rawUrl) {
+        return res.status(400).json({ ok: false, error: 'يجب إرسال رابط السيرفر (url).' });
+      }
+
+      let parsed: URL;
+      try {
+        parsed = new URL(rawUrl);
+      } catch {
+        return res.status(400).json({ ok: false, error: 'صيغة الرابط غير صالحة.' });
+      }
+
+      const hostname = parsed.hostname.toLowerCase().replace(/^www\./, '');
+      if (!['http:', 'https:'].includes(parsed.protocol) || isBlockedHost(parsed.hostname)) {
+        return res.status(400).json({ ok: false, error: 'رابط غير مسموح به للفحص.' });
+      }
+
+      const isDirectMedia = /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(parsed.toString());
+      if (isDirectMedia) {
+        return res.json({
+          ok: true,
+          inspection: {
+            hostname,
+            url: rawUrl,
+            reachable: true,
+            compatibility: 'compatible',
+            recommendedMode: 'direct_media',
+            antiSandboxDetected: false,
+            adScriptDetected: false,
+            adSignals: [],
+            directStreamUrl: rawUrl,
+            reason: 'رابط فيديو مباشر (.mp4 / .m3u8) لا يحتاج iframe ولا يفتح نوافذ إعلانية.',
+            testedAt,
+          },
+        });
+      }
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6500);
+
+      try {
+        const response = await fetch(parsed.toString(), {
+          method: 'GET',
+          redirect: 'follow',
+          signal: controller.signal,
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+            Referer: parsed.origin + '/',
+            Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+            Range: 'bytes=0-49152',
+          },
+        });
+
+        const finalUrl = response.url || parsed.toString();
+        const xFrame = (response.headers.get('x-frame-options') || '').toLowerCase();
+        const csp = (response.headers.get('content-security-policy') || '').toLowerCase();
+        const contentType = (response.headers.get('content-type') || '').toLowerCase();
+
+        let html = '';
+        if (contentType.includes('text/html') || contentType.includes('text/plain') || !contentType) {
+          try {
+            html = (await response.text()).slice(0, 49152);
+          } catch {
+            html = '';
+          }
+        }
+
+        const adSignals: string[] = [];
+        const matchers: Array<{ label: string; rx: RegExp }> = [
+          { label: 'popads', rx: /popads\.net|popads/i },
+          { label: 'popcash', rx: /popcash\.net|popcash/i },
+          { label: 'adsterra', rx: /adsterra|highcpmgate|profitablecpmrate/i },
+          { label: 'propellerads / monetag', rx: /propellerads|monetag|aclib/i },
+          { label: 'clickadu / hilltopads', rx: /clickadu|hilltopads|admaven/i },
+          { label: 'window.open', rx: /window\.open\s*\(/i },
+          { label: 'target=_blank', rx: /target\s*=\s*["']_blank["']/i },
+          { label: 'popunder', rx: /popunder|openPop|triggerPop/i },
+        ];
+        for (const m of matchers) {
+          if (m.rx.test(html)) adSignals.push(m.label);
+        }
+
+        const antiSandboxDetected =
+          /sandboxed\s+embed|please\s+disable\s+sandbox|embedding\s+in\s+sandbox\s+is\s+not\s+allowed|no[-_\s]?sandbox/i.test(
+            html
+          ) ||
+          /window\.frameElement|top\s*!==?\s*self|self\s*!==?\s*top|top\.location\s*!=\s*self\.location/i.test(
+            html
+          );
+
+        const knownNoSandbox =
+          /(vidmoly|dood|ds2play|do0od|streamwish|wishfast|filemoon|streamtape|voe|earnvids|mixdrop|vidhide|luluvdo|lulustream|filelions|rpmshare|upns)/i.test(
+            hostname
+          );
+        const knownRedirectGuard = /(vidsrc|2embed|superembed|megacloud|rabbitstream|dokicloud|fembed|sendvid)/i.test(
+          hostname
+        );
+
+        const mp4Match = html
+          ? html.match(/<(?:video|source)[^>]+src=["'](https?:\/\/[^"']+\.(?:mp4|m3u8)[^"']*)["']/i)?.[1] ||
+            html.match(/(?:file|src|video_url|mp4_url)\s*:\s*["'](https?:\/\/[^"']+\.(?:mp4|m3u8)[^"']*)["']/i)?.[1] ||
+            null
+          : null;
+
+        const frameBlocked =
+          xFrame.includes('deny') ||
+          xFrame.includes('sameorigin') ||
+          /frame-ancestors\s+[^;]*'none'|frame-ancestors\s+'self'/i.test(csp);
+
+        if (isWebsiteHomepageHtml(finalUrl, html)) {
+          return res.json({
+            ok: true,
+            inspection: {
+              hostname,
+              url: rawUrl,
+              reachable: true,
+              compatibility: 'incompatible',
+              recommendedMode: 'direct_unrestricted',
+              antiSandboxDetected: true,
+              adScriptDetected: adSignals.length > 0,
+              adSignals,
+              reason: 'الرابط يفتح صفحة موقع رئيسية وليس مشغلاً فعلياً.',
+              testedAt,
+            },
+          });
+        }
+
+        if (mp4Match) {
+          return res.json({
+            ok: true,
+            inspection: {
+              hostname,
+              url: rawUrl,
+              reachable: response.ok,
+              compatibility: 'compatible',
+              recommendedMode: 'direct_media',
+              antiSandboxDetected,
+              adScriptDetected: adSignals.length > 0,
+              adSignals,
+              directStreamUrl: mp4Match.replace(/\\\//g, '/'),
+              reason: 'تم العثور على رابط بث مباشر داخل السيرفر (بدون نوافذ منبثقة).',
+              testedAt,
+            },
+          });
+        }
+
+        if (frameBlocked || antiSandboxDetected || knownNoSandbox) {
+          return res.json({
+            ok: true,
+            inspection: {
+              hostname,
+              url: rawUrl,
+              reachable: response.status > 0,
+              compatibility: 'incompatible',
+              recommendedMode: 'direct_unrestricted',
+              antiSandboxDetected: true,
+              adScriptDetected: adSignals.length > 0,
+              adSignals,
+              reason: frameBlocked
+                ? 'السيرفر يرسل قيود X-Frame-Options أو CSP قد تمنع التشغيل المقيد.'
+                : antiSandboxDetected
+                  ? 'تم رصد فحص رفض Sandbox داخل مصدر السيرفر — يُنصح بوضع التوافق المباشر لعدم إيقاف الفيديو.'
+                  : 'هذا النطاق معروف برفضه لـ iframe sandbox — يُنصح بالتشغيل المباشر للحفاظ على الفيديو.',
+              testedAt,
+            },
+          });
+        }
+
+        if (knownRedirectGuard) {
+          return res.json({
+            ok: true,
+            inspection: {
+              hostname,
+              url: rawUrl,
+              reachable: response.ok,
+              compatibility: 'partial',
+              recommendedMode: 'redirect_guard',
+              antiSandboxDetected: false,
+              adScriptDetected: adSignals.length > 0,
+              adSignals,
+              reason: 'متوافق جزئياً مع وضع منع تحويل الصفحة الرئيسية (redirect_guard).',
+              testedAt,
+            },
+          });
+        }
+
+        return res.json({
+          ok: true,
+          inspection: {
+            hostname,
+            url: rawUrl,
+            reachable: response.ok,
+            compatibility: 'compatible',
+            recommendedMode: 'strict_sandbox',
+            antiSandboxDetected: false,
+            adScriptDetected: adSignals.length > 0,
+            adSignals,
+            reason:
+              adSignals.length > 0
+                ? `تم رصد إشارات نوافذ منبثقة (${adSignals.slice(0, 3).join('، ')}) ولم يُرصد رفض لـ Sandbox — مناسب للحماية الصارمة.`
+                : 'السيرفر متوافق مع العزل الصارم (strict_sandbox) بدون مؤشرات تعطيل.',
+            testedAt,
+          },
+        });
+      } catch {
+        const knownNoSandbox =
+          /(vidmoly|dood|ds2play|do0od|streamwish|wishfast|filemoon|streamtape|voe|earnvids|mixdrop|vidhide|luluvdo|lulustream|filelions|rpmshare|upns)/i.test(
+            hostname
+          );
+        return res.json({
+          ok: true,
+          inspection: {
+            hostname,
+            url: rawUrl,
+            reachable: false,
+            compatibility: knownNoSandbox ? 'incompatible' : 'untested',
+            recommendedMode: knownNoSandbox ? 'direct_unrestricted' : 'strict_sandbox',
+            antiSandboxDetected: knownNoSandbox,
+            adScriptDetected: false,
+            adSignals: [],
+            reason: knownNoSandbox
+              ? 'تعذر الجلب المباشر، وتم اعتماد قاعدة التوافق المباشر المعروفة لهذا السيرفر.'
+              : 'تعذر الوصول إلى استجابة HTML كاملة من السيرفر — يتم تطبيق وضع الاختبار الآمن.',
+            testedAt,
+          },
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'خطأ غير متوقع';
+      return res.status(500).json({ ok: false, error: msg });
+    }
+  });
+
   // Measure real pixel dimensions of candidate image URLs server-side
   app.post('/api/images/probe', async (req, res) => {
     try {

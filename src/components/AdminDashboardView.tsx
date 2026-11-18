@@ -53,6 +53,7 @@ import { AdminAiBulkEditor } from './AdminAiBulkEditor';
 import { AdminImageManagerPanel } from './AdminImageManagerPanel';
 import { HomeBuilderPanel } from './HomeBuilderPanel';
 import { MediaPreviewModal } from './MediaPreviewModal';
+import { PopupShieldPanel } from './PopupShieldPanel';
 import { TypographyPanel } from './TypographyPanel';
 import {
   evaluateImageQuality,
@@ -127,6 +128,11 @@ import {
   saveStoredTypographyConfig,
 } from '../lib/typographyConfig';
 import {
+  loadStoredPopupShieldConfig,
+  normalizePopupShieldConfig,
+  saveStoredPopupShieldConfig,
+} from '../lib/popupShield';
+import {
   AdminPrivilegeRole,
   AdminRoleRecord,
   CastMember,
@@ -138,6 +144,7 @@ import {
   MediaItem,
   MediaKind,
   PlayerThemeConfig,
+  PopupShieldConfig,
   RequestStatus,
   SeasonItem,
   SiteSettings,
@@ -151,6 +158,7 @@ export type AdminTab =
   | 'overview'
   | 'home_builder'
   | 'typography'
+  | 'popup_shield'
   | 'catalog'
   | 'images'
   | 'ai_editor'
@@ -176,6 +184,7 @@ interface AdminDashboardViewProps {
   siteSettings: SiteSettings;
   customFonts?: Partial<Record<CustomFontSlot, CustomFontRecord>>;
   onCustomFontsChange?: (next: Partial<Record<CustomFontSlot, CustomFontRecord>>) => void;
+  onPopupShieldChange?: (next: PopupShieldConfig) => void;
   requestedTab?: { tab: AdminTab; nonce: number };
   onExitDashboard: () => void;
   onPreviewMedia: (item: MediaItem) => void;
@@ -457,6 +466,7 @@ export function AdminDashboardView({
   siteSettings,
   customFonts,
   onCustomFontsChange,
+  onPopupShieldChange,
   requestedTab,
   onExitDashboard,
   onPreviewMedia,
@@ -571,6 +581,9 @@ export function AdminDashboardView({
     playerTheme: normalizePlayerTheme(siteSettings.playerTheme || loadStoredPlayerTheme()),
     homeConfig: normalizeHomeConfig(siteSettings.homeConfig || loadStoredHomeConfig()),
     typography: normalizeTypographyConfig(siteSettings.typography || loadStoredTypographyConfig()),
+    popupShield: normalizePopupShieldConfig(
+      siteSettings.popupShield || loadStoredPopupShieldConfig()
+    ),
   }));
   const [customApiUrl, setCustomApiUrl] = useState<string>(() => getCustomApiBaseUrl());
   const [testingProxy, setTestingProxy] = useState(false);
@@ -584,6 +597,9 @@ export function AdminDashboardView({
       playerTheme: normalizePlayerTheme(siteSettings.playerTheme || loadStoredPlayerTheme()),
       homeConfig: normalizeHomeConfig(siteSettings.homeConfig || loadStoredHomeConfig()),
       typography: normalizeTypographyConfig(siteSettings.typography || loadStoredTypographyConfig()),
+      popupShield: normalizePopupShieldConfig(
+        siteSettings.popupShield || loadStoredPopupShieldConfig()
+      ),
     });
   }, [siteSettings]);
 
@@ -601,6 +617,14 @@ export function AdminDashboardView({
         settingsForm.typography || siteSettings.typography || loadStoredTypographyConfig()
       ),
     [settingsForm.typography, siteSettings.typography]
+  );
+
+  const activePopupShield = useMemo(
+    () =>
+      normalizePopupShieldConfig(
+        settingsForm.popupShield || siteSettings.popupShield || loadStoredPopupShieldConfig()
+      ),
+    [settingsForm.popupShield, siteSettings.popupShield]
   );
 
   const effectiveCustomFonts = useMemo(
@@ -1613,19 +1637,22 @@ export function AdminDashboardView({
       const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
       const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
       const normalizedTypography = saveStoredTypographyConfig(activeTypography);
+      const normalizedShield = saveStoredPopupShieldConfig(activePopupShield);
+      onPopupShieldChange?.(normalizedShield);
       const res = await saveSiteSettingsToFirestore(
         {
           ...settingsForm,
           playerTheme: normalizedTheme,
           homeConfig: normalizedHome,
           typography: normalizedTypography,
+          popupShield: normalizedShield,
         },
         user.uid
       );
       onNotify(
         res?.syncedHomeToCloud === false
           ? 'تم حفظ الإعدادات الأساسية في Firestore وحفظ التخصيصات محلياً (حدث قواعد Firestore للمزامنة السحابية)'
-          : 'تم حفظ الإعدادات وتخصيص الرئيسية والخطوط وثيم المشغّل بنجاح'
+          : 'تم حفظ الإعدادات وتخصيص الرئيسية والخطوط ودرع النوافذ وثيم المشغّل بنجاح'
       );
     } catch {
       onNotify('تعذر حفظ الإعدادات');
@@ -1645,12 +1672,14 @@ export function AdminDashboardView({
     try {
       const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
       const normalizedTypography = saveStoredTypographyConfig(activeTypography);
+      const normalizedShield = saveStoredPopupShieldConfig(activePopupShield);
       const res = await saveSiteSettingsToFirestore(
         {
           ...settingsForm,
           playerTheme: normalizedTheme,
           homeConfig: cleanHome,
           typography: normalizedTypography,
+          popupShield: normalizedShield,
         },
         user.uid
       );
@@ -1678,12 +1707,14 @@ export function AdminDashboardView({
     try {
       const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
       const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
+      const normalizedShield = saveStoredPopupShieldConfig(activePopupShield);
       const res = await saveSiteSettingsToFirestore(
         {
           ...settingsForm,
           playerTheme: normalizedTheme,
           homeConfig: normalizedHome,
           typography: cleanTypography,
+          popupShield: normalizedShield,
         },
         user.uid
       );
@@ -1694,6 +1725,41 @@ export function AdminDashboardView({
       );
     } catch {
       onNotify('تم تطبيق الخطوط محلياً — تعذرت المزامنة السحابية مع Firestore');
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleSavePopupShield = async (nextShield: PopupShieldConfig) => {
+    const cleanShield = saveStoredPopupShieldConfig(nextShield);
+    setSettingsForm((prev) => ({ ...prev, popupShield: cleanShield }));
+    onPopupShieldChange?.(cleanShield);
+    if (!user) {
+      onNotify('تم تطبيق إعدادات درع النوافذ المنبثقة محلياً — سجّل الدخول للمزامنة السحابية');
+      return;
+    }
+    setBusyAction(true);
+    try {
+      const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
+      const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
+      const normalizedTypography = saveStoredTypographyConfig(activeTypography);
+      const res = await saveSiteSettingsToFirestore(
+        {
+          ...settingsForm,
+          playerTheme: normalizedTheme,
+          homeConfig: normalizedHome,
+          typography: normalizedTypography,
+          popupShield: cleanShield,
+        },
+        user.uid
+      );
+      onNotify(
+        res?.syncedHomeToCloud === false
+          ? 'تم تفعيل إعدادات Smart Popup Shield محلياً — يرجى نشر تحديث firestore.rules في Firebase لمزامنتها لكل الزوار'
+          : 'تم حفظ ومزامنة إعدادات Smart Popup Shield لجميع المشاهدين بنجاح!'
+      );
+    } catch {
+      onNotify('تم تطبيق إعدادات الدرع محلياً — تعذرت المزامنة مع Firestore');
     } finally {
       setBusyAction(false);
     }
@@ -1722,12 +1788,14 @@ export function AdminDashboardView({
       await saveCustomFontToFirestore(font, user.uid);
       const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
       const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
+      const normalizedShield = saveStoredPopupShieldConfig(activePopupShield);
       await saveSiteSettingsToFirestore(
         {
           ...settingsForm,
           playerTheme: normalizedTheme,
           homeConfig: normalizedHome,
           typography: nextTypo,
+          popupShield: normalizedShield,
         },
         user.uid
       );
@@ -1774,12 +1842,14 @@ export function AdminDashboardView({
     try {
       const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
       const normalizedTypography = saveStoredTypographyConfig(activeTypography);
+      const normalizedShield = saveStoredPopupShieldConfig(activePopupShield);
       await saveSiteSettingsToFirestore(
         {
           ...settingsForm,
           playerTheme: clean,
           homeConfig: normalizedHome,
           typography: normalizedTypography,
+          popupShield: normalizedShield,
         },
         user.uid
       );
@@ -2577,6 +2647,12 @@ export function AdminDashboardView({
                   icon: Type,
                   badge: 'فونت',
                 },
+                {
+                  id: 'popup_shield',
+                  label: 'درع النوافذ المنبثقة',
+                  icon: ShieldCheck,
+                  badge: activePopupShield.enabled ? 'نشط' : 'متوقف',
+                },
                 { id: 'catalog', label: `الأفلام والمسلسلات (${catalog.length})`, icon: Film },
                 {
                   id: 'images',
@@ -2620,7 +2696,8 @@ export function AdminDashboardView({
                     if (
                       tab.id === 'settings' ||
                       tab.id === 'home_builder' ||
-                      tab.id === 'typography'
+                      tab.id === 'typography' ||
+                      tab.id === 'popup_shield'
                     ) {
                       setSettingsForm({
                         ...siteSettings,
@@ -2632,6 +2709,9 @@ export function AdminDashboardView({
                         ),
                         typography: normalizeTypographyConfig(
                           siteSettings.typography || loadStoredTypographyConfig()
+                        ),
+                        popupShield: normalizePopupShieldConfig(
+                          siteSettings.popupShield || loadStoredPopupShieldConfig()
                         ),
                       });
                     }
@@ -2849,6 +2929,22 @@ export function AdminDashboardView({
                 onUploadCustomFont={handleUploadCustomFont}
                 onDeleteCustomFont={handleDeleteCustomFont}
                 onPreviewHome={onExitDashboard}
+                onNotify={onNotify}
+              />
+            )}
+
+            {/* TAB 1B-3: SMART POPUP SHIELD (OWNER ONLY) */}
+            {isOwner && activeTab === 'popup_shield' && (
+              <PopupShieldPanel
+                catalog={catalog}
+                shieldConfig={activePopupShield}
+                busyAction={busyAction}
+                onChangeShieldConfig={(next) => {
+                  const clean = saveStoredPopupShieldConfig(next);
+                  setSettingsForm((prev) => ({ ...prev, popupShield: clean }));
+                  onPopupShieldChange?.(clean);
+                }}
+                onSaveShieldConfig={handleSavePopupShield}
                 onNotify={onNotify}
               />
             )}
@@ -6744,6 +6840,7 @@ export function AdminDashboardView({
         onClose={() => setPreviewModalState(null)}
         busy={busyAction}
         playerTheme={activePlayerTheme}
+        popupShieldConfig={activePopupShield}
         publishLabel={
           previewModalState?.source === 'editor' && !isCreatingNew
             ? 'حفظ التعديلات في قاعدة البيانات'

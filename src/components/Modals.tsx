@@ -18,6 +18,7 @@ import {
   RotateCw,
   Send,
   Server,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -42,9 +43,24 @@ import {
   loadStoredPlayerTheme,
   normalizePlayerTheme,
 } from '../lib/playerTheme';
+import {
+  appendPopupShieldLog,
+  loadStoredPopupShieldConfig,
+  normalizePopupShieldConfig,
+  resolveEffectiveShieldDecision,
+  setActiveShieldPlayerContext,
+} from '../lib/popupShield';
 import { handlePosterError } from '../lib/mediaFilters';
 import { getPosterUrl } from '../lib/mediaImages';
-import { AdminPrivilegeRole, MediaItem, PlayerThemeConfig, VisitorRequest } from '../types/media';
+import {
+  AdminPrivilegeRole,
+  MediaItem,
+  PlayerThemeConfig,
+  PopupShieldConfig,
+  PopupShieldHostRule,
+  PopupShieldProfileMode,
+  VisitorRequest,
+} from '../types/media';
 import { FooterTopic } from './Footer';
 
 /* ---------------- Watchlist Modal ---------------- */
@@ -148,6 +164,7 @@ export function WatchlistModal({
 interface TrailerModalProps {
   item: MediaItem | null;
   playerTheme?: PlayerThemeConfig;
+  popupShieldConfig?: PopupShieldConfig;
   onClose: () => void;
   onWatchFull: (item: MediaItem) => void;
 }
@@ -168,13 +185,37 @@ function normalizeTrailerUrl(url?: string): { kind: 'video' | 'iframe'; src: str
   return { kind: 'iframe', src: trimmed };
 }
 
-export function TrailerModal({ item, playerTheme, onClose, onWatchFull }: TrailerModalProps) {
+export function TrailerModal({
+  item,
+  playerTheme,
+  popupShieldConfig,
+  onClose,
+  onWatchFull,
+}: TrailerModalProps) {
   const [playing, setPlaying] = useState(true);
+  const parsedTrailer = item ? normalizeTrailerUrl(item.trailerUrl) : null;
+  const trailerShieldDecision = resolveEffectiveShieldDecision(
+    parsedTrailer?.src,
+    popupShieldConfig || loadStoredPopupShieldConfig()
+  );
+
+  useEffect(() => {
+    if (!item) return;
+    setActiveShieldPlayerContext({
+      serverHost: trailerShieldDecision.hostname || 'trailer',
+      serverName: 'الإعلان الرسمي',
+      mediaTitle: item.title,
+      mode: trailerShieldDecision.mode,
+    });
+    return () => {
+      setActiveShieldPlayerContext(null);
+    };
+  }, [item?.id, item?.title, trailerShieldDecision.hostname, trailerShieldDecision.mode]);
+
   if (!item) return null;
 
   const theme = normalizePlayerTheme(playerTheme || loadStoredPlayerTheme());
   const themeVars = buildPlayerThemeVars(theme);
-  const parsedTrailer = normalizeTrailerUrl(item.trailerUrl);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5" style={themeVars}>
@@ -254,10 +295,12 @@ export function TrailerModal({ item, playerTheme, onClose, onWatchFull }: Traile
               />
             ) : (
               <iframe
+                key={`${parsedTrailer.src}-${trailerShieldDecision.mode}`}
                 src={parsedTrailer.src}
                 title={item.trailerLabel}
+                sandbox={trailerShieldDecision.sandboxAttr}
                 allowFullScreen
-                allow="autoplay; fullscreen; picture-in-picture"
+                allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                 className="h-full w-full border-0 bg-black"
               />
             )
@@ -335,6 +378,8 @@ interface PlayerModalProps {
   initialEpisode?: number;
   initialServerIndex?: number;
   playerTheme?: PlayerThemeConfig;
+  popupShieldConfig?: PopupShieldConfig;
+  onUpdateHostRule?: (rule: PopupShieldHostRule) => void;
   onClose: () => void;
 }
 
@@ -375,6 +420,8 @@ export function PlayerModal({
   initialEpisode = 1,
   initialServerIndex = 0,
   playerTheme,
+  popupShieldConfig,
+  onUpdateHostRule,
   onClose,
 }: PlayerModalProps) {
   const [selectedServer, setSelectedServer] = useState(initialServerIndex);
@@ -391,9 +438,13 @@ export function PlayerModal({
   } | null>(null);
   const [bypassEpisodeSrc, setBypassEpisodeSrc] = useState(false);
   const [playerReloadKey, setPlayerReloadKey] = useState(0);
+  const [shieldSessionOverrides, setShieldSessionOverrides] = useState<
+    Record<number, Exclude<PopupShieldProfileMode, 'direct_media'>>
+  >({});
   const [isTheaterMode, setIsTheaterMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const playerBoxRef = useRef<HTMLDivElement | null>(null);
+  const lastBlurObservedRef = useRef<number>(0);
 
   useEffect(() => {
     const onFsChange = () => {
@@ -425,6 +476,7 @@ export function PlayerModal({
     setFilterAlert(null);
     setBypassEpisodeSrc(false);
     setPlayerReloadKey(0);
+    setShieldSessionOverrides({});
   }, [item?.id, initialEpisode, initialServerIndex]);
 
   // Helper to mark a server faulty at runtime and auto-switch to next healthy server
@@ -592,21 +644,163 @@ export function PlayerModal({
     };
   }, [item?.id, episodeNum, initialServerIndex]);
 
+  const effectiveShieldConfig = normalizePopupShieldConfig(
+    popupShieldConfig || loadStoredPopupShieldConfig()
+  );
+
+  // Derive active stream URL cleanly before runtime Shield effects
+  const activeMediaEpisodes = item?.seasons?.[0]?.episodes || [];
+  const activeEpPreview = activeMediaEpisodes.find((e) => e.number === episodeNum);
+  const effectivePreviewServers =
+    activeEpPreview?.servers && activeEpPreview.servers.length > 0
+      ? activeEpPreview.servers
+      : item?.servers || [];
+  const previewServerIndex =
+    selectedServer < effectivePreviewServers.length ? selectedServer : 0;
+  const previewServerObj = effectivePreviewServers[previewServerIndex];
+  const rawPreviewEpSrc =
+    activeEpPreview?.servers && activeEpPreview.servers.length > 0
+      ? null
+      : bypassEpisodeSrc
+        ? null
+        : extractSafeStreamSrc(activeEpPreview?.embedCode, activeEpPreview?.watchUrl);
+  const previewEpSrc =
+    rawPreviewEpSrc && !isLikelyNonVideoWebsiteUrl(rawPreviewEpSrc) ? rawPreviewEpSrc : null;
+  const previewServerSrc =
+    filterMap[previewServerIndex]?.directStreamUrl ||
+    extractSafeStreamSrc(previewServerObj?.embedCode, previewServerObj?.url);
+  const currentActiveStreamSrc = previewEpSrc || previewServerSrc;
+  const currentShieldDecision = resolveEffectiveShieldDecision(
+    currentActiveStreamSrc,
+    effectiveShieldConfig,
+    shieldSessionOverrides[previewServerIndex] || null
+  );
+
+  // Sync active Shield player context for parent window guards (window.open / target=_blank)
+  useEffect(() => {
+    if (!item) return;
+    setActiveShieldPlayerContext({
+      serverHost: currentShieldDecision.hostname || 'player',
+      serverName: `سيرفر ${previewServerIndex + 1}`,
+      mediaTitle: item.title,
+      mode: currentShieldDecision.mode,
+    });
+    return () => {
+      setActiveShieldPlayerContext(null);
+    };
+  }, [
+    item?.id,
+    item?.title,
+    previewServerIndex,
+    currentShieldDecision.hostname,
+    currentShieldDecision.mode,
+  ]);
+
+  // Passive cross-origin blur observation: NEVER pretends external unsandboxed popups were blocked
+  useEffect(() => {
+    if (!item || !currentActiveStreamSrc) return;
+    if (
+      currentShieldDecision.mode === 'direct_media' ||
+      currentShieldDecision.mode === 'strict_sandbox' ||
+      !effectiveShieldConfig.enabled
+    ) {
+      return;
+    }
+
+    const onWindowBlur = () => {
+      const now = Date.now();
+      if (now - lastBlurObservedRef.current < 4000) return;
+      window.setTimeout(() => {
+        if (document.activeElement?.tagName === 'IFRAME') {
+          lastBlurObservedRef.current = Date.now();
+          appendPopupShieldLog({
+            kind: 'observed_external_blur',
+            prevented: false,
+            serverHost: currentShieldDecision.hostname || 'external-embed',
+            serverName: `سيرفر ${previewServerIndex + 1}`,
+            mediaTitle: item.title,
+            targetUrl: currentActiveStreamSrc,
+            detail:
+              'رُصد انتقال التركيز خارج المشغل (السيرفر يعمل في وضع التوافق المباشر لرفضه العزل، وقد يفتح تبويباً خارج نطاق Cross-Origin).',
+          });
+        }
+      }, 65);
+    };
+
+    window.addEventListener('blur', onWindowBlur);
+    return () => window.removeEventListener('blur', onWindowBlur);
+  }, [
+    item?.id,
+    item?.title,
+    currentActiveStreamSrc,
+    currentShieldDecision.mode,
+    currentShieldDecision.hostname,
+    effectiveShieldConfig.enabled,
+    previewServerIndex,
+  ]);
+
   // Listen for postMessage cues from embedded players reporting sandboxed embed or 403 errors
   useEffect(() => {
     if (!item) return;
     const onMessage = (event: MessageEvent) => {
       const payload = typeof event.data === 'string' ? event.data : JSON.stringify(event.data || '');
-      if (/sandboxed\s*embed|error\s*403|403\s*forbidden/i.test(payload)) {
-        handleServerFaultFailover(
-          selectedServer,
-          /sandbox/i.test(payload) ? 'رسالة Sandboxed embed' : 'خطأ 403'
-        );
+      const isSandboxRejection =
+        /sandboxed\s*embed|please\s*disable\s+sandbox|embedding\s+in\s+sandbox/i.test(payload);
+      if (
+        isSandboxRejection &&
+        effectiveShieldConfig.autoFallbackOnReject &&
+        currentShieldDecision.mode !== 'direct_unrestricted' &&
+        currentShieldDecision.mode !== 'direct_media'
+      ) {
+        setShieldSessionOverrides((prev) => ({
+          ...prev,
+          [previewServerIndex]: 'direct_unrestricted',
+        }));
+        if (currentShieldDecision.hostname && onUpdateHostRule) {
+          onUpdateHostRule({
+            hostname: currentShieldDecision.hostname,
+            mode: 'direct_unrestricted',
+            compatibility: 'incompatible',
+            note: 'تم التحويل التلقائي لوضع التوافق المباشر بعد رفض السيرفر لـ sandbox.',
+            lastTestedAt: new Date().toISOString(),
+          });
+        }
+        appendPopupShieldLog({
+          kind: 'sandbox_rejected_fallback',
+          prevented: false,
+          serverHost: currentShieldDecision.hostname || 'external-embed',
+          serverName: `سيرفر ${previewServerIndex + 1}`,
+          mediaTitle: item.title,
+          targetUrl: currentActiveStreamSrc || '',
+          detail: 'رفض السيرفر قيود sandbox — تم تبديله فوراً إلى التشغيل المتوافق دون تعطيل الفيديو.',
+        });
+        setFilterAlert({
+          kind: 'switched',
+          message: `سيرفر ${previewServerIndex + 1} يرفض قيود Sandbox — تم تحويله تلقائياً إلى وضع التوافق المباشر لضمان التشغيل.`,
+        });
+        return;
+      }
+
+      if (/error\s*403|403\s*forbidden/i.test(payload)) {
+        handleServerFaultFailover(selectedServer, 'خطأ 403');
+      } else if (isSandboxRejection) {
+        handleServerFaultFailover(selectedServer, 'رسالة Sandboxed embed');
       }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [item?.id, selectedServer, handleServerFaultFailover]);
+  }, [
+    item?.id,
+    item?.title,
+    selectedServer,
+    previewServerIndex,
+    currentActiveStreamSrc,
+    currentShieldDecision.mode,
+    currentShieldDecision.hostname,
+    effectiveShieldConfig.autoFallbackOnReject,
+    onUpdateHostRule,
+    handleServerFaultFailover,
+  ]);
 
   if (!item) return null;
 
@@ -652,6 +846,36 @@ export function PlayerModal({
       (isLikelyNonVideoWebsiteUrl(finalStreamSrc) || activeFilterEntry?.faultType === 'not_video')
   );
   const isDirectVideoFile = Boolean(finalStreamSrc && /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(finalStreamSrc));
+  const shieldDecision = resolveEffectiveShieldDecision(
+    finalStreamSrc,
+    effectiveShieldConfig,
+    shieldSessionOverrides[safeServerIndex] || null
+  );
+
+  const handleCycleShieldMode = () => {
+    if (shieldDecision.mode === 'direct_media') return;
+    const nextMode: Exclude<PopupShieldProfileMode, 'direct_media'> =
+      shieldDecision.mode === 'strict_sandbox'
+        ? 'redirect_guard'
+        : shieldDecision.mode === 'redirect_guard'
+          ? 'direct_unrestricted'
+          : 'strict_sandbox';
+    setShieldSessionOverrides((prev) => ({ ...prev, [safeServerIndex]: nextMode }));
+    if (shieldDecision.hostname && onUpdateHostRule) {
+      onUpdateHostRule({
+        hostname: shieldDecision.hostname,
+        mode: nextMode,
+        compatibility:
+          nextMode === 'strict_sandbox'
+            ? 'compatible'
+            : nextMode === 'redirect_guard'
+              ? 'partial'
+              : 'incompatible',
+        note: 'تم تعديله من شريط المشغّل',
+        lastTestedAt: new Date().toISOString(),
+      });
+    }
+  };
 
   const handleManualServerSelect = (idx: number) => {
     const entry = filterMap[idx];
@@ -910,6 +1134,34 @@ export function PlayerModal({
 
                     {/* Sleek Unified Controls */}
                     <div className="flex items-center gap-1.5">
+                      {effectiveShieldConfig.showPlayerBadge && finalStreamSrc && (
+                        <button
+                          type="button"
+                          onClick={handleCycleShieldMode}
+                          disabled={shieldDecision.mode === 'direct_media'}
+                          title={`${shieldDecision.label} — ${shieldDecision.description}${
+                            shieldDecision.mode !== 'direct_media'
+                              ? ' (اضغط لتبديل وضع التوافق لهذا السيرفر)'
+                              : ''
+                          }`}
+                          className={`hidden sm:inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[10px] font-extrabold transition-colors cursor-pointer disabled:cursor-default ${
+                            shieldDecision.mode === 'strict_sandbox' ||
+                            shieldDecision.mode === 'direct_media'
+                              ? 'bg-[#4CAF50]/15 border-[#4CAF50]/35 text-[#4CAF50] hover:bg-[#4CAF50]/25'
+                              : shieldDecision.mode === 'redirect_guard'
+                                ? 'bg-[#f9c400]/15 border-[#f9c400]/35 text-[#f9c400] hover:bg-[#f9c400]/25'
+                                : 'bg-sky-500/15 border-sky-400/35 text-sky-300 hover:bg-sky-500/25'
+                          }`}
+                        >
+                          {shieldDecision.mode === 'direct_unrestricted' ? (
+                            <ShieldAlert className="w-3 h-3 shrink-0" />
+                          ) : (
+                            <ShieldCheck className="w-3 h-3 shrink-0" />
+                          )}
+                          <span>{shieldDecision.shortLabel}</span>
+                        </button>
+                      )}
+
                       <button
                         type="button"
                         disabled={selectedServer <= 0}
@@ -1036,9 +1288,10 @@ export function PlayerModal({
                       />
                     ) : (
                       <iframe
-                        key={`${finalStreamSrc}-${playerReloadKey}`}
+                        key={`${finalStreamSrc}-${shieldDecision.mode}-${playerReloadKey}`}
                         src={finalStreamSrc}
                         title={`${item.title} - سيرفر ${selectedServer + 1}`}
+                        sandbox={shieldDecision.sandboxAttr}
                         allowFullScreen
                         referrerPolicy="no-referrer"
                         onError={() => handleServerFaultFailover(selectedServer, 'تعذر تحميل المشغل المدمج')}

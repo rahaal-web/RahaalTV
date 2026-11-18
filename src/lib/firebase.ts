@@ -48,6 +48,10 @@ import {
   DEFAULT_TYPOGRAPHY_CONFIG,
   saveStoredTypographyConfig,
 } from './typographyConfig';
+import {
+  DEFAULT_POPUP_SHIELD_CONFIG,
+  saveStoredPopupShieldConfig,
+} from './popupShield';
 import { evaluateImageQuality } from './mediaImages';
 
 const app = initializeApp(firebaseConfig);
@@ -851,6 +855,9 @@ export async function saveSiteSettingsToFirestore(
   const normalizedTypography = saveStoredTypographyConfig(
     settings.typography || DEFAULT_TYPOGRAPHY_CONFIG
   );
+  const normalizedShield = saveStoredPopupShieldConfig(
+    settings.popupShield || DEFAULT_POPUP_SHIELD_CONFIG
+  );
   const corePayload = {
     siteName: settings.siteName.trim().slice(0, 80) || 'RahaL TV',
     tagline: settings.tagline.trim().slice(0, 300) || 'منصة RahaL TV الترفيهية',
@@ -869,6 +876,7 @@ export async function saveSiteSettingsToFirestore(
       ...corePayload,
       homeConfig: normalizedHome,
       typography: normalizedTypography,
+      popupShield: normalizedShield,
     });
     return { syncedHomeToCloud: true };
   } catch (error) {
