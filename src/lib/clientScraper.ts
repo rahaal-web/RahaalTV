@@ -64,7 +64,12 @@ export function getCustomApiBaseUrl(): string {
     // Ignore storage access issues
   }
   const envBase = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '';
-  return normalizeCustomApiBaseUrl(envBase);
+  const normalizedEnv = normalizeCustomApiBaseUrl(envBase);
+  if (normalizedEnv) return normalizedEnv;
+  if (typeof window !== 'undefined' && window.location.hostname.endsWith('.workers.dev')) {
+    return window.location.origin;
+  }
+  return '';
 }
 
 export function setCustomApiBaseUrl(url: string): string {
@@ -86,7 +91,12 @@ export function shouldSkipBackendApiCalls(): boolean {
   if (customBase && isProxyWorkerUrl(customBase)) {
     return true;
   }
-  if (!customBase && typeof window !== 'undefined' && window.location.hostname.endsWith('.github.io')) {
+  if (
+    !customBase &&
+    typeof window !== 'undefined' &&
+    (window.location.hostname.endsWith('.github.io') ||
+      window.location.hostname.endsWith('.workers.dev'))
+  ) {
     return true;
   }
   return false;
@@ -238,13 +248,14 @@ const CORS_HEADERS = {
 };
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS_HEADERS });
     }
 
     const reqUrl = new URL(request.url);
     let target = (reqUrl.searchParams.get('url') || '').trim();
+    const isPing = reqUrl.searchParams.has('ping');
 
     if (!target && request.method === 'POST') {
       try {
@@ -258,6 +269,10 @@ export default {
       } catch {
         // Ignore invalid POST body
       }
+    }
+
+    if (!target && !isPing && env && env.ASSETS && typeof env.ASSETS.fetch === 'function') {
+      return env.ASSETS.fetch(request);
     }
 
     if (!target) {

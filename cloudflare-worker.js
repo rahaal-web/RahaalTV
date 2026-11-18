@@ -34,13 +34,14 @@ const CORS_HEADERS = {
 };
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS_HEADERS });
     }
 
     const reqUrl = new URL(request.url);
     let target = (reqUrl.searchParams.get('url') || '').trim();
+    const isPing = reqUrl.searchParams.has('ping');
 
     if (!target && request.method === 'POST') {
       try {
@@ -54,6 +55,10 @@ export default {
       } catch {
         // Ignore invalid POST body
       }
+    }
+
+    if (!target && !isPing && env && env.ASSETS && typeof env.ASSETS.fetch === 'function') {
+      return env.ASSETS.fetch(request);
     }
 
     if (!target) {

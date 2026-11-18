@@ -7,8 +7,7 @@ import {VitePWA} from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
   const repoName = process.env.GITHUB_REPOSITORY?.split('/')[1] || 'RahaalTV-v1';
-  const isGitHubPages =
-    process.env.GITHUB_PAGES === 'true' || process.env.GITHUB_ACTIONS === 'true';
+  const isGitHubPages = process.env.GITHUB_PAGES === 'true';
   const base = process.env.VITE_BASE_PATH || (isGitHubPages ? `/${repoName}/` : '/');
 
   return {
