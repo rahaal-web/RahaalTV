@@ -15,7 +15,11 @@ import {
   Wand2,
   X,
 } from 'lucide-react';
-import { bulkUpdateMediaInFirestore, saveMediaToFirestore } from '../lib/firebase';
+import {
+  bulkUpdateMediaInFirestore,
+  formatFirestoreWriteError,
+  saveMediaToFirestore,
+} from '../lib/firebase';
 import { handleBackdropError, handlePosterError } from '../lib/mediaFilters';
 import {
   evaluateImageQuality,
@@ -201,8 +205,8 @@ export function AdminImageManagerPanel({
 
       await bulkUpdateMediaInFirestore(updatedItems, user.uid);
       onNotify(`تم قياس الأبعاد الفعلية وتحديث حالة ${updatedItems.length} عمل في قاعدة البيانات.`);
-    } catch {
-      onNotify('تعذر حفظ نتائج قياس الصور — تحقق من اتصال Firestore.');
+    } catch (err) {
+      onNotify(formatFirestoreWriteError(err, 'تعذر حفظ نتائج قياس الصور'));
     } finally {
       setScanningAll(false);
     }
@@ -311,8 +315,8 @@ export function AdminImageManagerPanel({
       await bulkUpdateMediaInFirestore(patchedItems, user.uid);
       onNotify(`تم ترقية وحفظ صور ${patchedItems.length} عمل بنجاح بدون المساس ببقية البيانات!`);
       setBatchCandidates(null);
-    } catch {
-      onNotify('حدث خطأ أثناء حفظ ترقية الصور.');
+    } catch (err) {
+      onNotify(formatFirestoreWriteError(err, 'حدث خطأ أثناء حفظ ترقية الصور'));
     } finally {
       setSavingBatch(false);
     }
@@ -365,11 +369,15 @@ export function AdminImageManagerPanel({
         image_source: resolved.image_source || 'tmdb',
         image_quality_status: resolved.image_quality_status,
       };
-      await saveMediaToFirestore(updatedItem, user.uid, false);
-      onNotify(`تم تحديث وحفظ صور "${item.title}" بجودة عالية!`);
+      const res = await saveMediaToFirestore(updatedItem, user.uid, false);
+      onNotify(
+        `تم تحديث وحفظ صور "${item.title}" بجودة عالية!${
+          res.usedLegacySchemaFallback ? ' (ملاحظة: حدّث firestore.rules لحفظ أبعاد الصور)' : ''
+        }`
+      );
       setSinglePreview(null);
-    } catch {
-      onNotify('تعذر حفظ صور العمل — تحقق من صلاحيات Firestore.');
+    } catch (err) {
+      onNotify(formatFirestoreWriteError(err, 'تعذر حفظ صور العمل'));
     } finally {
       setSavingSingle(false);
     }
@@ -474,11 +482,15 @@ export function AdminImageManagerPanel({
         image_source: 'manual',
         image_quality_status: status,
       };
-      await saveMediaToFirestore(updated, user.uid, false);
-      onNotify(`تم حفظ البوستر والخلفية يدوياً لـ "${manualModalItem.title}".`);
+      const res = await saveMediaToFirestore(updated, user.uid, false);
+      onNotify(
+        `تم حفظ البوستر والخلفية يدوياً لـ "${manualModalItem.title}".${
+          res.usedLegacySchemaFallback ? ' (حدّث firestore.rules لحفظ الأبعاد الجديدة)' : ''
+        }`
+      );
       setManualModalItem(null);
-    } catch {
-      onNotify('تعذر حفظ تعديل الصور.');
+    } catch (err) {
+      onNotify(formatFirestoreWriteError(err, 'تعذر حفظ تعديل الصور'));
     } finally {
       setSavingManual(false);
     }

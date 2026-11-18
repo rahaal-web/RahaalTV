@@ -118,6 +118,94 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
+function getFirebaseErrorCodeAndMessage(err: unknown): { code: string; message: string } {
+  if (typeof err === 'object' && err !== null) {
+    const rec = err as { code?: unknown; message?: unknown };
+    const rawMsg = String(rec.message || '');
+    // Try parsing wrapped FirestoreErrorInfo JSON thrown by handleFirestoreError
+    if (rawMsg.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(rawMsg) as { error?: unknown };
+        if (parsed && typeof parsed.error === 'string') {
+          return { code: String(rec.code || ''), message: parsed.error };
+        }
+      } catch {
+        // Ignore JSON parse errors
+      }
+    }
+    return { code: String(rec.code || ''), message: rawMsg };
+  }
+  const msg = String(err || '');
+  if (msg.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(msg) as { error?: unknown };
+      if (parsed && typeof parsed.error === 'string') {
+        return { code: '', message: parsed.error };
+      }
+    } catch {
+      // Ignore JSON parse errors
+    }
+  }
+  return { code: '', message: msg };
+}
+
+function isPermissionDeniedError(err: unknown): boolean {
+  const { code, message } = getFirebaseErrorCodeAndMessage(err);
+  return (
+    code === 'permission-denied' ||
+    /permission[-_ ]denied|missing or insufficient permissions/i.test(message)
+  );
+}
+
+function isNotFoundError(err: unknown): boolean {
+  const { code, message } = getFirebaseErrorCodeAndMessage(err);
+  return code === 'not-found' || /no document to update|not[-_ ]found/i.test(message);
+}
+
+const EXTENDED_MEDIA_IMAGE_KEYS = [
+  'poster_url',
+  'backdrop_url',
+  'poster_width',
+  'poster_height',
+  'backdrop_width',
+  'backdrop_height',
+  'image_source',
+  'image_quality_status',
+] as const;
+
+function stripExtendedImageFields(payload: Record<string, unknown>): Record<string, unknown> {
+  const clone: Record<string, unknown> = { ...payload };
+  for (const key of EXTENDED_MEDIA_IMAGE_KEYS) {
+    delete clone[key];
+  }
+  return clone;
+}
+
+export function formatFirestoreWriteError(error: unknown, fallbackMessage: string): string {
+  const { code, message } = getFirebaseErrorCodeAndMessage(error);
+  const combined = `${code} ${message}`.toLowerCase();
+
+  if (combined.includes('quota exceeded')) {
+    return `${fallbackMessage}: تم تجاوز الحصة اليومية المجانية لقاعدة Firestore (Quota exceeded) — تتجدد الحصة تلقائياً في اليوم التالي.`;
+  }
+  if (combined.includes('permission-denied') || combined.includes('insufficient permissions')) {
+    return `${fallbackMessage}: مرفوض من قواعد الأمان (permission-denied) — تأكد من تحديث firestore.rules في قاعدة ai-studio-rahaaltvv1-fc865f77-1460-4d81-9b51-3211632b0c99 ومن وجود صلاحية المسؤول/المشرف لحسابك.`;
+  }
+  if (combined.includes('resource-exhausted') || combined.includes('maximum allowed size')) {
+    return `${fallbackMessage}: حجم المستند يتجاوز الحد المسموح في Firestore (1MB) — قلل عدد الحلقات أو السيرفرات في العنصر الواحد.`;
+  }
+  if (combined.includes('invalid-argument')) {
+    return `${fallbackMessage}: قيمة أحد الحقول غير صالحة (${message.slice(0, 120)}).`;
+  }
+  if (combined.includes('unauthenticated')) {
+    return `${fallbackMessage}: انتهت جلسة تسجيل الدخول — أعد تسجيل الدخول إلى لوحة التحكم.`;
+  }
+  if (message) {
+    return `${fallbackMessage} (${message.slice(0, 110)})`;
+  }
+  return fallbackMessage;
+}
+
 // Mandatory boot connection check
 async function testConnection() {
   try {
@@ -274,10 +362,12 @@ function sanitizeServerList(
 
 function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
   const cleanId =
-    item.id.replace(/[^a-zA-Z0-9_\-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 128) ||
-    `media-${Date.now()}`;
-  const safeTitle = (item.title || 'عمل مستورد').trim().slice(0, 200) || 'عمل مستورد';
-  const safeEnglishTitle = (item.englishTitle || safeTitle).trim().slice(0, 200) || safeTitle;
+    String(item.id || '')
+      .replace(/[^a-zA-Z0-9_\-]/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 128) || `media-${Date.now()}`;
+  const safeTitle = String(item.title || 'عمل مستورد').trim().slice(0, 200) || 'عمل مستورد';
+  const safeEnglishTitle = String(item.englishTitle || safeTitle).trim().slice(0, 200) || safeTitle;
   const rawSlugCandidate = String(item.slug || '')
     .trim()
     .replace(/[^a-zA-Z0-9_\-]/g, '-')
@@ -289,18 +379,20 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
       ? rawSlugCandidate
       : generateCleanSlug(safeEnglishTitle, safeTitle, cleanId);
   const dedicatedShortUrl = isDedicatedAppShortUrl(item.shortUrl)
-    ? item.shortUrl.trim().slice(0, 300)
+    ? String(item.shortUrl).trim().slice(0, 300)
     : buildDedicatedMediaUrl({ id: cleanId, slug: safeSlug }).slice(0, 300);
 
-  const rawPosterInput = (item.poster_url || item.poster || '').trim().slice(0, 500);
+  const rawPosterInput = String(item.poster_url || item.poster || '').trim().slice(0, 500);
   const safePoster = rawPosterInput || FALLBACK_POSTER_URL;
-  const rawBackdropUrl = (item.backdrop_url !== undefined ? item.backdrop_url : item.backdrop || '')
+  const rawBackdropUrl = String(
+    item.backdrop_url !== undefined ? item.backdrop_url : item.backdrop || ''
+  )
     .trim()
     .slice(0, 500);
   const hasDistinctBackdropInput = Boolean(rawBackdropUrl && rawBackdropUrl !== safePoster);
   const safeBackdropUrl = hasDistinctBackdropInput ? rawBackdropUrl : '';
-  // Legacy required `backdrop` field stays non-empty in Firestore rules
-  const safeBackdrop = rawBackdropUrl || FALLBACK_BACKDROP_URL;
+  // Legacy required `backdrop` field stays non-empty in Firestore rules and avoids portrait stretching
+  const safeBackdrop = safeBackdropUrl || FALLBACK_BACKDROP_URL;
 
   const posterWidth = Math.max(0, Math.min(20000, Math.round(Number(item.poster_width) || 0)));
   const posterHeight = Math.max(0, Math.min(20000, Math.round(Number(item.poster_height) || 0)));
@@ -318,12 +410,16 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
     computedQuality !== 'unknown'
       ? computedQuality
       : item.image_quality_status || (hasDistinctBackdropInput ? 'unknown' : 'missing_backdrop');
-  const imageSource = String(item.image_source || (safePoster === FALLBACK_POSTER_URL ? 'fallback' : 'manual'))
-    .trim()
-    .slice(0, 60) || 'manual';
+  const imageSource =
+    String(item.image_source || (safePoster === FALLBACK_POSTER_URL ? 'fallback' : 'manual'))
+      .trim()
+      .slice(0, 60) || 'manual';
 
-  const safeYear = (item.year || '2026').trim().slice(0, 10);
+  const safeYear = String(item.year || '2026').trim().slice(0, 10);
   const normalizedYear = safeYear.length >= 4 ? safeYear : '2026';
+  const safeKind = (['movie', 'series', 'tv', 'wrestling'] as const).includes(item.kind)
+    ? item.kind
+    : 'movie';
 
   const normalizedCategories = (item.categories || [])
     .map((c) => String(c || '').trim().slice(0, 60))
@@ -334,7 +430,7 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
     .filter(Boolean)
     .slice(0, 10);
 
-  let normalizedServers = sanitizeServerList(item.servers, item.quality || '1080p', 15, 'srv');
+  let normalizedServers = sanitizeServerList(item.servers, String(item.quality || '1080p'), 15, 'srv');
 
   const normalizedDownloads = (item.downloads || [])
     .filter((dl) => dl && String(dl.url || '').trim())
@@ -363,10 +459,10 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
   const normalizedSeasons = (item.seasons || []).slice(0, 20).map((season, sIdx) => ({
     seasonNumber: Number(season.seasonNumber) || sIdx + 1,
     label: String(season.label || `الموسم ${String(sIdx + 1).padStart(2, '0')}`).trim().slice(0, 80),
-    year: String(season.year || normalizedYear).trim().slice(0, 10),
+    year: String(season.year || normalizedYear).trim().slice(0, 10) || normalizedYear,
     episodes: (season.episodes || []).slice(0, 120).map((ep, eIdx) => {
       const epNum = Number(ep.number) || eIdx + 1;
-      const epQual = String(ep.quality || item.quality || 'WEB-DL').trim().slice(0, 40);
+      const epQual = String(ep.quality || item.quality || 'WEB-DL').trim().slice(0, 40) || 'WEB-DL';
       const epServers = sanitizeServerList(ep.servers, epQual, 12, `ep-${epNum}-srv`);
       let cleanWatchUrl = String(ep.watchUrl || '').trim().slice(0, 600);
       if (cleanWatchUrl && isLikelyNonVideoWebsiteUrl(cleanWatchUrl)) {
@@ -381,8 +477,8 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
       }
       return {
         number: epNum,
-        title: String(ep.title || `الحلقة ${epNum}`).trim().slice(0, 120),
-        duration: String(ep.duration || '45 دقيقة').trim().slice(0, 40),
+        title: String(ep.title || `الحلقة ${epNum}`).trim().slice(0, 120) || `الحلقة ${epNum}`,
+        duration: String(ep.duration || '45 دقيقة').trim().slice(0, 40) || '45 دقيقة',
         quality: epQual,
         watchUrl: cleanWatchUrl || epServers[0]?.url || '',
         embedCode: cleanEmbedCode,
@@ -402,21 +498,24 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
     }
   }
 
+  const parsedImdb = Number(item.imdb);
+  const safeImdb = Number.isFinite(parsedImdb) ? Math.min(10, Math.max(0, parsedImdb || 7.5)) : 7.5;
+
   const base: Record<string, unknown> = {
     id: cleanId,
     slug: safeSlug,
     title: safeTitle,
     englishTitle: safeEnglishTitle,
-    kind: item.kind || 'movie',
+    kind: safeKind,
     categories: normalizedCategories.length ? normalizedCategories : ['افلام'],
     genres: normalizedGenres.length ? normalizedGenres : ['دراما'],
     year: normalizedYear,
-    country: (item.country || 'الولايات المتحدة').trim().slice(0, 80) || 'الولايات المتحدة',
-    language: (item.language || 'الانجليزية').trim().slice(0, 80) || 'الانجليزية',
-    quality: (item.quality || 'WEB-DL').trim().slice(0, 40) || 'WEB-DL',
-    duration: (item.duration || '120 دقيقة').trim().slice(0, 40) || '120 دقيقة',
-    imdb: Math.min(10, Math.max(0, Number(item.imdb) || 7.5)),
-    votes: (item.votes || '1,000').trim().slice(0, 40) || '1,000',
+    country: String(item.country || 'الولايات المتحدة').trim().slice(0, 80) || 'الولايات المتحدة',
+    language: String(item.language || 'الانجليزية').trim().slice(0, 80) || 'الانجليزية',
+    quality: String(item.quality || 'WEB-DL').trim().slice(0, 40) || 'WEB-DL',
+    duration: String(item.duration || '120 دقيقة').trim().slice(0, 40) || '120 دقيقة',
+    imdb: safeImdb,
+    votes: String(item.votes || '1,000').trim().slice(0, 40) || '1,000',
     views: Math.max(0, Math.round(Number(item.views) || 0)),
     likes: Math.max(0, Math.round(Number(item.likes) || 0)),
     pinned: Boolean(item.pinned),
@@ -432,18 +531,18 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
     backdrop_height: backdropHeight,
     image_source: imageSource,
     image_quality_status: imageQualityStatus,
-    tagline: (item.tagline || '').slice(0, 400),
-    story: (item.story || safeTitle).trim().slice(0, 3000) || safeTitle,
+    tagline: String(item.tagline || '').slice(0, 400),
+    story: String(item.story || safeTitle).trim().slice(0, 3000) || safeTitle,
     shortUrl: dedicatedShortUrl,
-    trailerUrl: (item.trailerUrl || '').slice(0, 500),
-    trailerLabel: (item.trailerLabel || safeTitle).slice(0, 200),
-    trailerDuration: (item.trailerDuration || '02:00').slice(0, 30),
+    trailerUrl: String(item.trailerUrl || '').slice(0, 500),
+    trailerLabel: String(item.trailerLabel || safeTitle).slice(0, 200),
+    trailerDuration: String(item.trailerDuration || '02:00').slice(0, 30),
     cast: normalizedCast,
     seasons: normalizedSeasons,
     franchiseIds: (item.franchiseIds || []).map((f) => String(f)).slice(0, 15),
     servers: normalizedServers,
     downloads: normalizedDownloads,
-    updatedBy: uid,
+    updatedBy: String(uid || '').slice(0, 128),
     updatedAt: serverTimestamp(),
   };
 
@@ -455,14 +554,26 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
 
 export async function seedCatalogToFirestore(items: MediaItem[], uid: string) {
   const path = 'media';
+  const prepared = items.map((item) => sanitizeMediaPayload(item, uid, true));
   try {
     const batch = writeBatch(db);
-    for (const item of items) {
-      const { cleanId, payload } = sanitizeMediaPayload(item, uid, true);
+    for (const { cleanId, payload } of prepared) {
       batch.set(doc(db, 'media', cleanId), payload);
     }
     await batch.commit();
   } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      try {
+        const legacyBatch = writeBatch(db);
+        for (const { cleanId, payload } of prepared) {
+          legacyBatch.set(doc(db, 'media', cleanId), stripExtendedImageFields(payload));
+        }
+        await legacyBatch.commit();
+        return;
+      } catch (legacyErr) {
+        handleFirestoreError(legacyErr, OperationType.WRITE, path);
+      }
+    }
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
@@ -474,12 +585,24 @@ export async function bulkSaveMediaToFirestore(items: MediaItem[], uid: string):
   try {
     for (let i = 0; i < items.length; i += CHUNK_SIZE) {
       const chunk = items.slice(i, i + CHUNK_SIZE);
-      const batch = writeBatch(db);
-      for (const item of chunk) {
-        const { cleanId, payload } = sanitizeMediaPayload(item, uid, true);
-        batch.set(doc(db, 'media', cleanId), payload);
+      const prepared = chunk.map((item) => sanitizeMediaPayload(item, uid, true));
+      try {
+        const batch = writeBatch(db);
+        for (const { cleanId, payload } of prepared) {
+          batch.set(doc(db, 'media', cleanId), payload);
+        }
+        await batch.commit();
+      } catch (chunkErr) {
+        if (isPermissionDeniedError(chunkErr)) {
+          const legacyBatch = writeBatch(db);
+          for (const { cleanId, payload } of prepared) {
+            legacyBatch.set(doc(db, 'media', cleanId), stripExtendedImageFields(payload));
+          }
+          await legacyBatch.commit();
+        } else {
+          throw chunkErr;
+        }
       }
-      await batch.commit();
       savedCount += chunk.length;
     }
     return savedCount;
@@ -495,12 +618,24 @@ export async function bulkUpdateMediaInFirestore(items: MediaItem[], uid: string
   try {
     for (let i = 0; i < items.length; i += CHUNK_SIZE) {
       const chunk = items.slice(i, i + CHUNK_SIZE);
-      const batch = writeBatch(db);
-      for (const item of chunk) {
-        const { cleanId, payload } = sanitizeMediaPayload(item, uid, false);
-        batch.update(doc(db, 'media', cleanId), payload);
+      const prepared = chunk.map((item) => sanitizeMediaPayload(item, uid, false));
+      try {
+        const batch = writeBatch(db);
+        for (const { cleanId, payload } of prepared) {
+          batch.update(doc(db, 'media', cleanId), payload);
+        }
+        await batch.commit();
+      } catch (chunkErr) {
+        if (isPermissionDeniedError(chunkErr)) {
+          const legacyBatch = writeBatch(db);
+          for (const { cleanId, payload } of prepared) {
+            legacyBatch.update(doc(db, 'media', cleanId), stripExtendedImageFields(payload));
+          }
+          await legacyBatch.commit();
+        } else {
+          throw chunkErr;
+        }
       }
-      await batch.commit();
       updatedCount += chunk.length;
     }
     return updatedCount;
@@ -513,16 +648,45 @@ export async function saveMediaToFirestore(
   item: MediaItem,
   uid: string,
   isCreate: boolean
-) {
+): Promise<{ usedLegacySchemaFallback: boolean }> {
   const { cleanId, payload } = sanitizeMediaPayload(item, uid, isCreate);
   const path = `media/${cleanId}`;
-  try {
-    if (isCreate) {
-      await setDoc(doc(db, 'media', cleanId), payload);
+  const docRef = doc(db, 'media', cleanId);
+
+  const writeDoc = async (docPayload: Record<string, unknown>, createMode: boolean) => {
+    if (createMode) {
+      await setDoc(docRef, {
+        ...docPayload,
+        createdAt: docPayload.createdAt || serverTimestamp(),
+      });
     } else {
-      await updateDoc(doc(db, 'media', cleanId), payload);
+      try {
+        await updateDoc(docRef, docPayload);
+      } catch (updateErr) {
+        if (isNotFoundError(updateErr)) {
+          await setDoc(docRef, {
+            ...docPayload,
+            createdAt: serverTimestamp(),
+          });
+        } else {
+          throw updateErr;
+        }
+      }
     }
+  };
+
+  try {
+    await writeDoc(payload, isCreate);
+    return { usedLegacySchemaFallback: false };
   } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      try {
+        await writeDoc(stripExtendedImageFields(payload), isCreate);
+        return { usedLegacySchemaFallback: true };
+      } catch (legacyErr) {
+        handleFirestoreError(legacyErr, isCreate ? OperationType.CREATE : OperationType.UPDATE, path);
+      }
+    }
     handleFirestoreError(error, isCreate ? OperationType.CREATE : OperationType.UPDATE, path);
   }
 }

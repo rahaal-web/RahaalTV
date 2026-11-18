@@ -67,6 +67,7 @@ import {
   createAdminAccountInFirebase,
   deleteMediaFromFirestore,
   deleteVisitorRequestFromFirestore,
+  formatFirestoreWriteError,
   getFirebaseAuthErrorMessage,
   grantAdminRoleInFirestore,
   revokeAdminRoleFromFirestore,
@@ -999,20 +1000,29 @@ export function AdminDashboardView({
       }
 
       const existsInDb = isFirestoreSeeded && !isCreatingNew;
-      await saveMediaToFirestore(verification.cleanedItem, user.uid, !existsInDb);
+      const saveResult = await saveMediaToFirestore(
+        verification.cleanedItem,
+        user.uid,
+        !existsInDb
+      );
       const removedNote =
         verification.removedCount > 0
           ? ` (تم منع واستبعاد ${verification.removedCount} سيرفر معطل أو صفحة موقع تلقائياً)`
           : '';
+      const legacyNote = saveResult.usedLegacySchemaFallback
+        ? ' — (تم الحفظ بالتوافق السابق؛ حدّث firestore.rules في قاعدة البيانات لتخزين أبعاد الصور الجديدة)'
+        : '';
       onNotify(
         (isCreatingNew
           ? 'تم نشر العمل الجديد وحفظ جميع السيرفرات والحلقات في قاعدة البيانات'
-          : 'تم تحديث بيانات العمل في قاعدة البيانات بنجاح') + removedNote
+          : 'تم تحديث بيانات العمل في قاعدة البيانات بنجاح') +
+          removedNote +
+          legacyNote
       );
       setPreviewModalState(null);
       setEditingItem(null);
-    } catch {
-      onNotify('حدث خطأ أثناء الحفظ في Firestore');
+    } catch (err) {
+      onNotify(formatFirestoreWriteError(err, 'حدث خطأ أثناء الحفظ في Firestore'));
     } finally {
       setBusyAction(false);
     }
@@ -1151,15 +1161,25 @@ export function AdminDashboardView({
         return;
       }
 
-      await saveMediaToFirestore(verification.cleanedItem, user.uid, true);
+      const saveResult = await saveMediaToFirestore(verification.cleanedItem, user.uid, true);
       const removedNote =
         verification.removedCount > 0
           ? ` (تم حظر ${verification.removedCount} سيرفر معطل أو صفحة موقع)`
           : '';
-      onNotify(`تم نشر "${verification.cleanedItem.title}" برابط مخصص في قاعدة البيانات!${removedNote}`);
+      const legacyNote = saveResult.usedLegacySchemaFallback
+        ? ' — (بانتظار تحديث firestore.rules في القاعدة لحفظ أبعاد الصور)'
+        : '';
+      onNotify(
+        `تم نشر "${verification.cleanedItem.title}" برابط مخصص في قاعدة البيانات!${removedNote}${legacyNote}`
+      );
       setActiveTab('catalog');
-    } catch {
-      onNotify('تعذر الحفظ المباشر — جرّب فتح العمل في المحرر ومراجعة الحقول.');
+    } catch (err) {
+      onNotify(
+        formatFirestoreWriteError(
+          err,
+          'تعذر الحفظ المباشر — جرّب فتح العمل في المحرر ومراجعة الحقول'
+        )
+      );
     } finally {
       setBusyAction(false);
     }
@@ -1340,8 +1360,8 @@ export function AdminDashboardView({
       if (skippedCount === 0) {
         setActiveTab('catalog');
       }
-    } catch {
-      onNotify('حدث خطأ أثناء الحفظ الجماعي في Firestore');
+    } catch (err) {
+      onNotify(formatFirestoreWriteError(err, 'حدث خطأ أثناء الحفظ الجماعي في Firestore'));
     } finally {
       setBusyAction(false);
     }
@@ -1358,8 +1378,8 @@ export function AdminDashboardView({
       onNotify(
         !item.pinned ? `تم تثبيت "${item.title}" في السلايدر` : `تم إلغاء تثبيت "${item.title}"`
       );
-    } catch {
-      onNotify('تعذر تحديث حالة التثبيت');
+    } catch (err) {
+      onNotify(formatFirestoreWriteError(err, 'تعذر تحديث حالة التثبيت'));
     }
   };
 
