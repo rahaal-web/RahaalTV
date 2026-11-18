@@ -2,9 +2,12 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Bookmark,
+  Check,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Film,
   LayoutDashboard,
   Loader2,
@@ -18,9 +21,11 @@ import {
   RotateCw,
   Send,
   Server,
+  Share2,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Star,
   Trash2,
   Tv,
   Users,
@@ -33,6 +38,7 @@ import {
   isLikelyNonVideoWebsiteUrl,
   resolveApiEndpoint,
 } from '../lib/clientScraper';
+import { resolveDisplayShortUrl } from '../lib/permalink';
 import {
   getFirebaseAuthErrorMessage,
   registerMemberWithEmailPassword,
@@ -380,6 +386,9 @@ interface PlayerModalProps {
   playerTheme?: PlayerThemeConfig;
   popupShieldConfig?: PopupShieldConfig;
   onUpdateHostRule?: (rule: PopupShieldHostRule) => void;
+  isInWatchlist?: boolean;
+  onToggleWatchlist?: (item: MediaItem) => void;
+  onNotify?: (message: string) => void;
   onClose: () => void;
 }
 
@@ -390,6 +399,53 @@ interface ServerFilterEntry {
   httpStatus: number;
   reason: string;
   directStreamUrl?: string | null;
+}
+
+function getFriendlyServerError(entry?: ServerFilterEntry | null): {
+  title: string;
+  subtitle: string;
+  shortStatus: string;
+} {
+  if (!entry) {
+    return {
+      title: 'تعذر تشغيل هذا السيرفر',
+      subtitle: 'حدث انقطاع مؤقت في السيرفر. يمكنك تجربة سيرفر آخر.',
+      shortStatus: 'غير متاح',
+    };
+  }
+  if (entry.faultType === '403' || entry.httpStatus === 403) {
+    return {
+      title: 'السيرفر غير متاح حالياً',
+      subtitle: 'تعذر الوصول إلى مصدر البث في هذا السيرفر. جرّب سيرفراً آخر للمشاهدة.',
+      shortStatus: 'غير متاح',
+    };
+  }
+  if (entry.faultType === '404' || entry.httpStatus === 404 || entry.httpStatus === 410) {
+    return {
+      title: 'الفيديو غير متوفر على هذا السيرفر',
+      subtitle: 'لم يتم العثور على ملف المشاهدة هنا. اختر سيرفراً بديلاً للمتابعة.',
+      shortStatus: 'غير متوفر',
+    };
+  }
+  if (entry.faultType === 'frame_blocked' || entry.faultType === 'sandboxed_embed') {
+    return {
+      title: 'تعذر تشغيل هذا السيرفر هنا',
+      subtitle: 'هذا السيرفر لا يدعم التشغيل داخل المشغل الحالي. جرّب سيرفراً آخر.',
+      shortStatus: 'غير متوافق',
+    };
+  }
+  if (entry.faultType === 'not_video') {
+    return {
+      title: 'الرابط لا يحتوي على فيديو مباشر',
+      subtitle: 'تم إيقاف هذا الرابط لأنه لا يفتح مشغل فيديو. جرّب سيرفراً آخر.',
+      shortStatus: 'غير متاح',
+    };
+  }
+  return {
+    title: 'تعذر الاتصال بالسيرفر',
+    subtitle: 'قد يكون السيرفر مشغولاً حالياً. يمكنك تجربة سيرفر آخر أو إعادة المحاولة.',
+    shortStatus: 'متعطل',
+  };
 }
 
 function cleanQualityIdentifier(quality?: string, fallback?: string): string {
@@ -422,11 +478,15 @@ export function PlayerModal({
   playerTheme,
   popupShieldConfig,
   onUpdateHostRule,
+  isInWatchlist = false,
+  onToggleWatchlist,
+  onNotify,
   onClose,
 }: PlayerModalProps) {
   const [selectedServer, setSelectedServer] = useState(initialServerIndex);
   const [subtitleLang, setSubtitleLang] = useState<'ar' | 'en' | 'off'>('ar');
   const [isPlaying, setIsPlaying] = useState(true);
+  const [seasonIdx, setSeasonIdx] = useState(0);
   const [episodeNum, setEpisodeNum] = useState(initialEpisode);
 
   // Server Filtering system states
@@ -437,10 +497,12 @@ export function PlayerModal({
     message: string;
   } | null>(null);
   const [bypassEpisodeSrc, setBypassEpisodeSrc] = useState(false);
+  const [manualBypassFault, setManualBypassFault] = useState<Record<number, boolean>>({});
   const [playerReloadKey, setPlayerReloadKey] = useState(0);
   const [shieldSessionOverrides, setShieldSessionOverrides] = useState<
     Record<number, Exclude<PopupShieldProfileMode, 'direct_media'>>
   >({});
+  const [showMobileDetails, setShowMobileDetails] = useState(false);
   const [isTheaterMode, setIsTheaterMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const playerBoxRef = useRef<HTMLDivElement | null>(null);
@@ -470,20 +532,27 @@ export function PlayerModal({
 
   // Reset selections when media item or initial props change
   useEffect(() => {
+    const seasons = item?.seasons || [];
+    const matchingSeason = seasons.findIndex((s) =>
+      (s.episodes || []).some((e) => e.number === initialEpisode)
+    );
+    setSeasonIdx(matchingSeason >= 0 ? matchingSeason : 0);
     setEpisodeNum(initialEpisode);
     setSelectedServer(initialServerIndex);
     setFilterMap({});
     setFilterAlert(null);
     setBypassEpisodeSrc(false);
+    setManualBypassFault({});
     setPlayerReloadKey(0);
     setShieldSessionOverrides({});
+    setShowMobileDetails(false);
   }, [item?.id, initialEpisode, initialServerIndex]);
 
   // Helper to mark a server faulty at runtime and auto-switch to next healthy server
   const handleServerFaultFailover = useCallback(
     (faultIdx: number, reason: string) => {
       if (!item) return;
-      const epList = item.seasons?.[0]?.episodes || [];
+      const epList = item.seasons?.[seasonIdx]?.episodes || item.seasons?.[0]?.episodes || [];
       const activeEp = epList.find((e) => e.number === episodeNum);
       const effectiveServers =
         activeEp?.servers && activeEp.servers.length > 0 ? activeEp.servers : item.servers;
@@ -496,10 +565,12 @@ export function PlayerModal({
             ok: false,
             faultType: reason.includes('403')
               ? '403'
-              : /sandbox/i.test(reason)
-                ? 'sandboxed_embed'
-                : 'error',
-            httpStatus: reason.includes('403') ? 403 : 0,
+              : reason.includes('404')
+                ? '404'
+                : /sandbox/i.test(reason)
+                  ? 'sandboxed_embed'
+                  : 'error',
+            httpStatus: reason.includes('403') ? 403 : reason.includes('404') ? 404 : 0,
             reason,
           },
         };
@@ -517,26 +588,26 @@ export function PlayerModal({
           setSelectedServer(candidateIdx);
           setFilterAlert({
             kind: 'switched',
-            message: `تنبيه: سيرفر ${faultIdx + 1} به عطل (${reason}) — تم التبديل تلقائياً إلى سيرفر ${candidateIdx + 1}.`,
+            message: `سيرفر ${faultIdx + 1} غير متاح حالياً — تم التبديل تلقائياً إلى سيرفر ${candidateIdx + 1}.`,
           });
         } else {
           setFilterAlert({
             kind: 'warning',
-            message: `تنبيه: سيرفر ${faultIdx + 1} به عطل (${reason}).`,
+            message: `تعذر تشغيل سيرفر ${faultIdx + 1} — يمكنك تجربة سيرفر آخر أو إعادة المحاولة.`,
           });
         }
 
         return next;
       });
     },
-    [item, episodeNum]
+    [item, seasonIdx, episodeNum]
   );
 
   // Proactive Server Filtering scan on open / episode change (backend + browser/Worker fallback)
   useEffect(() => {
     if (!item) return;
 
-    const episodesList = item.seasons?.[0]?.episodes || [];
+    const episodesList = item.seasons?.[seasonIdx]?.episodes || item.seasons?.[0]?.episodes || [];
     const activeEp = episodesList.find((e) => e.number === episodeNum);
     const hasPerEpisodeServers = Boolean(activeEp?.servers && activeEp.servers.length > 0);
     const targetServers = hasPerEpisodeServers ? activeEp!.servers! : item.servers;
@@ -583,14 +654,14 @@ export function PlayerModal({
         if (cancelled || !filterResults) return;
 
         const nextMap: Record<number, ServerFilterEntry> = {};
-        const faultySummaries: string[] = [];
+        const faultyIndices: number[] = [];
 
         targetServers.forEach((_, idx) => {
           const entry = filterResults?.[idx];
           if (entry) {
             nextMap[idx] = entry;
             if (!entry.ok) {
-              faultySummaries.push(`سيرفر ${idx + 1} (${entry.reason})`);
+              faultyIndices.push(idx + 1);
             }
           }
         });
@@ -606,7 +677,7 @@ export function PlayerModal({
           setSelectedServer(firstHealthyIdx);
           setFilterAlert({
             kind: 'switched',
-            message: `تنبيه: رابط الحلقة الأساسي به عطل (${epResult.reason}) — تم التبديل تلقائياً إلى سيرفر ${firstHealthyIdx + 1}.`,
+            message: `تم التبديل تلقائياً إلى سيرفر ${firstHealthyIdx + 1} لضمان تشغيل الحلقة.`,
           });
           return;
         }
@@ -618,19 +689,16 @@ export function PlayerModal({
             setSelectedServer(firstHealthyIdx);
             setFilterAlert({
               kind: 'switched',
-              message: `تنبيه: سيرفر ${safeCurrentIdx + 1} به عطل (${activeEntry.reason}) — تم التبديل تلقائياً إلى سيرفر ${firstHealthyIdx + 1}.`,
+              message: `سيرفر ${safeCurrentIdx + 1} غير متاح حالياً — تم التبديل تلقائياً إلى سيرفر ${firstHealthyIdx + 1}.`,
             });
           } else {
             setFilterAlert({
               kind: 'warning',
-              message: `تنبيه: سيرفر ${safeCurrentIdx + 1} به عطل (${activeEntry.reason}).`,
+              message: `سيرفر ${safeCurrentIdx + 1} غير متاح حالياً — جرّب سيرفراً آخر.`,
             });
           }
-        } else if (faultySummaries.length > 0) {
-          setFilterAlert({
-            kind: 'warning',
-            message: `تنبيه تصفية السيرفرات: تم استبعاد ${faultySummaries[0]} تلقائياً.`,
-          });
+        } else if (faultyIndices.length > 0 && targetServers.length > 1) {
+          setFilterAlert(null);
         }
       } catch {
         // Silent fallback
@@ -642,14 +710,14 @@ export function PlayerModal({
     return () => {
       cancelled = true;
     };
-  }, [item?.id, episodeNum, initialServerIndex]);
+  }, [item?.id, seasonIdx, episodeNum, initialServerIndex]);
 
   const effectiveShieldConfig = normalizePopupShieldConfig(
     popupShieldConfig || loadStoredPopupShieldConfig()
   );
 
   // Derive active stream URL cleanly before runtime Shield effects
-  const activeMediaEpisodes = item?.seasons?.[0]?.episodes || [];
+  const activeMediaEpisodes = item?.seasons?.[seasonIdx]?.episodes || item?.seasons?.[0]?.episodes || [];
   const activeEpPreview = activeMediaEpisodes.find((e) => e.number === episodeNum);
   const effectivePreviewServers =
     activeEpPreview?.servers && activeEpPreview.servers.length > 0
@@ -776,7 +844,7 @@ export function PlayerModal({
         });
         setFilterAlert({
           kind: 'switched',
-          message: `سيرفر ${previewServerIndex + 1} يرفض قيود Sandbox — تم تحويله تلقائياً إلى وضع التوافق المباشر لضمان التشغيل.`,
+          message: `تم ضبط التوافق لسيرفر ${previewServerIndex + 1} تلقائياً لضمان التشغيل.`,
         });
         return;
       }
@@ -804,7 +872,8 @@ export function PlayerModal({
 
   if (!item) return null;
 
-  const episodes = item.seasons?.[0]?.episodes || [];
+  const seasons = item.seasons || [];
+  const episodes = activeMediaEpisodes;
   const activeEpisodeObj = episodes.find((e) => e.number === episodeNum);
   const perEpisodeServers =
     activeEpisodeObj?.servers && activeEpisodeObj.servers.length > 0
@@ -845,6 +914,10 @@ export function PlayerModal({
     finalStreamSrc &&
       (isLikelyNonVideoWebsiteUrl(finalStreamSrc) || activeFilterEntry?.faultType === 'not_video')
   );
+  const isActiveServerFaulty = Boolean(
+    activeFilterEntry && !activeFilterEntry.ok && !manualBypassFault[safeServerIndex]
+  );
+  const friendlyServerError = getFriendlyServerError(activeFilterEntry);
   const isDirectVideoFile = Boolean(finalStreamSrc && /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(finalStreamSrc));
   const shieldDecision = resolveEffectiveShieldDecision(
     finalStreamSrc,
@@ -885,38 +958,136 @@ export function PlayerModal({
         setSelectedServer(healthyAlt);
         setFilterAlert({
           kind: 'switched',
-          message: `سيرفر ${idx + 1} معطل حالياً (${entry.reason}) — تم تحويلك تلقائياً إلى سيرفر ${healthyAlt + 1}.`,
+          message: `سيرفر ${idx + 1} غير متاح حالياً — تم التبديل تلقائياً إلى سيرفر ${healthyAlt + 1}.`,
         });
         return;
       }
       setFilterAlert({
         kind: 'warning',
-        message: `تنبيه: سيرفر ${idx + 1} غير صالح (${entry.reason}).`,
+        message: `سيرفر ${idx + 1} غير متاح حالياً — جرّب سيرفراً آخر.`,
       });
     }
     setSelectedServer(idx);
+  };
+
+  const handleSwitchToNextServer = () => {
+    if (serversList.length <= 1) {
+      setManualBypassFault((prev) => ({ ...prev, [safeServerIndex]: true }));
+      setPlayerReloadKey((k) => k + 1);
+      return;
+    }
+    const nextHealthy = serversList.findIndex(
+      (_, idx) => idx !== safeServerIndex && filterMap[idx]?.ok === true
+    );
+    const nextNonBroken = serversList.findIndex(
+      (_, idx) => idx !== safeServerIndex && filterMap[idx]?.ok !== false
+    );
+    const fallbackIdx = (safeServerIndex + 1) % serversList.length;
+    const targetIdx = nextHealthy !== -1 ? nextHealthy : nextNonBroken !== -1 ? nextNonBroken : fallbackIdx;
+    setSelectedServer(targetIdx);
+  };
+
+  const handleShareMedia = async () => {
+    const urlToShare = resolveDisplayShortUrl(
+      item,
+      episodes.length > 0 ? episodeNum : undefined
+    );
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      try {
+        await navigator.share({
+          title: item.title,
+          text: `${item.title} — شاهد الآن على RahaL TV`,
+          url: urlToShare,
+        });
+        return;
+      } catch {
+        // User cancelled or share unsupported in embedded frame -> fallback to copy
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(urlToShare);
+    } catch {
+      // Clipboard fallback ignored
+    }
+    onNotify?.('تم نسخ رابط المشاهدة بنجاح');
   };
 
   const theme = normalizePlayerTheme(playerTheme || loadStoredPlayerTheme());
   const themeVars = buildPlayerThemeVars(theme);
 
   const healthyNextIdx = serversList.findIndex(
-    (_, idx) => idx !== selectedServer && filterMap[idx]?.ok !== false
+    (_, idx) => idx !== safeServerIndex && filterMap[idx]?.ok !== false
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4" style={themeVars}>
-      <div className="fixed inset-0 bg-black/90 backdrop-blur-md" onClick={onClose} />
+    <div
+      className="fixed inset-0 z-50 flex items-stretch lg:items-center justify-center p-0 lg:p-4 overflow-x-hidden"
+      style={themeVars}
+    >
+      <div className="fixed inset-0 bg-black/95 lg:bg-black/90 lg:backdrop-blur-md" onClick={onClose} />
       <div
-        className="relative z-10 w-[96vw] max-w-[1340px] border border-white/[0.09] shadow-2xl overflow-hidden max-h-[95vh] flex flex-col"
+        className="rtv-mobile-watch-modal relative z-10 w-full lg:w-[96vw] lg:max-w-[1340px] border-0 lg:border border-white/[0.09] shadow-2xl overflow-hidden lg:max-h-[95vh] flex flex-col"
         style={{
           backgroundColor: 'var(--pt-modal)',
           borderRadius: 'var(--pt-radius)',
         }}
       >
-        {/* Clean Unified Modal Top Bar */}
+        {/* Mobile Slim Watch Header (< 1024px) */}
         <div
-          className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-white/[0.08]"
+          className="flex lg:hidden items-center justify-between gap-2 px-2.5 h-11 border-b border-white/[0.08] shrink-0"
+          style={{ backgroundColor: 'var(--pt-frame)' }}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-white/[0.07] text-white active:scale-95 transition-transform cursor-pointer shrink-0"
+              aria-label="إغلاق المشغل"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <h3 className="font-display text-xs font-extrabold text-white truncate">
+              {item.title}
+              {episodes.length > 0 ? ` · ح ${String(episodeNum).padStart(2, '0')}` : ''}
+            </h3>
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-[11px] font-bold text-[#b7c9ef] tabular-nums whitespace-nowrap">
+              سيرفر {safeServerIndex + 1}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPlayerReloadKey((k) => k + 1)}
+              title="إعادة تحميل المشغل"
+              aria-label="إعادة تحميل المشغل"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/[0.07] text-white/90 active:scale-95 transition-transform cursor-pointer"
+            >
+              <RotateCw className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleToggleFullscreen()}
+              title="ملء الشاشة"
+              aria-label="ملء الشاشة"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg active:scale-95 transition-transform cursor-pointer"
+              style={{
+                backgroundColor: 'var(--pt-accent)',
+                color: 'var(--pt-accent-contrast)',
+              }}
+            >
+              {isFullscreen ? (
+                <Minimize2 className="w-3.5 h-3.5" />
+              ) : (
+                <Maximize2 className="w-3.5 h-3.5" />
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Desktop & TV Unified Modal Top Bar (>= 1024px) */}
+        <div
+          className="hidden lg:flex items-center justify-between gap-3 px-4 py-2.5 border-b border-white/[0.08]"
           style={{ backgroundColor: 'var(--pt-frame)' }}
         >
           <div className="flex items-center gap-2.5 min-w-0">
@@ -930,12 +1101,12 @@ export function PlayerModal({
               <Tv className="w-4 h-4" />
             </div>
             <div className="min-w-0">
-              <h3 className="font-display text-xs sm:text-sm font-extrabold text-white truncate">
+              <h3 className="font-display text-sm font-extrabold text-white truncate">
                 {item.title}
                 {item.kind === 'series' ? ` — الحلقة ${String(episodeNum).padStart(2, '0')}` : ''}
               </h3>
               <p className="text-[11px] text-[#9fb2d4] flex items-center gap-1.5 tabular-nums">
-                <span className="font-extrabold text-white">سيرفر {selectedServer + 1}</span>
+                <span className="font-extrabold text-white">سيرفر {safeServerIndex + 1}</span>
                 <span>·</span>
                 <span className="font-latin font-black text-[#f9c400]">{activeQuality}</span>
                 {isFiltering && (
@@ -961,23 +1132,23 @@ export function PlayerModal({
           </button>
         </div>
 
-        {/* Auto Server Filtering Alert Banner */}
+        {/* Auto Server Filtering Alert Banner (Simple, Non-Technical) */}
         {filterAlert && (
           <div
-            className={`flex items-center justify-between gap-3 px-4 py-2 text-xs font-bold border-b ${
+            className={`flex items-center justify-between gap-2 px-3 lg:px-4 py-1.5 lg:py-2 text-[11px] lg:text-xs font-bold border-b shrink-0 ${
               filterAlert.kind === 'switched'
                 ? 'bg-[#f9c400]/10 border-[#f9c400]/25 text-[#f9c400]'
                 : 'bg-[#D92321]/12 border-[#D92321]/25 text-[#ff9b99]'
             }`}
           >
             <div className="flex items-center gap-2 min-w-0">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <AlertTriangle className="w-3.5 h-3.5 lg:w-4 lg:h-4 shrink-0" />
               <span className="truncate sm:whitespace-normal">{filterAlert.message}</span>
             </div>
             <button
               type="button"
               onClick={() => setFilterAlert(null)}
-              className="rounded p-0.5 hover:bg-white/10 cursor-pointer shrink-0"
+              className="rounded p-1 hover:bg-white/10 cursor-pointer shrink-0"
               aria-label="إخفاء التنبيه"
             >
               <X className="w-3.5 h-3.5" />
@@ -985,38 +1156,47 @@ export function PlayerModal({
           </div>
         )}
 
-        {/* Main Body: Server Rail + Sleek Custom-Themed Video Stage */}
-        <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4">
+        {/* Main Body: Mobile Edge-to-Edge Watch First | Desktop Server Rail + Video Stage */}
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-0 lg:p-4">
           <div
-            className={`grid grid-cols-1 gap-3.5 items-start ${
+            className={`flex flex-col lg:grid gap-0 lg:gap-3.5 lg:items-start ${
               isTheaterMode ? 'lg:grid-cols-1' : 'lg:grid-cols-[200px_minmax(0,1fr)]'
             }`}
           >
-            {/* Right Sidebar: Strict سيرفر 1, سيرفر 2 ... */}
+            {/* Right Sidebar on Desktop / Placed Below Player on Mobile */}
             {!isTheaterMode && (
               <aside
-                className="rounded-xl border border-white/[0.08] p-2.5 space-y-2"
+                id="mobile-server-selector"
+                className="order-2 lg:order-1 mx-3 mt-3 lg:mx-0 lg:mt-0 rounded-2xl lg:rounded-xl border border-white/[0.08] p-3 lg:p-2.5 space-y-2.5 lg:space-y-2"
                 style={{ backgroundColor: 'var(--pt-frame)' }}
               >
-                <div className="flex items-center justify-between px-1 pb-1 border-b border-white/[0.06]">
-                  <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold text-white">
+                <div className="flex items-center justify-between px-0.5 pb-1.5 border-b border-white/[0.06]">
+                  <span className="inline-flex items-center gap-1.5 text-xs lg:text-[11px] font-extrabold text-white">
                     <Server className="w-3.5 h-3.5" style={{ color: 'var(--pt-accent)' }} />
                     <span>سيرفرات المشاهدة</span>
                   </span>
-                  <span
-                    className="font-latin tabular-nums rounded px-1.5 py-0.5 text-[10px] font-black"
-                    style={{
-                      backgroundColor: 'var(--pt-accent-20)',
-                      color: 'var(--pt-accent)',
-                    }}
-                  >
-                    {serversList.length}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {isFiltering && (
+                      <span className="lg:hidden inline-flex items-center gap-1 text-[10px] font-bold text-[#9fb2d4]">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        <span>فحص</span>
+                      </span>
+                    )}
+                    <span
+                      className="font-latin tabular-nums rounded px-1.5 py-0.5 text-[10px] font-black"
+                      style={{
+                        backgroundColor: 'var(--pt-accent-20)',
+                        color: 'var(--pt-accent)',
+                      }}
+                    >
+                      {serversList.length}
+                    </span>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-1 gap-1.5 lg:max-h-[580px] lg:overflow-y-auto">
+                <div className="grid grid-cols-2 min-[390px]:grid-cols-3 lg:grid-cols-1 gap-2 lg:gap-1.5 lg:max-h-[580px] lg:overflow-y-auto">
                   {serversList.map((srv, idx) => {
-                    const isActive = selectedServer === idx;
+                    const isActive = safeServerIndex === idx;
                     const srvFilter = filterMap[idx];
                     const isBroken = Boolean(srvFilter && !srvFilter.ok);
                     const isVerifiedOk = Boolean(srvFilter && srvFilter.ok);
@@ -1029,7 +1209,7 @@ export function PlayerModal({
                         onClick={() => handleManualServerSelect(idx)}
                         title={
                           isBroken
-                            ? `عطل في سيرفر ${idx + 1}: ${srvFilter?.reason}`
+                            ? `سيرفر ${idx + 1} غير متاح حالياً`
                             : `سيرفر ${idx + 1} (${qualityLabel})`
                         }
                         style={{
@@ -1042,11 +1222,11 @@ export function PlayerModal({
                               }
                             : {}),
                         }}
-                        className={`moov-server-enter group flex items-center justify-between gap-1.5 rounded-lg border px-2.5 py-2 transition-all duration-200 cursor-pointer ${
+                        className={`moov-server-enter group flex items-center justify-between gap-1.5 rounded-xl lg:rounded-lg border px-2.5 min-h-[44px] lg:min-h-0 py-2 transition-all duration-200 cursor-pointer ${
                           isActive
-                            ? 'shadow-lg font-black'
+                            ? 'shadow-lg font-black ring-2 ring-white/25 lg:ring-0'
                             : isBroken
-                              ? 'bg-[#D92321]/10 border-[#D92321]/25 text-[#ff9d9b] opacity-70 hover:opacity-100'
+                              ? 'bg-[#D92321]/10 border-[#D92321]/25 text-[#ff9d9b] opacity-75 hover:opacity-100'
                               : 'bg-white/[0.04] border-white/[0.07] text-white/90 hover:bg-white/[0.09] hover:border-white/20'
                         }`}
                       >
@@ -1090,11 +1270,11 @@ export function PlayerModal({
               </aside>
             )}
 
-            {/* Main Area: Sleek Custom-Themed Video Box + Series Episodes */}
-            <div className="min-w-0 space-y-3">
+            {/* Main Area: Edge-to-Edge Video Stage + Desktop Episodes */}
+            <div className="order-1 lg:order-2 min-w-0 w-full lg:space-y-3">
               <div
                 ref={playerBoxRef}
-                className="border overflow-hidden transition-all"
+                className="rtv-mobile-player-box border-0 lg:border overflow-hidden transition-all"
                 style={{
                   backgroundColor: '#000000',
                   borderColor: 'var(--pt-accent-35)',
@@ -1102,10 +1282,10 @@ export function PlayerModal({
                   boxShadow: 'var(--pt-shadow)',
                 }}
               >
-                {/* Harmonious Obsidian Video Box Header Bar */}
+                {/* Desktop Video Box Header Bar */}
                 {theme.showHeaderBar && (
                   <div
-                    className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 border-b border-white/[0.08]"
+                    className="hidden lg:flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 border-b border-white/[0.08]"
                     style={{ backgroundColor: 'var(--pt-frame)' }}
                   >
                     <div className="flex items-center gap-2 min-w-0">
@@ -1123,7 +1303,7 @@ export function PlayerModal({
                       )}
                       <div className="flex items-center gap-1.5 text-xs min-w-0">
                         <span className="font-extrabold text-white/95 tabular-nums">
-                          سيرفر {selectedServer + 1}
+                          سيرفر {safeServerIndex + 1}
                         </span>
                         <span className="text-white/25">·</span>
                         <span className="font-latin font-bold text-[#f9c400] text-[11px]">
@@ -1164,8 +1344,8 @@ export function PlayerModal({
 
                       <button
                         type="button"
-                        disabled={selectedServer <= 0}
-                        onClick={() => handleManualServerSelect(Math.max(0, selectedServer - 1))}
+                        disabled={safeServerIndex <= 0}
+                        onClick={() => handleManualServerSelect(Math.max(0, safeServerIndex - 1))}
                         title="السيرفر السابق"
                         aria-label="السيرفر السابق"
                         className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-white/[0.06] border border-white/[0.08] text-white/85 hover:bg-white/[0.14] hover:text-white disabled:opacity-30 transition-colors cursor-pointer"
@@ -1175,9 +1355,9 @@ export function PlayerModal({
 
                       <button
                         type="button"
-                        disabled={selectedServer >= serversList.length - 1}
+                        disabled={safeServerIndex >= serversList.length - 1}
                         onClick={() =>
-                          handleManualServerSelect(Math.min(serversList.length - 1, selectedServer + 1))
+                          handleManualServerSelect(Math.min(serversList.length - 1, safeServerIndex + 1))
                         }
                         title="السيرفر التالي"
                         aria-label="السيرفر التالي"
@@ -1240,165 +1420,195 @@ export function PlayerModal({
                   </div>
                 )}
 
-                {/* Pure Edge-to-Edge 16:9 Video Stage */}
-                <div className="relative aspect-video w-full bg-black overflow-hidden">
-                  {isBlockedHomepageUrl ? (
-                    <div className="h-full w-full flex flex-col items-center justify-center p-6 text-center bg-[#090d14] space-y-3">
-                      <div
-                        className="inline-flex h-14 w-14 items-center justify-center rounded-2xl border"
-                        style={{
-                          backgroundColor: 'var(--pt-accent-12)',
-                          borderColor: 'var(--pt-accent-35)',
-                          color: 'var(--pt-accent)',
-                        }}
-                      >
-                        <AlertTriangle className="w-7 h-7" />
-                      </div>
-                      <h4 className="font-display text-base font-extrabold text-white">
-                        تم حظر هذا الرابط تلقائياً داخل المشغل
-                      </h4>
-                      <p className="max-w-md text-xs text-[#b7c9ef] leading-relaxed">
-                        اكتشف نظام الحماية أن سيرفر {selectedServer + 1} يفتح صفحة موقع خارجي وليس ملف فيديو فعلي.
-                      </p>
-                      {healthyNextIdx !== -1 && (
-                        <button
-                          type="button"
-                          onClick={() => handleManualServerSelect(healthyNextIdx)}
-                          className="inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-xs font-extrabold cursor-pointer"
+                {/* Pure Edge-to-Edge 16:9 Video Stage (Landscape-Safe on Mobile) */}
+                <div className="rtv-mobile-player-shell w-full bg-black">
+                  <div className="rtv-mobile-player-stage relative aspect-video w-full bg-black overflow-hidden">
+                    {isBlockedHomepageUrl || isActiveServerFaulty ? (
+                      <div className="h-full w-full flex flex-col items-center justify-center p-4 sm:p-6 text-center bg-[#090d14] space-y-2.5 sm:space-y-3">
+                        <div
+                          className="inline-flex h-11 w-11 sm:h-14 sm:w-14 items-center justify-center rounded-2xl border"
                           style={{
-                            backgroundColor: 'var(--pt-accent)',
-                            color: 'var(--pt-accent-contrast)',
+                            backgroundColor: 'var(--pt-accent-12)',
+                            borderColor: 'var(--pt-accent-35)',
+                            color: 'var(--pt-accent)',
                           }}
                         >
-                          <RefreshCw className="w-3.5 h-3.5" />
-                          <span>الانتقال إلى سيرفر {healthyNextIdx + 1}</span>
-                        </button>
-                      )}
-                    </div>
-                  ) : finalStreamSrc ? (
-                    isDirectVideoFile ? (
-                      <video
-                        key={`${finalStreamSrc}-${playerReloadKey}`}
-                        src={finalStreamSrc}
-                        controls
-                        autoPlay
-                        playsInline
-                        onError={() => handleServerFaultFailover(selectedServer, 'تعذر تحميل ملف الفيديو')}
-                        className="h-full w-full bg-black"
-                      />
+                          <AlertTriangle className="w-5 h-5 sm:w-7 sm:h-7" />
+                        </div>
+                        <h4 className="font-display text-sm sm:text-base font-extrabold text-white">
+                          {isBlockedHomepageUrl
+                            ? 'الرابط غير صالح للمشاهدة'
+                            : friendlyServerError.title}
+                        </h4>
+                        <p className="max-w-md text-xs text-[#b7c9ef] leading-relaxed">
+                          {isBlockedHomepageUrl
+                            ? `سيرفر ${safeServerIndex + 1} لا يعرض فيديو مباشراً. يمكنك تجربة سيرفر آخر.`
+                            : friendlyServerError.subtitle}
+                        </p>
+                        <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                          {serversList.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleManualServerSelect(
+                                  healthyNextIdx !== -1
+                                    ? healthyNextIdx
+                                    : (safeServerIndex + 1) % serversList.length
+                                )
+                              }
+                              className="inline-flex items-center gap-2 rounded-xl px-4 min-h-[42px] py-2 text-xs font-extrabold cursor-pointer"
+                              style={{
+                                backgroundColor: 'var(--pt-accent)',
+                                color: 'var(--pt-accent-contrast)',
+                              }}
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              <span>تجربة سيرفر آخر</span>
+                            </button>
+                          )}
+                          {!isBlockedHomepageUrl && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setManualBypassFault((prev) => ({
+                                  ...prev,
+                                  [safeServerIndex]: true,
+                                }));
+                                setPlayerReloadKey((k) => k + 1);
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-xl bg-white/[0.08] border border-white/15 px-3.5 min-h-[42px] py-2 text-xs font-bold text-white/90 hover:bg-white/15 cursor-pointer"
+                            >
+                              <RotateCw className="w-3.5 h-3.5" />
+                              <span>إعادة المحاولة</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ) : finalStreamSrc ? (
+                      isDirectVideoFile ? (
+                        <video
+                          key={`${finalStreamSrc}-${playerReloadKey}`}
+                          src={finalStreamSrc}
+                          controls
+                          autoPlay
+                          playsInline
+                          onError={() => handleServerFaultFailover(safeServerIndex, 'تعذر تحميل ملف الفيديو')}
+                          className="h-full w-full max-w-full block bg-black"
+                        />
+                      ) : (
+                        <iframe
+                          key={`${finalStreamSrc}-${shieldDecision.mode}-${playerReloadKey}`}
+                          src={finalStreamSrc}
+                          title={`${item.title} - سيرفر ${safeServerIndex + 1}`}
+                          sandbox={shieldDecision.sandboxAttr}
+                          allowFullScreen
+                          referrerPolicy="no-referrer"
+                          onError={() => handleServerFaultFailover(safeServerIndex, 'تعذر تحميل المشغل المدمج')}
+                          allow="autoplay; fullscreen; encrypted-media; picture-in-picture; accelerometer; gyroscope"
+                          className="h-full w-full max-w-full block border-0 bg-black"
+                        />
+                      )
                     ) : (
-                      <iframe
-                        key={`${finalStreamSrc}-${shieldDecision.mode}-${playerReloadKey}`}
-                        src={finalStreamSrc}
-                        title={`${item.title} - سيرفر ${selectedServer + 1}`}
-                        sandbox={shieldDecision.sandboxAttr}
-                        allowFullScreen
-                        referrerPolicy="no-referrer"
-                        onError={() => handleServerFaultFailover(selectedServer, 'تعذر تحميل المشغل المدمج')}
-                        allow="autoplay; fullscreen; encrypted-media; picture-in-picture; accelerometer; gyroscope"
-                        className="h-full w-full border-0 bg-black"
-                      />
-                    )
-                  ) : (
-                    <>
-                      <img
-                        src={item.backdrop || item.poster}
-                        alt={item.title}
-                        className={`h-full w-full object-cover opacity-80 transition-transform duration-[8000ms] ${
-                          isPlaying ? 'scale-105' : 'scale-100'
-                        }`}
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black via-black/25 to-black/40" />
+                      <>
+                        <img
+                          src={item.backdrop || item.poster}
+                          alt={item.title}
+                          className={`h-full w-full object-cover opacity-80 transition-transform duration-[8000ms] ${
+                            isPlaying ? 'scale-105' : 'scale-100'
+                          }`}
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/25 to-black/40" />
 
-                      <div className="absolute top-4 left-4 flex items-center gap-2">
-                        <span
-                          className="font-latin rounded-lg px-2.5 py-1 text-[11px] font-black"
-                          style={{
-                            backgroundColor: 'var(--pt-accent)',
-                            color: 'var(--pt-accent-contrast)',
-                          }}
-                        >
-                          {activeQuality}
-                        </span>
-                      </div>
-
-                      <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4">
-                        <button
-                          type="button"
-                          onClick={() => setIsPlaying((p) => !p)}
-                          className="inline-flex h-16 w-16 items-center justify-center rounded-full shadow-2xl hover:scale-105 transition-transform cursor-pointer"
-                          style={{
-                            backgroundColor: 'var(--pt-accent)',
-                            color: 'var(--pt-accent-contrast)',
-                          }}
-                          aria-label={isPlaying ? 'إيقاف التشغيل' : 'استئناف التشغيل'}
-                        >
-                          {isPlaying ? <Pause className="w-7 h-7" /> : <Play className="w-7 h-7 fill-current" />}
-                        </button>
-
-                        {subtitleLang !== 'off' && (
-                          <div className="mt-8 rounded-lg bg-black/75 px-4 py-1.5 text-sm font-bold text-white border border-white/15">
-                            {subtitleLang === 'ar'
-                              ? `ترجمة عربية احترافية متزامنة — ${theme.brandLabel}`
-                              : `English Subtitles Active — ${theme.brandLabel}`}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-center justify-between gap-3 bg-black/80 px-4 py-3 backdrop-blur-sm">
-                        <div className="flex items-center gap-3 text-xs font-bold text-white">
-                          <button
-                            type="button"
-                            onClick={() => setIsPlaying((p) => !p)}
-                            className="hover:opacity-80 cursor-pointer"
+                        <div className="absolute top-3 left-3 flex items-center gap-2">
+                          <span
+                            className="font-latin rounded-lg px-2.5 py-1 text-[11px] font-black"
+                            style={{
+                              backgroundColor: 'var(--pt-accent)',
+                              color: 'var(--pt-accent-contrast)',
+                            }}
                           >
-                            {isPlaying ? 'إيقاف' : 'تشغيل'}
-                          </button>
-                          <span className="font-latin text-[#b7c9ef] tabular-nums">
-                            {isPlaying ? '14:22' : '00:00'} / {item.duration}
+                            {activeQuality}
                           </span>
                         </div>
 
-                        <div className="flex items-center gap-2 text-xs">
-                          <span className="text-[#b7c9ef]">الترجمة:</span>
-                          {(
-                            [
-                              { id: 'ar', label: 'العربية' },
-                              { id: 'en', label: 'English' },
-                              { id: 'off', label: 'إيقاف' },
-                            ] as const
-                          ).map((sub) => (
-                            <button
-                              key={sub.id}
-                              type="button"
-                              onClick={() => setSubtitleLang(sub.id)}
-                              className={`rounded-lg px-2.5 py-1 font-bold cursor-pointer ${
-                                subtitleLang === sub.id
-                                  ? ''
-                                  : 'bg-white/10 text-[#b7c9ef] hover:text-white'
-                              }`}
-                              style={
-                                subtitleLang === sub.id
-                                  ? {
-                                      backgroundColor: 'var(--pt-accent)',
-                                      color: 'var(--pt-accent-contrast)',
-                                    }
-                                  : undefined
-                              }
-                            >
-                              {sub.label}
-                            </button>
-                          ))}
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4">
+                          <button
+                            type="button"
+                            onClick={() => setIsPlaying((p) => !p)}
+                            className="inline-flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full shadow-2xl hover:scale-105 transition-transform cursor-pointer"
+                            style={{
+                              backgroundColor: 'var(--pt-accent)',
+                              color: 'var(--pt-accent-contrast)',
+                            }}
+                            aria-label={isPlaying ? 'إيقاف التشغيل' : 'استئناف التشغيل'}
+                          >
+                            {isPlaying ? <Pause className="w-6 h-6 sm:w-7 sm:h-7" /> : <Play className="w-6 h-6 sm:w-7 sm:h-7 fill-current" />}
+                          </button>
+
+                          {subtitleLang !== 'off' && (
+                            <div className="mt-5 sm:mt-8 rounded-lg bg-black/75 px-3 py-1 text-xs sm:text-sm font-bold text-white border border-white/15">
+                              {subtitleLang === 'ar'
+                                ? `ترجمة عربية متزامنة — ${theme.brandLabel}`
+                                : `English Subtitles Active — ${theme.brandLabel}`}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    </>
-                  )}
+
+                        <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-center justify-between gap-2 bg-black/80 px-3 sm:px-4 py-2 sm:py-3 backdrop-blur-sm">
+                          <div className="flex items-center gap-3 text-xs font-bold text-white">
+                            <button
+                              type="button"
+                              onClick={() => setIsPlaying((p) => !p)}
+                              className="hover:opacity-80 cursor-pointer"
+                            >
+                              {isPlaying ? 'إيقاف' : 'تشغيل'}
+                            </button>
+                            <span className="font-latin text-[#b7c9ef] tabular-nums">
+                              {isPlaying ? '14:22' : '00:00'} / {item.duration}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 text-[11px] sm:text-xs">
+                            <span className="text-[#b7c9ef] hidden sm:inline">الترجمة:</span>
+                            {(
+                              [
+                                { id: 'ar', label: 'العربية' },
+                                { id: 'en', label: 'English' },
+                                { id: 'off', label: 'إيقاف' },
+                              ] as const
+                            ).map((sub) => (
+                              <button
+                                key={sub.id}
+                                type="button"
+                                onClick={() => setSubtitleLang(sub.id)}
+                                className={`rounded-lg px-2 py-1 font-bold cursor-pointer ${
+                                  subtitleLang === sub.id
+                                    ? ''
+                                    : 'bg-white/10 text-[#b7c9ef] hover:text-white'
+                                }`}
+                                style={
+                                  subtitleLang === sub.id
+                                    ? {
+                                        backgroundColor: 'var(--pt-accent)',
+                                        color: 'var(--pt-accent-contrast)',
+                                      }
+                                    : undefined
+                                }
+                              >
+                                {sub.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
 
-                {/* Clean Footer Bar */}
+                {/* Desktop Video Box Footer Bar */}
                 {theme.showFooterBar && (
                   <div
-                    className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 border-t border-white/[0.08] text-[11px]"
+                    className="hidden lg:flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 border-t border-white/[0.08] text-[11px]"
                     style={{ backgroundColor: 'var(--pt-frame)' }}
                   >
                     <div className="flex items-center gap-2 text-[#9fb2d4]">
@@ -1411,7 +1621,7 @@ export function PlayerModal({
                       <button
                         type="button"
                         onClick={() =>
-                          handleManualServerSelect((selectedServer + 1) % serversList.length)
+                          handleManualServerSelect((safeServerIndex + 1) % serversList.length)
                         }
                         className="inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-[11px] font-extrabold transition-opacity hover:opacity-90 cursor-pointer"
                         style={{
@@ -1427,10 +1637,51 @@ export function PlayerModal({
                 )}
               </div>
 
-              {/* Series Episodes Switcher */}
+              {/* Mobile Prominent "تغيير السيرفر" Bar Directly Below Player */}
+              <div
+                className="flex lg:hidden items-center justify-between gap-2 px-3 py-2.5 border-b border-white/[0.08]"
+                style={{ backgroundColor: 'var(--pt-frame)' }}
+              >
+                <div className="flex items-center gap-2 min-w-0 text-xs">
+                  <span className="font-extrabold text-white tabular-nums">
+                    سيرفر {safeServerIndex + 1}
+                  </span>
+                  <span className="text-white/30">·</span>
+                  <span className="font-latin font-black text-[#f9c400] text-[11px]">
+                    {activeQuality}
+                  </span>
+                  {activeFilterEntry && (
+                    <>
+                      <span className="text-white/30">·</span>
+                      <span
+                        className={`text-[11px] font-bold ${
+                          activeFilterEntry.ok ? 'text-[#4CAF50]' : 'text-[#ff8a88]'
+                        }`}
+                      >
+                        {activeFilterEntry.ok ? 'متاح' : friendlyServerError.shortStatus}
+                      </span>
+                    </>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleSwitchToNextServer}
+                  className="inline-flex items-center gap-1.5 rounded-xl px-3.5 min-h-[40px] py-1.5 text-xs font-extrabold transition-opacity active:scale-95 shrink-0 cursor-pointer"
+                  style={{
+                    backgroundColor: 'var(--pt-accent)',
+                    color: 'var(--pt-accent-contrast)',
+                  }}
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>{serversList.length > 1 ? 'تغيير السيرفر' : 'إعادة التحميل'}</span>
+                </button>
+              </div>
+
+              {/* Desktop Series Episodes Switcher */}
               {episodes.length > 0 && (
                 <div
-                  className="rounded-xl border border-white/[0.08] p-3"
+                  className="hidden lg:block rounded-xl border border-white/[0.08] p-3"
                   style={{ backgroundColor: 'var(--pt-frame)' }}
                 >
                   <p className="text-xs font-extrabold text-white mb-2">التنقل السريع بين الحلقات:</p>
@@ -1446,6 +1697,7 @@ export function PlayerModal({
                             setSelectedServer(0);
                             setFilterMap({});
                             setFilterAlert(null);
+                            setManualBypassFault({});
                             setPlayerReloadKey((k) => k + 1);
                           }}
                           className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors cursor-pointer ${
@@ -1474,6 +1726,199 @@ export function PlayerModal({
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* Mobile Movie Info, Watchlist & Share, Seasons/Episodes, & Collapsible Details */}
+            <div className="order-3 lg:hidden px-3 pt-3 pb-[max(2rem,env(safe-area-inset-bottom))] space-y-3">
+              {/* Movie Title + Concise Year & Rating */}
+              <div
+                className="rounded-2xl border border-white/[0.08] p-3.5 space-y-3"
+                style={{ backgroundColor: 'var(--pt-frame)' }}
+              >
+                <div className="space-y-1">
+                  <h2 className="font-display text-base font-extrabold text-white leading-snug">
+                    {item.title}
+                    {episodes.length > 0 ? ` — الحلقة ${String(episodeNum).padStart(2, '0')}` : ''}
+                  </h2>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-bold text-[#b7c9ef]">
+                    <span className="font-latin tabular-nums text-white/90">{item.year}</span>
+                    <span className="text-white/30">·</span>
+                    <span className="inline-flex items-center gap-1 font-latin tabular-nums text-[#f9c400]">
+                      <Star className="w-3.5 h-3.5 fill-current" />
+                      <span>{item.imdb.toFixed(1)}</span>
+                    </span>
+                    <span className="text-white/30">·</span>
+                    <span className="font-latin text-white/90">{item.quality}</span>
+                    {item.duration && (
+                      <>
+                        <span className="text-white/30">·</span>
+                        <span>{item.duration}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Organized Favorites & Share Row */}
+                <div className="grid grid-cols-2 gap-2.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => onToggleWatchlist?.(item)}
+                    className={`flex items-center justify-center gap-2 rounded-xl border min-h-[44px] px-3 py-2 text-xs font-extrabold transition-colors cursor-pointer ${
+                      isInWatchlist
+                        ? 'bg-[#4CAF50]/20 border-[#4CAF50]/60 text-[#4CAF50]'
+                        : 'bg-white/[0.05] border-white/10 text-white hover:bg-white/10'
+                    }`}
+                  >
+                    {isInWatchlist ? <Check className="w-4 h-4 shrink-0" /> : <Bookmark className="w-4 h-4 shrink-0" />}
+                    <span>{isInWatchlist ? 'في المفضلة' : 'إضافة للمفضلة'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleShareMedia()}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-white/[0.05] border border-white/10 min-h-[44px] px-3 py-2 text-xs font-extrabold text-white hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    <Share2 className="w-4 h-4 shrink-0" />
+                    <span>مشاركة</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Mobile Seasons & Episodes Organization */}
+              {episodes.length > 0 && (
+                <div
+                  className="rounded-2xl border border-white/[0.08] p-3 space-y-2.5"
+                  style={{ backgroundColor: 'var(--pt-frame)' }}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-extrabold text-white">
+                      <Tv className="w-3.5 h-3.5 text-[#f9c400]" />
+                      <span>الحلقات ({episodes.length})</span>
+                    </span>
+                    {seasons.length > 1 && (
+                      <span className="text-[11px] font-bold text-[#9fb2d4]">
+                        {seasons[seasonIdx]?.label}
+                      </span>
+                    )}
+                  </div>
+
+                  {seasons.length > 1 && (
+                    <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
+                      {seasons.map((s, sIdx) => (
+                        <button
+                          key={s.seasonNumber}
+                          type="button"
+                          onClick={() => {
+                            setSeasonIdx(sIdx);
+                            const firstEp = s.episodes?.[0]?.number || 1;
+                            setEpisodeNum(firstEp);
+                            setSelectedServer(0);
+                            setFilterMap({});
+                            setFilterAlert(null);
+                            setManualBypassFault({});
+                            setPlayerReloadKey((k) => k + 1);
+                          }}
+                          className={`shrink-0 rounded-xl px-3 min-h-[38px] py-1.5 text-xs font-extrabold border transition-colors cursor-pointer ${
+                            seasonIdx === sIdx
+                              ? 'border-transparent'
+                              : 'bg-white/[0.04] border-white/10 text-[#b7c9ef]'
+                          }`}
+                          style={
+                            seasonIdx === sIdx
+                              ? {
+                                  backgroundColor: 'var(--pt-accent)',
+                                  color: 'var(--pt-accent-contrast)',
+                                }
+                              : undefined
+                          }
+                        >
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-3 min-[390px]:grid-cols-4 gap-2 max-h-52 overflow-y-auto">
+                    {episodes.map((ep) => {
+                      const isEpActive = episodeNum === ep.number;
+                      return (
+                        <button
+                          key={ep.number}
+                          type="button"
+                          onClick={() => {
+                            setEpisodeNum(ep.number);
+                            setSelectedServer(0);
+                            setFilterMap({});
+                            setFilterAlert(null);
+                            setManualBypassFault({});
+                            setPlayerReloadKey((k) => k + 1);
+                          }}
+                          className={`flex items-center justify-center rounded-xl border min-h-[44px] px-2 py-2 text-xs font-extrabold transition-colors cursor-pointer tabular-nums ${
+                            isEpActive
+                              ? 'border-transparent shadow-md'
+                              : 'bg-white/[0.04] border-white/10 text-[#b7c9ef]'
+                          }`}
+                          style={
+                            isEpActive
+                              ? {
+                                  backgroundColor: 'var(--pt-accent)',
+                                  color: 'var(--pt-accent-contrast)',
+                                }
+                              : undefined
+                          }
+                        >
+                          حلقة {String(ep.number).padStart(2, '0')}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Collapsible Secondary Details */}
+              <div
+                className="rounded-2xl border border-white/[0.08] overflow-hidden"
+                style={{ backgroundColor: 'var(--pt-frame)' }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setShowMobileDetails((v) => !v)}
+                  className="flex w-full items-center justify-between gap-2 px-3.5 min-h-[46px] py-2.5 text-xs font-extrabold text-white cursor-pointer"
+                >
+                  <span>تفاصيل القصة والعمل</span>
+                  {showMobileDetails ? (
+                    <ChevronUp className="w-4 h-4 text-[#9fb2d4]" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-[#9fb2d4]" />
+                  )}
+                </button>
+
+                {showMobileDetails && (
+                  <div className="px-3.5 pb-3.5 pt-1 space-y-3 border-t border-white/[0.06] text-xs">
+                    {item.story && (
+                      <p className="text-[#b7c9ef] leading-relaxed">{item.story}</p>
+                    )}
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <div className="rounded-xl bg-black/25 px-3 py-2">
+                        <span className="block text-[#9fb2d4] mb-0.5">التصنيف</span>
+                        <span className="font-bold text-white">{item.categories[0]}</span>
+                      </div>
+                      <div className="rounded-xl bg-black/25 px-3 py-2">
+                        <span className="block text-[#9fb2d4] mb-0.5">النوع</span>
+                        <span className="font-bold text-white">{item.genres.slice(0, 2).join(' · ')}</span>
+                      </div>
+                      <div className="rounded-xl bg-black/25 px-3 py-2">
+                        <span className="block text-[#9fb2d4] mb-0.5">اللغة</span>
+                        <span className="font-bold text-white">{item.language}</span>
+                      </div>
+                      <div className="rounded-xl bg-black/25 px-3 py-2">
+                        <span className="block text-[#9fb2d4] mb-0.5">الدولة</span>
+                        <span className="font-bold text-white">{item.country}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

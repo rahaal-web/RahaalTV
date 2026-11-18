@@ -937,6 +937,9 @@ export default function App() {
         playerTheme={siteSettings.playerTheme}
         popupShieldConfig={siteSettings.popupShield}
         onUpdateHostRule={handleUpdateHostRule}
+        isInWatchlist={playerState?.item ? watchlistIds.includes(playerState.item.id) : false}
+        onToggleWatchlist={handleToggleWatchlist}
+        onNotify={showToast}
         onClose={() => setPlayerState(null)}
       />
 
