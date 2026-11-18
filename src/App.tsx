@@ -1,8 +1,9 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Wrench } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Wrench, X } from 'lucide-react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, doc, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import type { AdminTab } from './components/AdminDashboardView';
+import { isTabAccessible } from './components/admin/adminNavigation';
 import { CatalogArchiveView } from './components/CatalogArchiveView';
 import { Footer, FooterTopic } from './components/Footer';
 import { Header } from './components/Header';
@@ -46,7 +47,12 @@ import {
   getAppBasePrefix,
   readWatchRouteFromLocation,
 } from './lib/permalink';
-import { applyDisplayDevicePrefs, loadDisplayDevicePrefs } from './lib/browserCompat';
+import {
+  applyDisplayDevicePrefs,
+  detectClientCapabilities,
+  loadDisplayDevicePrefs,
+} from './lib/browserCompat';
+import { loadAdminWorkspacePrefs } from './lib/adminPreferences';
 import { installTvSpatialNavigation } from './lib/tvNavigation';
 import {
   auth,
@@ -139,6 +145,8 @@ export default function App() {
   } | null>(null);
   const [footerTopic, setFooterTopic] = useState<FooterTopic | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const clientCapabilities = useMemo(() => detectClientCapabilities(), []);
+  const [compatBannerDismissed, setCompatBannerDismissed] = useState(false);
 
   // Firebase Auth & RBAC State
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
@@ -662,17 +670,13 @@ export default function App() {
   };
 
   const openAdminPage = (tab?: AdminTab) => {
-    const resolvedTab: AdminTab =
-      adminRole === 'moderator'
-        ? tab &&
-          (tab === 'catalog' ||
-            tab === 'images' ||
-            tab === 'scraper' ||
-            tab === 'site_scraper' ||
-            tab === 'scraper_adapters')
-          ? tab
-          : 'catalog'
-        : tab || 'overview';
+    const moderatorPerms = loadAdminWorkspacePrefs().moderatorSubPermissions;
+    const isOwner = adminRole === 'owner';
+    const fallbackTab: AdminTab = isOwner ? 'overview' : 'catalog';
+    const desiredTab = tab || fallbackTab;
+    const resolvedTab: AdminTab = isTabAccessible(desiredTab, isOwner, moderatorPerms)
+      ? desiredTab
+      : fallbackTab;
     setAdminRequestedTab((prev) => ({ tab: resolvedTab, nonce: prev.nonce + 1 }));
     pushPathIfNeeded('/admin');
     setView('admin');
@@ -869,6 +873,28 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-[#0f0f0f] text-white">
+      {!clientCapabilities.baselineSupported && !compatBannerDismissed && (
+        <div
+          role="status"
+          className="bg-[#1a242e] text-white border-b border-[#f9c400]/35 px-4 py-2 text-xs flex items-center justify-between gap-3 z-50"
+        >
+          <span className="inline-flex items-center gap-2 font-bold text-[#f9c400]">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>
+              {clientCapabilities.baselineNotes[0] ||
+                'إصدار المتصفح قديم نسبياً — يوصى بتحديثه للحصول على أفضل أداء وتشغيل فيديو.'}
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setCompatBannerDismissed(true)}
+            aria-label="إغلاق تنبيه التوافق"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer shrink-0"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
       {siteSettings.maintenanceMode && canAccessAdmin && (
         <div className="bg-[#f9c400] text-[#0f0f0f] px-4 py-2 text-xs font-black flex flex-wrap items-center justify-center gap-3 z-50">
           <span className="inline-flex items-center gap-1.5">

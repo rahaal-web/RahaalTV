@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Loader2, Search, Star, X } from 'lucide-react';
 import { handlePosterError, matchesCategoryFilter, normalizeArabicText } from '../lib/mediaFilters';
 import { getPosterUrl } from '../lib/mediaImages';
@@ -32,6 +32,18 @@ export function SearchDrawer({
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [category, setCategory] = useState('');
   const [isSearching, setIsSearching] = useState(false);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+    return () => {
+      const prev = previousFocusRef.current;
+      if (prev && typeof prev.focus === 'function') {
+        window.setTimeout(() => prev.focus(), 0);
+      }
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -69,7 +81,13 @@ export function SearchDrawer({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="البحث السريع في RahaL TV"
+      data-rtv-focus-trap="true"
+      className="fixed inset-0 z-50 flex justify-end"
+    >
       {/* Blurred Dark Backdrop */}
       <div
         className="fixed inset-0 bg-[#06131c]/80 backdrop-blur-md transition-opacity"
@@ -173,6 +191,8 @@ export function SearchDrawer({
                   <img
                     src={getPosterUrl(item)}
                     alt={item.title}
+                    loading="lazy"
+                    decoding="async"
                     referrerPolicy="no-referrer"
                     onError={handlePosterError}
                     className="h-24 w-18 rounded-xl object-cover object-top shrink-0"

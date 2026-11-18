@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Bookmark,
+  Captions,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -16,6 +17,7 @@ import {
   Minimize2,
   MonitorPlay,
   Pause,
+  PictureInPicture2,
   Play,
   RefreshCw,
   RotateCw,
@@ -30,6 +32,7 @@ import {
   Tv,
   Users,
   Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
@@ -59,6 +62,7 @@ import {
 } from '../lib/popupShield';
 import { handlePosterError } from '../lib/mediaFilters';
 import {
+  detectClientCapabilities,
   exitAnyFullscreen,
   getFullscreenElement,
   requestElementFullscreen,
@@ -76,6 +80,35 @@ import {
 } from '../types/media';
 import { FooterTopic } from './Footer';
 
+function useDialogAccessibility(
+  active: boolean,
+  onClose: () => void,
+  allowEscape = true
+) {
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!active || typeof document === 'undefined') return;
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (allowEscape && e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      const prev = previousFocusRef.current;
+      if (prev && typeof prev.focus === 'function') {
+        window.setTimeout(() => prev.focus(), 0);
+      }
+    };
+  }, [active, onClose, allowEscape]);
+}
+
 /* ---------------- Watchlist Modal ---------------- */
 interface WatchlistModalProps {
   isOpen: boolean;
@@ -92,10 +125,17 @@ export function WatchlistModal({
   onSelectMedia,
   onRemove,
 }: WatchlistModalProps) {
+  useDialogAccessibility(isOpen, onClose);
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="قائمتي للمشاهدة لاحقاً"
+      data-rtv-focus-trap="true"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+    >
       <div className="fixed inset-0 bg-black/75 backdrop-blur-sm" onClick={onClose} />
       <div className="relative z-10 w-full max-w-2xl rounded-3xl bg-[#0c1821] border border-white/10 shadow-2xl overflow-hidden">
         <div className="flex items-center justify-between bg-[#1a242e] px-6 py-4 border-b border-white/10">
@@ -142,6 +182,8 @@ export function WatchlistModal({
                     <img
                       src={getPosterUrl(item)}
                       alt={item.title}
+                      loading="lazy"
+                      decoding="async"
                       referrerPolicy="no-referrer"
                       onError={handlePosterError}
                       className="h-18 w-14 rounded-xl object-cover object-top shrink-0"
@@ -212,6 +254,8 @@ export function TrailerModal({
     popupShieldConfig || loadStoredPopupShieldConfig()
   );
 
+  useDialogAccessibility(Boolean(item), onClose);
+
   useEffect(() => {
     if (!item) return;
     setActiveShieldPlayerContext({
@@ -231,7 +275,14 @@ export function TrailerModal({
   const themeVars = buildPlayerThemeVars(theme);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5" style={themeVars}>
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`الإعلان الرسمي: ${item.title}`}
+      data-rtv-focus-trap="true"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5"
+      style={themeVars}
+    >
       <div className="fixed inset-0 bg-black/85 backdrop-blur-md" onClick={onClose} />
       <div
         className="relative z-10 w-full max-w-4xl border overflow-hidden"
@@ -491,8 +542,6 @@ export function PlayerModal({
   onClose,
 }: PlayerModalProps) {
   const [selectedServer, setSelectedServer] = useState(initialServerIndex);
-  const [subtitleLang, setSubtitleLang] = useState<'ar' | 'en' | 'off'>('ar');
-  const [isPlaying, setIsPlaying] = useState(true);
   const [seasonIdx, setSeasonIdx] = useState(0);
   const [episodeNum, setEpisodeNum] = useState(initialEpisode);
 
@@ -515,10 +564,29 @@ export function PlayerModal({
   const [isMobileCinemaFill, setIsMobileCinemaFill] = useState(false);
   const [hlsLevels, setHlsLevels] = useState<Array<{ index: number; label: string }>>([]);
   const [selectedHlsLevel, setSelectedHlsLevel] = useState<number>(-1);
+  const [hlsSubtitles, setHlsSubtitles] = useState<Array<{ index: number; label: string }>>([]);
+  const [selectedHlsSubtitle, setSelectedHlsSubtitle] = useState<number>(-1);
+  const [playbackRate, setPlaybackRate] = useState<number>(1);
+  const [isMuted, setIsMuted] = useState(false);
+  const [customVttUrl, setCustomVttUrl] = useState('');
+  const [showSubtitleInput, setShowSubtitleInput] = useState(false);
+  const [seekFeedback, setSeekFeedback] = useState<'forward' | 'backward' | null>(null);
   const playerBoxRef = useRef<HTMLDivElement | null>(null);
   const videoElementRef = useRef<HTMLVideoElement | null>(null);
-  const hlsInstanceRef = useRef<{ currentLevel: number; destroy: () => void } | null>(null);
+  const hlsInstanceRef = useRef<{
+    currentLevel: number;
+    subtitleTracks?: Array<{ id?: number; name?: string; lang?: string }>;
+    subtitleTrack?: number;
+    destroy: () => void;
+  } | null>(null);
   const lastBlurObservedRef = useRef<number>(0);
+  const doubleTapRef = useRef<{ lastTime: number; side: 'left' | 'right' | null }>({
+    lastTime: 0,
+    side: null,
+  });
+
+  useDialogAccessibility(Boolean(item), onClose);
+  const canUsePiP = detectClientCapabilities().supportsPictureInPicture;
 
   // Lock background page scroll while Watch Modal is open (prevents iOS/Android bleed)
   useEffect(() => {
@@ -987,6 +1055,7 @@ export function PlayerModal({
     activeFilterEntry && !activeFilterEntry.ok && !manualBypassFault[safeServerIndex]
   );
   const friendlyServerError = getFriendlyServerError(activeFilterEntry);
+  const isDashStream = Boolean(finalStreamSrc && /\.mpd(\?|$)/i.test(finalStreamSrc));
   const isHlsVideoStream = Boolean(finalStreamSrc && /\.m3u8(\?|$)/i.test(finalStreamSrc));
   const isDirectVideoFile = Boolean(finalStreamSrc && /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(finalStreamSrc));
 
@@ -995,6 +1064,8 @@ export function PlayerModal({
     const videoEl = videoElementRef.current;
     setHlsLevels([]);
     setSelectedHlsLevel(-1);
+    setHlsSubtitles([]);
+    setSelectedHlsSubtitle(-1);
 
     if (hlsInstanceRef.current) {
       try {
@@ -1041,6 +1112,20 @@ export function PlayerModal({
             label: lvl.height ? `${lvl.height}p` : `جودة ${idx + 1}`,
           }));
           setHlsLevels(lvls);
+          const subs = (hls.subtitleTracks || []).map((tr, idx) => ({
+            index: idx,
+            label: tr.name || tr.lang || `ترجمة ${idx + 1}`,
+          }));
+          setHlsSubtitles(subs);
+        });
+
+        hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_evt, data) => {
+          if (cancelled) return;
+          const subs = (data.subtitleTracks || []).map((tr, idx) => ({
+            index: idx,
+            label: tr.name || tr.lang || `ترجمة ${idx + 1}`,
+          }));
+          setHlsSubtitles(subs);
         });
 
         hls.on(Hls.Events.ERROR, (_evt, data) => {
@@ -1100,6 +1185,13 @@ export function PlayerModal({
       const vid = videoElementRef.current;
       if (!vid || !isDirectVideoFile) return;
 
+      if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        vid.muted = !vid.muted;
+        setIsMuted(vid.muted);
+        return;
+      }
+
       if (e.key === ' ' || e.key === 'k' || e.key === 'K') {
         if (target === vid || target?.closest('[data-rtv-player-stage="true"]')) {
           e.preventDefault();
@@ -1121,6 +1213,51 @@ export function PlayerModal({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [item, isDirectVideoFile, handleToggleFullscreen]);
+
+  // Keep playbackRate synced cleanly on the direct <video> element
+  useEffect(() => {
+    if (videoElementRef.current) {
+      videoElementRef.current.playbackRate = playbackRate;
+    }
+  }, [playbackRate, finalStreamSrc, playerReloadKey]);
+
+  const handleDirectDoubleTap = (side: 'left' | 'right') => {
+    const vid = videoElementRef.current;
+    if (!vid || !isDirectVideoFile) return;
+    const now = Date.now();
+    if (
+      doubleTapRef.current.side === side &&
+      now - doubleTapRef.current.lastTime < 350
+    ) {
+      const delta = side === 'left' ? -10 : 10;
+      vid.currentTime = Math.max(0, Math.min(vid.duration || vid.currentTime + 10, vid.currentTime + delta));
+      setSeekFeedback(delta > 0 ? 'forward' : 'backward');
+      window.setTimeout(() => setSeekFeedback(null), 650);
+      doubleTapRef.current = { lastTime: 0, side: null };
+    } else {
+      doubleTapRef.current = { lastTime: now, side };
+    }
+  };
+
+  const handleTogglePiP = async () => {
+    const vid = videoElementRef.current as (HTMLVideoElement & {
+      requestPictureInPicture?: () => Promise<unknown>;
+    }) | null;
+    if (!vid || !canUsePiP) return;
+    try {
+      const doc = document as Document & {
+        pictureInPictureElement?: Element | null;
+        exitPictureInPicture?: () => Promise<void>;
+      };
+      if (doc.pictureInPictureElement && typeof doc.exitPictureInPicture === 'function') {
+        await doc.exitPictureInPicture();
+      } else if (typeof vid.requestPictureInPicture === 'function') {
+        await vid.requestPictureInPicture();
+      }
+    } catch {
+      // Browser declined PiP (e.g., audio-only or gesture restriction)
+    }
+  };
 
   const shieldDecision = resolveEffectiveShieldDecision(
     finalStreamSrc,
@@ -1231,6 +1368,7 @@ export function PlayerModal({
       role="dialog"
       aria-modal="true"
       aria-label={`مشغل ${item.title}`}
+      data-rtv-focus-trap="true"
       className="fixed inset-0 z-[55] flex items-stretch lg:items-center justify-center p-0 lg:p-4 overflow-x-hidden"
       style={themeVars}
     >
@@ -1695,7 +1833,40 @@ export function PlayerModal({
                         </div>
                       </div>
                     ) : finalStreamSrc ? (
-                      isDirectVideoFile ? (
+                      isDashStream ? (
+                        <div className="h-full w-full flex flex-col items-center justify-center p-4 sm:p-6 text-center bg-[#090d14] gap-2.5">
+                          <div
+                            className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border shrink-0"
+                            style={{
+                              backgroundColor: 'var(--pt-accent-12)',
+                              borderColor: 'var(--pt-accent-35)',
+                              color: 'var(--pt-accent)',
+                            }}
+                          >
+                            <AlertTriangle className="w-6 h-6" />
+                          </div>
+                          <h4 className="font-display text-sm sm:text-base font-extrabold text-white">
+                            بث MPEG-DASH (.mpd) يتطلب سيرفراً بديلاً
+                          </h4>
+                          <p className="max-w-md text-xs text-[#b7c9ef] leading-relaxed">
+                            المشغل المدمج يدعم HLS (.m3u8) و MP4/WebM مباشرة. اختر سيرفراً آخر للمتابعة فوراً.
+                          </p>
+                          {serversList.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={handleSwitchToNextServer}
+                              className="inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-extrabold cursor-pointer"
+                              style={{
+                                backgroundColor: 'var(--pt-accent)',
+                                color: 'var(--pt-accent-contrast)',
+                              }}
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              <span>الانتقال للسيرفر التالي</span>
+                            </button>
+                          )}
+                        </div>
+                      ) : isDirectVideoFile ? (
                         <div data-rtv-player-stage="true" data-rtv-player-controls="true" className="relative h-full w-full bg-black">
                           <video
                             ref={videoElementRef}
@@ -1704,31 +1875,181 @@ export function PlayerModal({
                             controls
                             autoPlay
                             playsInline
+                            muted={isMuted}
+                            crossOrigin={customVttUrl ? 'anonymous' : undefined}
+                            onVolumeChange={(e) => setIsMuted(e.currentTarget.muted)}
                             onError={() => handleServerFaultFailover(safeServerIndex, 'تعذر تحميل ملف الفيديو')}
                             className="h-full w-full max-w-full block bg-black"
+                          >
+                            {customVttUrl && /^https?:\/\//i.test(customVttUrl.trim()) && (
+                              <track
+                                kind="subtitles"
+                                label="ترجمة مخصصة"
+                                src={customVttUrl.trim()}
+                                default
+                              />
+                            )}
+                          </video>
+
+                          {/* Mobile Double-Tap ±10s Seek Hotzones */}
+                          <div
+                            aria-hidden="true"
+                            onClick={() => handleDirectDoubleTap('left')}
+                            className="lg:hidden absolute inset-y-12 left-0 w-1/4 z-10"
                           />
-                          {hlsLevels.length > 1 && (
-                            <div className="absolute top-2.5 left-2.5 z-20 flex items-center gap-1 rounded-lg bg-black/75 border border-white/15 px-2 py-1 text-[10px] font-bold text-white">
-                              <span>الجودة:</span>
-                              <select
-                                value={selectedHlsLevel}
-                                onChange={(e) => {
-                                  const lvl = Number(e.target.value);
-                                  setSelectedHlsLevel(lvl);
-                                  if (hlsInstanceRef.current) {
-                                    hlsInstanceRef.current.currentLevel = lvl;
-                                  }
-                                }}
-                                aria-label="تغيير جودة البث"
-                                className="bg-transparent text-[#f9c400] font-latin font-black focus:outline-none cursor-pointer"
+                          <div
+                            aria-hidden="true"
+                            onClick={() => handleDirectDoubleTap('right')}
+                            className="lg:hidden absolute inset-y-12 right-0 w-1/4 z-10"
+                          />
+
+                          {seekFeedback && (
+                            <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
+                              <span className="rounded-xl bg-black/80 border border-white/20 px-4 py-2 font-latin text-sm font-black text-[#f9c400]">
+                                {seekFeedback === 'forward' ? '+10s' : '-10s'}
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Direct Video Controls Strip (Speed, HLS Quality, Subtitles, Mute, PiP) */}
+                          <div className="absolute top-2.5 left-2.5 right-2.5 z-20 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+                            <div className="flex flex-wrap items-center gap-1.5 pointer-events-auto">
+                              {hlsLevels.length > 1 && (
+                                <div className="flex items-center gap-1 rounded-lg bg-black/80 border border-white/15 px-2 py-1 text-[10px] font-bold text-white">
+                                  <span>الجودة:</span>
+                                  <select
+                                    value={selectedHlsLevel}
+                                    onChange={(e) => {
+                                      const lvl = Number(e.target.value);
+                                      setSelectedHlsLevel(lvl);
+                                      if (hlsInstanceRef.current) {
+                                        hlsInstanceRef.current.currentLevel = lvl;
+                                      }
+                                    }}
+                                    aria-label="تغيير جودة البث"
+                                    className="bg-transparent text-[#f9c400] font-latin font-black focus:outline-none cursor-pointer"
+                                  >
+                                    <option value={-1} className="bg-[#0c1821] text-white">Auto</option>
+                                    {hlsLevels.map((l) => (
+                                      <option key={l.index} value={l.index} className="bg-[#0c1821] text-white">
+                                        {l.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )}
+
+                              {hlsSubtitles.length > 0 && (
+                                <div className="flex items-center gap-1 rounded-lg bg-black/80 border border-white/15 px-2 py-1 text-[10px] font-bold text-white">
+                                  <Captions className="w-3 h-3 text-[#f9c400]" />
+                                  <select
+                                    value={selectedHlsSubtitle}
+                                    onChange={(e) => {
+                                      const idx = Number(e.target.value);
+                                      setSelectedHlsSubtitle(idx);
+                                      if (hlsInstanceRef.current) {
+                                        hlsInstanceRef.current.subtitleTrack = idx;
+                                      }
+                                    }}
+                                    aria-label="ترجمة HLS"
+                                    className="bg-transparent text-white font-bold focus:outline-none cursor-pointer"
+                                  >
+                                    <option value={-1} className="bg-[#0c1821] text-white">بدون ترجمة</option>
+                                    {hlsSubtitles.map((s) => (
+                                      <option key={s.index} value={s.index} className="bg-[#0c1821] text-white">
+                                        {s.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )}
+
+                              <div className="flex items-center gap-1 rounded-lg bg-black/80 border border-white/15 px-2 py-1 text-[10px] font-bold text-white">
+                                <span>السرعة:</span>
+                                <select
+                                  value={playbackRate}
+                                  onChange={(e) => setPlaybackRate(Number(e.target.value))}
+                                  aria-label="سرعة التشغيل"
+                                  className="bg-transparent text-[#f9c400] font-latin font-black focus:outline-none cursor-pointer"
+                                >
+                                  {[0.75, 1, 1.25, 1.5, 2].map((rate) => (
+                                    <option key={rate} value={rate} className="bg-[#0c1821] text-white">
+                                      {rate}x
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 pointer-events-auto">
+                              <button
+                                type="button"
+                                onClick={() => setShowSubtitleInput((v) => !v)}
+                                title="إضافة ملف ترجمة VTT"
+                                aria-label="إضافة ملف ترجمة VTT"
+                                className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border text-white cursor-pointer ${
+                                  showSubtitleInput || customVttUrl
+                                    ? 'bg-[#D92321] border-[#ff5a58]'
+                                    : 'bg-black/80 border-white/15 hover:bg-white/15'
+                                }`}
                               >
-                                <option value={-1} className="bg-[#0c1821] text-white">Auto</option>
-                                {hlsLevels.map((l) => (
-                                  <option key={l.index} value={l.index} className="bg-[#0c1821] text-white">
-                                    {l.label}
-                                  </option>
-                                ))}
-                              </select>
+                                <Captions className="w-3.5 h-3.5" />
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const vid = videoElementRef.current;
+                                  const nextMuted = !isMuted;
+                                  setIsMuted(nextMuted);
+                                  if (vid) vid.muted = nextMuted;
+                                }}
+                                title={isMuted ? 'إلغاء كتم الصوت (M)' : 'كتم الصوت (M)'}
+                                aria-label={isMuted ? 'إلغاء كتم الصوت' : 'كتم الصوت'}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-black/80 border border-white/15 text-white hover:bg-white/15 cursor-pointer"
+                              >
+                                {isMuted ? (
+                                  <VolumeX className="w-3.5 h-3.5 text-[#ff8a88]" />
+                                ) : (
+                                  <Volume2 className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+
+                              {canUsePiP && (
+                                <button
+                                  type="button"
+                                  onClick={() => void handleTogglePiP()}
+                                  title="نافذة عائمة (Picture-in-Picture)"
+                                  aria-label="نافذة عائمة"
+                                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-black/80 border border-white/15 text-white hover:bg-white/15 cursor-pointer"
+                                >
+                                  <PictureInPicture2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {showSubtitleInput && (
+                            <div className="absolute top-12 left-2.5 right-2.5 sm:left-auto sm:w-80 z-30 rounded-xl bg-[#0c1821]/95 border border-white/15 p-2.5 shadow-2xl space-y-1.5">
+                              <div className="flex items-center justify-between text-[11px] font-bold text-white">
+                                <span>رابط ترجمة WebVTT (.vtt)</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowSubtitleInput(false)}
+                                  className="text-[#b7c9ef] hover:text-white cursor-pointer"
+                                  aria-label="إغلاق نافذة الترجمة"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                              <input
+                                type="url"
+                                dir="ltr"
+                                value={customVttUrl}
+                                onChange={(e) => setCustomVttUrl(e.target.value)}
+                                placeholder="https://example.com/subtitles.vtt"
+                                className="w-full rounded-lg bg-[#06131c] border border-white/15 px-2.5 py-1.5 font-latin text-[11px] text-white focus:border-[#f9c400] focus:outline-none"
+                              />
                             </div>
                           )}
                         </div>
@@ -1746,98 +2067,48 @@ export function PlayerModal({
                         />
                       )
                     ) : (
-                      <>
-                        <img
-                          src={item.backdrop || item.poster}
-                          alt={item.title}
-                          className={`h-full w-full object-cover opacity-80 transition-transform duration-[8000ms] ${
-                            isPlaying ? 'scale-105' : 'scale-100'
-                          }`}
-                        />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/25 to-black/40" />
-
-                        <div className="absolute top-3 left-3 flex items-center gap-2">
-                          <span
-                            className="font-latin rounded-lg px-2.5 py-1 text-[11px] font-black"
-                            style={{
-                              backgroundColor: 'var(--pt-accent)',
-                              color: 'var(--pt-accent-contrast)',
-                            }}
-                          >
-                            {activeQuality}
-                          </span>
+                      <div className="h-full w-full flex flex-col items-center justify-center p-4 sm:p-6 text-center bg-[#090d14] gap-2.5">
+                        <div
+                          className="inline-flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl border shrink-0"
+                          style={{
+                            backgroundColor: 'var(--pt-accent-12)',
+                            borderColor: 'var(--pt-accent-35)',
+                            color: 'var(--pt-accent)',
+                          }}
+                        >
+                          <Server className="w-6 h-6 sm:w-7 sm:h-7" />
                         </div>
-
-                        <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4">
-                          <button
-                            type="button"
-                            onClick={() => setIsPlaying((p) => !p)}
-                            className="inline-flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full shadow-2xl hover:scale-105 transition-transform cursor-pointer"
-                            style={{
-                              backgroundColor: 'var(--pt-accent)',
-                              color: 'var(--pt-accent-contrast)',
-                            }}
-                            aria-label={isPlaying ? 'إيقاف التشغيل' : 'استئناف التشغيل'}
-                          >
-                            {isPlaying ? <Pause className="w-6 h-6 sm:w-7 sm:h-7" /> : <Play className="w-6 h-6 sm:w-7 sm:h-7 fill-current" />}
-                          </button>
-
-                          {subtitleLang !== 'off' && (
-                            <div className="mt-5 sm:mt-8 rounded-lg bg-black/75 px-3 py-1 text-xs sm:text-sm font-bold text-white border border-white/15">
-                              {subtitleLang === 'ar'
-                                ? `ترجمة عربية متزامنة — ${theme.brandLabel}`
-                                : `English Subtitles Active — ${theme.brandLabel}`}
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-center justify-between gap-2 bg-black/80 px-3 sm:px-4 py-2 sm:py-3 backdrop-blur-sm">
-                          <div className="flex items-center gap-3 text-xs font-bold text-white">
+                        <h4 className="font-display text-sm sm:text-base font-extrabold text-white">
+                          لا توجد روابط تشغيل صالحة متوفرة لهذا العرض حالياً
+                        </h4>
+                        <p className="max-w-md text-xs text-[#b7c9ef] leading-relaxed">
+                          لم يتم العثور على رابط فيديو أو كود تضمين صالح في السيرفر المحدد. جرّب التبديل إلى سيرفر آخر أو إعادة التحميل.
+                        </p>
+                        <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                          {serversList.length > 1 && (
                             <button
                               type="button"
-                              onClick={() => setIsPlaying((p) => !p)}
-                              className="hover:opacity-80 cursor-pointer"
+                              onClick={handleSwitchToNextServer}
+                              className="inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-extrabold cursor-pointer"
+                              style={{
+                                backgroundColor: 'var(--pt-accent)',
+                                color: 'var(--pt-accent-contrast)',
+                              }}
                             >
-                              {isPlaying ? 'إيقاف' : 'تشغيل'}
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              <span>تجربة سيرفر آخر</span>
                             </button>
-                            <span className="font-latin text-[#b7c9ef] tabular-nums">
-                              {isPlaying ? '14:22' : '00:00'} / {item.duration}
-                            </span>
-                          </div>
-
-                          <div className="flex items-center gap-1.5 text-[11px] sm:text-xs">
-                            <span className="text-[#b7c9ef] hidden sm:inline">الترجمة:</span>
-                            {(
-                              [
-                                { id: 'ar', label: 'العربية' },
-                                { id: 'en', label: 'English' },
-                                { id: 'off', label: 'إيقاف' },
-                              ] as const
-                            ).map((sub) => (
-                              <button
-                                key={sub.id}
-                                type="button"
-                                onClick={() => setSubtitleLang(sub.id)}
-                                className={`rounded-lg px-2 py-1 font-bold cursor-pointer ${
-                                  subtitleLang === sub.id
-                                    ? ''
-                                    : 'bg-white/10 text-[#b7c9ef] hover:text-white'
-                                }`}
-                                style={
-                                  subtitleLang === sub.id
-                                    ? {
-                                        backgroundColor: 'var(--pt-accent)',
-                                        color: 'var(--pt-accent-contrast)',
-                                      }
-                                    : undefined
-                                }
-                              >
-                                {sub.label}
-                              </button>
-                            ))}
-                          </div>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setPlayerReloadKey((k) => k + 1)}
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-white/[0.08] border border-white/15 px-3.5 py-2 text-xs font-bold text-white hover:bg-white/15 cursor-pointer"
+                          >
+                            <RotateCw className="w-3.5 h-3.5" />
+                            <span>إعادة التحميل</span>
+                          </button>
                         </div>
-                      </>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -2217,6 +2488,8 @@ export function LoginModal({
   const [displayName, setDisplayName] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
 
+  useDialogAccessibility(isOpen, onClose);
+
   if (!isOpen) return null;
 
   const handleSubmit = async (e: FormEvent) => {
@@ -2245,7 +2518,13 @@ export function LoginModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="حسابي على RahaL TV"
+      data-rtv-focus-trap="true"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+    >
       <div className="fixed inset-0 bg-black/75 backdrop-blur-sm" onClick={onClose} />
       <div className="relative z-10 w-full max-w-md rounded-3xl bg-[#0c1821] border border-white/10 p-6 shadow-2xl">
         <div className="flex items-center justify-between mb-5">
@@ -2443,6 +2722,8 @@ export function FooterInfoModal({
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
+  useDialogAccessibility(Boolean(topic), onClose);
+
   if (!topic) return null;
 
   const handleSubmit = async (e: FormEvent) => {
@@ -2461,7 +2742,13 @@ export function FooterInfoModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="معلومات وطلبات RahaL TV"
+      data-rtv-focus-trap="true"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+    >
       <div className="fixed inset-0 bg-black/75 backdrop-blur-sm" onClick={onClose} />
       <div className="relative z-10 w-full max-w-xl rounded-3xl bg-[#0c1821] border border-white/10 shadow-2xl overflow-hidden">
         <div className="flex items-center justify-between bg-[#1a242e] px-6 py-4 border-b border-white/10">

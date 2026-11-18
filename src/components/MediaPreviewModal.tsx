@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Calendar,
@@ -79,11 +79,28 @@ export function MediaPreviewModal({
   const [selectedEpNum, setSelectedEpNum] = useState<number>(
     item?.seasons?.[0]?.episodes?.[0]?.number || 1
   );
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     setTestServerIdx(null);
     setSelectedEpNum(item?.seasons?.[0]?.episodes?.[0]?.number || 1);
   }, [item?.id]);
+
+  useEffect(() => {
+    if (!item) return;
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      const prev = previousFocusRef.current;
+      if (prev && typeof prev.focus === 'function') {
+        window.setTimeout(() => prev.focus(), 0);
+      }
+    };
+  }, [item, onClose]);
 
   if (!item) return null;
 
@@ -104,6 +121,7 @@ export function MediaPreviewModal({
     ? extractSafePreviewSrc(activeTestServer.embedCode, activeTestServer.url)
     : null;
   const activeTestIsPortal = Boolean(activeTestSrc && isLikelyNonVideoWebsiteUrl(activeTestSrc));
+  const isDashStream = Boolean(activeTestSrc && /\.mpd(\?|$)/i.test(activeTestSrc));
   const isDirectVideo = Boolean(activeTestSrc && /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(activeTestSrc));
   const shieldDecision = resolveEffectiveShieldDecision(
     activeTestSrc,
@@ -111,7 +129,13 @@ export function MediaPreviewModal({
   );
 
   return (
-    <div className="fixed inset-0 z-[55] flex items-center justify-center p-2 sm:p-4">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={item.title ? `معاينة ${item.title}` : 'معاينة العمل'}
+      data-rtv-focus-trap="true"
+      className="fixed inset-0 z-[55] flex items-center justify-center p-2 sm:p-4"
+    >
       <div className="fixed inset-0 bg-black/90 backdrop-blur-md" onClick={onClose} />
       <div className="relative z-10 w-[96vw] max-w-6xl max-h-[94vh] flex flex-col rounded-3xl bg-[#06131c] border border-[#f9c400]/35 shadow-2xl overflow-hidden">
         {/* Top Preview Bar */}
@@ -197,6 +221,8 @@ export function MediaPreviewModal({
                 <img
                   src={getBackdropUrl(item)}
                   alt={item.title}
+                  loading="lazy"
+                  decoding="async"
                   referrerPolicy="no-referrer"
                   onError={handleBackdropError}
                   className="absolute inset-0 h-full w-full object-cover object-center opacity-90"
@@ -259,6 +285,8 @@ export function MediaPreviewModal({
                     <img
                       src={getPosterUrl(item)}
                       alt={item.title}
+                      loading="lazy"
+                      decoding="async"
                       referrerPolicy="no-referrer"
                       onError={handlePosterError}
                       className="h-full w-full object-cover object-top"
@@ -453,7 +481,17 @@ export function MediaPreviewModal({
                         )}
                         <div className="relative aspect-video w-full bg-black overflow-hidden">
                           {activeTestSrc && !activeTestIsPortal ? (
-                            isDirectVideo ? (
+                            isDashStream ? (
+                              <div className="h-full flex flex-col items-center justify-center gap-2 p-4 text-center">
+                                <AlertTriangle className="w-8 h-8" style={{ color: 'var(--pt-accent)' }} />
+                                <p className="text-xs font-extrabold text-white">
+                                  بث MPEG-DASH (.mpd) غير مدعوم مباشرة في هذا المشغل المدمج
+                                </p>
+                                <p className="font-latin text-[11px] text-[#b7c9ef]/70 truncate max-w-full" dir="ltr">
+                                  {activeTestSrc}
+                                </p>
+                              </div>
+                            ) : isDirectVideo ? (
                               <video src={activeTestSrc} controls autoPlay playsInline className="w-full h-full" />
                             ) : (
                               <iframe

@@ -4,8 +4,10 @@ import type { ModeratorSubPermissions } from '../../lib/adminPreferences';
 
 export type AdminTab =
   | 'overview'
+  | 'notifications'
   | 'analytics'
   | 'catalog'
+  | 'categories'
   | 'bulk_editor'
   | 'images'
   | 'content_audit'
@@ -71,6 +73,14 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         ownerOnly: true,
       },
       {
+        id: 'notifications',
+        groupId: 'dashboard',
+        label: 'مركز الإشعارات والتنبيهات',
+        shortLabel: 'الإشعارات',
+        description: 'تنبيهات الطلبات المعلّقة، السيرفرات المعطلة، مهام الجلب، وأخطاء النظام',
+        keywords: ['notifications', 'alerts', 'اشعارات', 'تنبيهات', 'تحذيرات'],
+      },
+      {
         id: 'analytics',
         groupId: 'dashboard',
         label: 'التحليلات المتقدمة',
@@ -92,6 +102,15 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'الكتالوج',
         description: 'إضافة، تعديل، تثبيت، وفرز كافة الأعمال والحلقات',
         keywords: ['catalog', 'movies', 'series', 'افلام', 'مسلسلات', 'كتالوج'],
+      },
+      {
+        id: 'categories',
+        groupId: 'content',
+        label: 'التصنيفات والأقسام والوسوم',
+        shortLabel: 'التصنيفات',
+        description: 'إحصائيات الأقسام والأنواع والجودات والدمج أو إعادة التسمية الجماعية',
+        keywords: ['categories', 'genres', 'tags', 'تصنيفات', 'اقسام', 'انواع'],
+        moderatorPermKey: 'allowBulkEditor',
       },
       {
         id: 'bulk_editor',

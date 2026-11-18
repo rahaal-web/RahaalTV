@@ -1,12 +1,16 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDown,
+  ArrowLeft,
   ArrowRight,
   ArrowUp,
-  BarChart3,
+  Bell,
   CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
   Code2,
+  Command,
   Copy,
   Database,
   Download,
@@ -22,13 +26,14 @@ import {
   Loader2,
   Lock,
   LogOut,
+  Menu,
   MessageSquarePlus,
   Palette,
-  Pin,
+  PanelRightClose,
+  PanelRightOpen,
   Play,
   Plus,
   RefreshCw,
-  RotateCcw,
   Ruler,
   Search,
   Server,
@@ -36,26 +41,86 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
-  Star,
+  StopCircle,
   Trash2,
   Tv,
-  Type,
   Users,
   Wand2,
   Wrench,
   X,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
-import firestoreRulesSource from '../../firestore.rules?raw';
 import { ASSETS, CATALOG_ITEMS } from '../data/catalog';
-import { AdminAiBulkEditor } from './AdminAiBulkEditor';
-import { AdminImageManagerPanel } from './AdminImageManagerPanel';
-import { HomeBuilderPanel } from './HomeBuilderPanel';
 import { MediaPreviewModal } from './MediaPreviewModal';
-import { PopupShieldPanel } from './PopupShieldPanel';
-import { ScraperAdapterBuilderPanel } from './ScraperAdapterBuilderPanel';
-import { TypographyPanel } from './TypographyPanel';
+import {
+  ADMIN_NAV_GROUPS,
+  type AdminTab,
+  findAdminNavItem,
+  getAllAdminNavItems,
+  isTabAccessible,
+} from './admin/adminNavigation';
+import { ConfirmDialog, GlobalCommandPalette } from './admin/AdminSharedUi';
+
+export type { AdminTab } from './admin/adminNavigation';
+
+const AdminAiBulkEditor = lazy(() =>
+  import('./AdminAiBulkEditor').then((m) => ({ default: m.AdminAiBulkEditor }))
+);
+const AdminImageManagerPanel = lazy(() =>
+  import('./AdminImageManagerPanel').then((m) => ({ default: m.AdminImageManagerPanel }))
+);
+const HomeBuilderPanel = lazy(() =>
+  import('./HomeBuilderPanel').then((m) => ({ default: m.HomeBuilderPanel }))
+);
+const PopupShieldPanel = lazy(() =>
+  import('./PopupShieldPanel').then((m) => ({ default: m.PopupShieldPanel }))
+);
+const ScraperAdapterBuilderPanel = lazy(() =>
+  import('./ScraperAdapterBuilderPanel').then((m) => ({ default: m.ScraperAdapterBuilderPanel }))
+);
+const TypographyPanel = lazy(() =>
+  import('./TypographyPanel').then((m) => ({ default: m.TypographyPanel }))
+);
+
+const AdminExecutiveOverview = lazy(() =>
+  import('./admin/AdminExecutiveOverview').then((m) => ({ default: m.AdminExecutiveOverview }))
+);
+const AdminCatalogPanel = lazy(() =>
+  import('./admin/AdminCatalogPanel').then((m) => ({ default: m.AdminCatalogPanel }))
+);
+const AdminCategoriesPanel = lazy(() =>
+  import('./admin/AdminCategoriesPanel').then((m) => ({ default: m.AdminCategoriesPanel }))
+);
+const AdminNotificationsPanel = lazy(() =>
+  import('./admin/AdminNotificationsPanel').then((m) => ({ default: m.AdminNotificationsPanel }))
+);
+const AdminBulkEditorPanel = lazy(() =>
+  import('./admin/AdminBulkEditorPanel').then((m) => ({ default: m.AdminBulkEditorPanel }))
+);
+const AdminContentAuditPanel = lazy(() =>
+  import('./admin/AdminContentAuditPanel').then((m) => ({ default: m.AdminContentAuditPanel }))
+);
+const AdminWatchServersPanel = lazy(() =>
+  import('./admin/AdminWatchServersPanel').then((m) => ({ default: m.AdminWatchServersPanel }))
+);
+const AdminCrawlOperationsPanel = lazy(() =>
+  import('./admin/AdminCrawlOperationsPanel').then((m) => ({
+    default: m.AdminCrawlOperationsPanel,
+  }))
+);
+const AdminDisplayModesPanel = lazy(() =>
+  import('./admin/AdminDisplayModesPanel').then((m) => ({ default: m.AdminDisplayModesPanel }))
+);
+const AdminSecurityLogsPanel = lazy(() =>
+  import('./admin/AdminSecurityLogsPanel').then((m) => ({ default: m.AdminSecurityLogsPanel }))
+);
+const AdminSystemHealthPanel = lazy(() =>
+  import('./admin/AdminSystemHealthPanel').then((m) => ({ default: m.AdminSystemHealthPanel }))
+);
+const AdminBackupRestorePanel = lazy(() =>
+  import('./admin/AdminBackupRestorePanel').then((m) => ({ default: m.AdminBackupRestorePanel }))
+);
+
 import {
   evaluateImageQuality,
   getBackdropInfo,
@@ -108,9 +173,6 @@ import {
   verifyAndFilterItemServers,
 } from '../lib/clientScraper';
 import {
-  DEFAULT_PLAYER_THEME,
-  PLAYER_THEME_PRESETS,
-  buildPlayerThemeVars,
   loadStoredPlayerTheme,
   normalizePlayerTheme,
   saveStoredPlayerTheme,
@@ -142,6 +204,30 @@ import {
   syncAdaptersToBackendRegistry,
 } from '../lib/scraperAdaptersDb';
 import {
+  AdminWorkspacePrefs,
+  CatalogTablePrefs,
+  DEFAULT_MODERATOR_SUB_PERMS,
+  loadAdminNotifications,
+  loadAdminWorkspacePrefs,
+  ModeratorSubPermissions,
+  pushAdminNotification,
+  saveAdminWorkspacePrefs,
+} from '../lib/adminPreferences';
+import {
+  cancelTrackedCrawlTask,
+  finishTrackedCrawlTask,
+  isTaskCancelled,
+  loadCrawlTasks,
+  startTrackedCrawlTask,
+  subscribeCrawlTasks,
+  updateTrackedCrawlTask,
+} from '../lib/crawlTasksDb';
+import {
+  normalizeTitleForDuplicateCheck,
+  runCatalogContentAudit,
+} from '../lib/contentAudit';
+import { reportClientError } from '../lib/clientLogger';
+import {
   AdminPrivilegeRole,
   AdminRoleRecord,
   CastMember,
@@ -164,27 +250,46 @@ import {
   VisitorRequest,
 } from '../types/media';
 
-export type AdminTab =
-  | 'overview'
-  | 'home_builder'
-  | 'typography'
-  | 'popup_shield'
-  | 'catalog'
-  | 'images'
-  | 'ai_editor'
-  | 'scraper'
-  | 'site_scraper'
-  | 'scraper_adapters'
-  | 'requests'
-  | 'users'
-  | 'settings';
-
-const MODERATOR_ALLOWED_TABS: AdminTab[] = [
-  'catalog',
-  'images',
-  'scraper',
-  'site_scraper',
-  'scraper_adapters',
+const MODERATOR_PERM_LABELS: {
+  key: keyof ModeratorSubPermissions;
+  title: string;
+  desc: string;
+}[] = [
+  {
+    key: 'allowBulkEditor',
+    title: 'التعديل الجماعي والتصنيفات',
+    desc: 'إتاحة تعديل الجودات والأقسام وإعادة التسمية الجماعية',
+  },
+  {
+    key: 'allowContentAudit',
+    title: 'فحص جودة المحتوى',
+    desc: 'إتاحة كشف التكرارات والحلقات الناقصة والصور المفقودة',
+  },
+  {
+    key: 'allowWatchServers',
+    title: 'صحة وسيرفرات المشاهدة',
+    desc: 'إتاحة جرد النطاقات وفحص السيرفرات المعطلة',
+  },
+  {
+    key: 'allowAnalyticsRead',
+    title: 'قراءة التحليلات المتقدمة',
+    desc: 'عرض رسوم وتقارير المشاهدات والتقييمات',
+  },
+  {
+    key: 'allowSiteScraper',
+    title: 'جلب موقع بالكامل (Crawler)',
+    desc: 'استيراد أقسام ومواقع كاملة دفعة واحدة',
+  },
+  {
+    key: 'allowAdapters',
+    title: 'تطوير مصادر الجلب (Adapters)',
+    desc: 'إنشاء وتعديل قواعد استخراج المواقع الخارجية',
+  },
+  {
+    key: 'allowCrawlOperations',
+    title: 'عمليات ومهام الجلب',
+    desc: 'مراقبة وإيقاف مهام الجلب الحية ومراجعة سجلها',
+  },
 ];
 
 interface AdminDashboardViewProps {
@@ -504,32 +609,197 @@ export function AdminDashboardView({
   const effectiveRole: AdminPrivilegeRole | null =
     adminRole !== undefined ? adminRole : isAdmin ? 'owner' : null;
   const isOwner = effectiveRole === 'owner';
-  const isModerator = effectiveRole === 'moderator';
+
+  const [workspacePrefs, setWorkspacePrefs] = useState<AdminWorkspacePrefs>(() =>
+    loadAdminWorkspacePrefs()
+  );
+
+  const updateWorkspacePrefs = useCallback((patch: Partial<AdminWorkspacePrefs>) => {
+    setWorkspacePrefs((prev) => {
+      const next = { ...prev, ...patch };
+      saveAdminWorkspacePrefs(next);
+      return next;
+    });
+  }, []);
+
+  const updateCatalogTablePrefs = useCallback((patch: Partial<CatalogTablePrefs>) => {
+    setWorkspacePrefs((prev) => {
+      const next: AdminWorkspacePrefs = {
+        ...prev,
+        catalogTable: {
+          ...prev.catalogTable,
+          ...patch,
+          visibleColumns: {
+            ...prev.catalogTable.visibleColumns,
+            ...(patch.visibleColumns || {}),
+          },
+        },
+      };
+      saveAdminWorkspacePrefs(next);
+      return next;
+    });
+  }, []);
+
+  const updateModeratorPerm = useCallback(
+    (key: keyof ModeratorSubPermissions, value: boolean) => {
+      setWorkspacePrefs((prev) => {
+        const next: AdminWorkspacePrefs = {
+          ...prev,
+          moderatorSubPermissions: {
+            ...prev.moderatorSubPermissions,
+            [key]: value,
+          },
+        };
+        saveAdminWorkspacePrefs(next);
+        return next;
+      });
+    },
+    []
+  );
 
   const [activeTab, setActiveTab] = useState<AdminTab>(() => {
-    const initial = requestedTab?.tab || (isModerator ? 'catalog' : 'overview');
-    if (isModerator && !MODERATOR_ALLOWED_TABS.includes(initial)) {
-      return 'catalog';
+    const requested = requestedTab?.tab;
+    if (requested && isTabAccessible(requested, isOwner, workspacePrefs.moderatorSubPermissions)) {
+      return requested;
     }
-    return initial;
+    const stored = workspacePrefs.lastTab as AdminTab;
+    if (
+      stored &&
+      findAdminNavItem(stored) &&
+      isTabAccessible(stored, isOwner, workspacePrefs.moderatorSubPermissions)
+    ) {
+      return stored;
+    }
+    return isOwner ? 'overview' : 'catalog';
   });
+
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState<number>(() =>
+    loadAdminNotifications().filter((n) => !n.read).length
+  );
+  const [runningCrawlCount, setRunningCrawlCount] = useState<number>(() =>
+    loadCrawlTasks().filter((t) => t.status === 'running').length
+  );
+  const [tvModeActive, setTvModeActive] = useState<boolean>(() =>
+    typeof document !== 'undefined' &&
+    document.documentElement.getAttribute('data-rtv-tv-mode') === 'true'
+  );
+  const loggedUnauthorizedRef = useRef<Set<string>>(new Set());
+
+  const accessibleNavItems = useMemo(
+    () =>
+      getAllAdminNavItems().filter((item) =>
+        isTabAccessible(item.id, isOwner, workspacePrefs.moderatorSubPermissions)
+      ),
+    [isOwner, workspacePrefs.moderatorSubPermissions]
+  );
+
+  const currentNavMeta = useMemo(
+    () =>
+      findAdminNavItem(activeTab) || {
+        group: ADMIN_NAV_GROUPS[0],
+        item: ADMIN_NAV_GROUPS[0].items[0],
+      },
+    [activeTab]
+  );
+
+  const navigateToTab = useCallback(
+    (target: AdminTab) => {
+      if (!isTabAccessible(target, isOwner, workspacePrefs.moderatorSubPermissions)) {
+        const sig = `${user?.uid || 'anon'}:${target}`;
+        if (!loggedUnauthorizedRef.current.has(sig)) {
+          loggedUnauthorizedRef.current.add(sig);
+          reportClientError({
+            source: 'rbac.unauthorized_tab',
+            level: 'warn',
+            message: `Blocked unauthorized navigation to admin tab "${target}"`,
+            context: { targetTab: target, role: effectiveRole || 'none' },
+          });
+        }
+        onNotify('ليست لديك صلاحية للوصول إلى هذا القسم.');
+        setActiveTab('catalog');
+        setMobileDrawerOpen(false);
+        return;
+      }
+      setActiveTab(target);
+      setMobileDrawerOpen(false);
+      updateWorkspacePrefs({ lastTab: target });
+    },
+    [isOwner, workspacePrefs.moderatorSubPermissions, user?.uid, effectiveRole, onNotify, updateWorkspacePrefs]
+  );
 
   useEffect(() => {
     if (requestedTab?.tab) {
-      const target = requestedTab.tab;
-      if (isModerator && !MODERATOR_ALLOWED_TABS.includes(target)) {
-        setActiveTab('catalog');
-      } else {
-        setActiveTab(target);
-      }
+      navigateToTab(requestedTab.tab);
     }
-  }, [requestedTab?.nonce, requestedTab?.tab, isModerator]);
+  }, [requestedTab?.nonce, requestedTab?.tab, navigateToTab]);
 
   useEffect(() => {
-    if (isModerator && !MODERATOR_ALLOWED_TABS.includes(activeTab)) {
+    if (!isTabAccessible(activeTab, isOwner, workspacePrefs.moderatorSubPermissions)) {
+      const sig = `${user?.uid || 'anon'}:${activeTab}`;
+      if (!loggedUnauthorizedRef.current.has(sig)) {
+        loggedUnauthorizedRef.current.add(sig);
+        reportClientError({
+          source: 'rbac.unauthorized_tab',
+          level: 'warn',
+          message: `Redirected from restricted tab "${activeTab}"`,
+          context: { targetTab: activeTab, role: effectiveRole || 'none' },
+        });
+      }
       setActiveTab('catalog');
     }
-  }, [isModerator, activeTab]);
+  }, [activeTab, isOwner, workspacePrefs.moderatorSubPermissions, user?.uid, effectiveRole]);
+
+  useEffect(() => {
+    const syncTasks = () => {
+      setRunningCrawlCount(loadCrawlTasks().filter((t) => t.status === 'running').length);
+      setUnreadNotificationsCount(loadAdminNotifications().filter((n) => !n.read).length);
+    };
+    syncTasks();
+    const unsub = subscribeCrawlTasks(syncTasks);
+    return () => unsub();
+  }, [activeTab]);
+
+  useEffect(() => {
+    const handleGlobalShortcuts = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCommandPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalShortcuts);
+    return () => window.removeEventListener('keydown', handleGlobalShortcuts);
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const syncTv = () =>
+      setTvModeActive(document.documentElement.getAttribute('data-rtv-tv-mode') === 'true');
+    syncTv();
+    const observer = new MutationObserver(syncTv);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-rtv-tv-mode'],
+    });
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!authLoading && user && !isAdmin) {
+      const sig = `admin_gate:${user.uid}`;
+      if (!loggedUnauthorizedRef.current.has(sig)) {
+        loggedUnauthorizedRef.current.add(sig);
+        reportClientError({
+          source: 'rbac.unauthorized_admin_gate',
+          level: 'warn',
+          message: `Authenticated non-admin account attempted to open /admin`,
+          context: { uid: user.uid, email: user.email || '' },
+        });
+      }
+    }
+  }, [authLoading, user, isAdmin]);
+
   const [busyAction, setBusyAction] = useState(false);
   const [adminSigningIn, setAdminSigningIn] = useState(false);
   const [adminAuthError, setAdminAuthError] = useState<string | null>(null);
@@ -546,6 +816,21 @@ export function AdminDashboardView({
   const [selectedMediaIds, setSelectedMediaIds] = useState<string[]>([]);
   const [confirmBulkDeleteMode, setConfirmBulkDeleteMode] = useState<'selected' | 'all' | null>(null);
 
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (mobileDrawerOpen) {
+        e.preventDefault();
+        setMobileDrawerOpen(false);
+      } else if (editingItem) {
+        e.preventDefault();
+        setEditingItem(null);
+      }
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [mobileDrawerOpen, editingItem]);
+
   // Categories/Genres helper inputs inside editor modal
   const [categoriesText, setCategoriesText] = useState('');
   const [genresText, setGenresText] = useState('');
@@ -557,6 +842,8 @@ export function AdminDashboardView({
   const [scrapeUrl, setScrapeUrl] = useState('');
   const [scrapeRawHtml, setScrapeRawHtml] = useState('');
   const [scraping, setScraping] = useState(false);
+  const [activeSingleCrawlId, setActiveSingleCrawlId] = useState<string | null>(null);
+  const singleCrawlAbortRef = useRef<AbortController | null>(null);
   const [scrapeError, setScrapeError] = useState<string | null>(null);
   const [scrapedResult, setScrapedResult] = useState<ScrapedPayload | null>(null);
   const [editingScrapedServerIdx, setEditingScrapedServerIdx] = useState<number | null>(null);
@@ -573,6 +860,8 @@ export function AdminDashboardView({
   const [siteMaxPages, setSiteMaxPages] = useState(3);
   const [siteDeepScrape, setSiteDeepScrape] = useState(true);
   const [siteCrawling, setSiteCrawling] = useState(false);
+  const [activeSiteCrawlId, setActiveSiteCrawlId] = useState<string | null>(null);
+  const siteCrawlAbortRef = useRef<AbortController | null>(null);
   const [siteCrawlError, setSiteCrawlError] = useState<string | null>(null);
   const [siteCrawlMeta, setSiteCrawlMeta] = useState<{
     strategy: string;
@@ -896,14 +1185,38 @@ export function AdminDashboardView({
     );
   };
 
-  const totalViews = useMemo(
-    () => catalog.reduce((sum, item) => sum + (item.views || 0), 0),
-    [catalog]
-  );
   const pendingRequestsCount = useMemo(
     () => requests.filter((r) => r.status === 'pending').length,
     [requests]
   );
+
+  const catalogAuditSummary = useMemo(() => runCatalogContentAudit(catalog), [catalog]);
+
+  const totalBellBadgeCount = useMemo(() => {
+    const computedAlerts =
+      (isOwner && !isFirestoreSeeded ? 1 : 0) +
+      (isOwner && pendingRequestsCount > 0 ? 1 : 0) +
+      (catalogAuditSummary.countsBySeverity.critical > 0 ? 1 : 0);
+    return unreadNotificationsCount + computedAlerts;
+  }, [unreadNotificationsCount, isOwner, isFirestoreSeeded, pendingRequestsCount, catalogAuditSummary]);
+
+  const existingCatalogByTitle = useMemo(() => {
+    const map = new Map<string, MediaItem>();
+    for (const item of catalog) {
+      const n1 = normalizeTitleForDuplicateCheck(item.title);
+      const n2 = normalizeTitleForDuplicateCheck(item.englishTitle);
+      if (n1 && !map.has(n1)) map.set(n1, item);
+      if (n2 && !map.has(n2)) map.set(n2, item);
+    }
+    return map;
+  }, [catalog]);
+
+  const matchedExistingSingleItem = useMemo(() => {
+    if (!scrapedResult) return null;
+    const n1 = normalizeTitleForDuplicateCheck(scrapedResult.title);
+    const n2 = normalizeTitleForDuplicateCheck(scrapedResult.englishTitle);
+    return (n1 ? existingCatalogByTitle.get(n1) : undefined) || (n2 ? existingCatalogByTitle.get(n2) : undefined) || null;
+  }, [scrapedResult, existingCatalogByTitle]);
 
   const filteredCatalog = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -1176,6 +1489,24 @@ export function AdminDashboardView({
     setPreviewModalState({ item: draft, source: 'editor' });
   };
 
+  const handleCancelSingleScrape = () => {
+    if (!activeSingleCrawlId) return;
+    cancelTrackedCrawlTask(activeSingleCrawlId);
+    singleCrawlAbortRef.current = null;
+    setActiveSingleCrawlId(null);
+    setScraping(false);
+    onNotify('تم إيقاف عملية الجلب الفردية.');
+  };
+
+  const handleCancelSiteScrape = () => {
+    if (!activeSiteCrawlId) return;
+    cancelTrackedCrawlTask(activeSiteCrawlId);
+    siteCrawlAbortRef.current = null;
+    setActiveSiteCrawlId(null);
+    setSiteCrawling(false);
+    onNotify('تم إيقاف عملية جلب الموقع.');
+  };
+
   const handleScrapeSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setScrapeError(null);
@@ -1191,7 +1522,16 @@ export function AdminDashboardView({
       return;
     }
 
+    const { taskId, controller } = startTrackedCrawlTask({
+      kind: 'single_page',
+      title: scrapeMode === 'url' ? scrapeUrl.trim() : 'جلب صفحة من كود HTML',
+      targetUrl: scrapeUrl.trim() || 'manual-html',
+      totalItems: 1,
+    });
+    singleCrawlAbortRef.current = controller;
+    setActiveSingleCrawlId(taskId);
     setScraping(true);
+
     try {
       const matchedHtmlAdapter =
         scrapeMode === 'html' && scrapeUrl.trim()
@@ -1224,6 +1564,7 @@ export function AdminDashboardView({
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
+            signal: controller.signal,
           });
           const contentType = response.headers.get('content-type') || '';
           if (contentType.includes('application/json')) {
@@ -1243,23 +1584,37 @@ export function AdminDashboardView({
               usedBackend = true;
               if (!response.ok && data.error) {
                 setScrapeError(data.error);
+                finishTrackedCrawlTask(taskId, 'failed', {
+                  failedCount: 1,
+                  errorMessage: data.error,
+                });
                 return;
               }
             }
           }
-        } catch {
+        } catch (err) {
+          if (isTaskCancelled(controller) || (err instanceof Error && err.name === 'AbortError')) {
+            return;
+          }
           // Static hosting or unreachable backend -> fall back seamlessly to browser engine
         }
       }
+
+      if (isTaskCancelled(controller)) return;
 
       if (!usedBackend || !data) {
         data = await scrapeSingleInBrowser(payload);
       }
 
+      if (isTaskCancelled(controller)) return;
+
       if (!data.ok || !data.extracted) {
-        setScrapeError(
-          data.error || 'تعذر سحب البيانات من الموقع المستهدف. جرّب وضع لصق HTML.'
-        );
+        const errMsg = data.error || 'تعذر سحب البيانات من الموقع المستهدف. جرّب وضع لصق HTML.';
+        setScrapeError(errMsg);
+        finishTrackedCrawlTask(taskId, 'failed', {
+          failedCount: 1,
+          errorMessage: errMsg,
+        });
         return;
       }
 
@@ -1270,6 +1625,19 @@ export function AdminDashboardView({
         servers: renumberServers(data.extracted.servers || []),
       });
       setEditingScrapedServerIdx(null);
+
+      finishTrackedCrawlTask(taskId, 'completed', {
+        title: data.extracted.title || scrapeUrl.trim() || 'جلب عمل',
+        completedItems: 1,
+        importedCount: 1,
+      });
+      pushAdminNotification({
+        level: 'success',
+        title: 'اكتمل جلب عمل واحد',
+        message: `تم استخراج "${data.extracted.title}" (${data.extracted.servers?.length || 0} سيرفر).`,
+        tabTarget: 'scraper',
+      });
+
       const extractedUrlsSet = new Set<string>();
       (data.extracted.servers || []).forEach((s) => {
         const u = resolveWatchServerUrl(s);
@@ -1293,8 +1661,16 @@ export function AdminDashboardView({
           : `تم استخراج "${data.extracted.title}" بنجاح!`
       );
     } catch {
-      setScrapeError('تعذر تحليل الصفحة المستهدفة. جرّب استخدام وضع لصق كود HTML.');
+      if (isTaskCancelled(controller)) return;
+      const errMsg = 'تعذر تحليل الصفحة المستهدفة. جرّب استخدام وضع لصق كود HTML.';
+      setScrapeError(errMsg);
+      finishTrackedCrawlTask(taskId, 'failed', {
+        failedCount: 1,
+        errorMessage: errMsg,
+      });
     } finally {
+      singleCrawlAbortRef.current = null;
+      setActiveSingleCrawlId((curr) => (curr === taskId ? null : curr));
       setScraping(false);
     }
   };
@@ -1333,7 +1709,7 @@ export function AdminDashboardView({
       onNotify(
         `تم نشر "${verification.cleanedItem.title}" برابط مخصص في قاعدة البيانات!${removedNote}${legacyNote}`
       );
-      setActiveTab('catalog');
+      navigateToTab('catalog');
     } catch (err) {
       onNotify(
         formatFirestoreWriteError(
@@ -1362,7 +1738,16 @@ export function AdminDashboardView({
       return;
     }
 
+    const { taskId, controller } = startTrackedCrawlTask({
+      kind: 'bulk_site',
+      title: siteScrapeMode === 'url' ? siteCrawlUrl.trim() : 'جلب موقع من كود HTML',
+      targetUrl: siteCrawlUrl.trim() || 'manual-site-html',
+      totalItems: siteMaxItems,
+    });
+    siteCrawlAbortRef.current = controller;
+    setActiveSiteCrawlId(taskId);
     setSiteCrawling(true);
+
     try {
       const resolvedSiteAdapter =
         matchedSiteAdapter ||
@@ -1394,6 +1779,7 @@ export function AdminDashboardView({
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
+            signal: controller.signal,
           });
           const contentType = response.headers.get('content-type') || '';
           if (contentType.includes('application/json')) {
@@ -1416,23 +1802,39 @@ export function AdminDashboardView({
               usedBackend = true;
               if (!response.ok && data.error) {
                 setSiteCrawlError(data.error);
+                finishTrackedCrawlTask(taskId, 'failed', {
+                  failedCount: 1,
+                  errorMessage: data.error,
+                });
                 return;
               }
             }
           }
-        } catch {
+        } catch (err) {
+          if (isTaskCancelled(controller) || (err instanceof Error && err.name === 'AbortError')) {
+            return;
+          }
           // Static hosting or unreachable backend -> fall back seamlessly to browser engine
         }
       }
 
+      if (isTaskCancelled(controller)) return;
+
       if (!usedBackend || !data) {
+        updateTrackedCrawlTask(taskId, { completedItems: 1 });
         data = await scrapeSiteInBrowser(payload);
       }
 
+      if (isTaskCancelled(controller)) return;
+
       if (!data.ok || !Array.isArray(data.items)) {
-        setSiteCrawlError(
-          data.error || 'تعذر سحب محتوى الموقع. جرّب استخدام وضع لصق كود HTML للصفحة الرئيسية.'
-        );
+        const errMsg =
+          data.error || 'تعذر سحب محتوى الموقع. جرّب استخدام وضع لصق كود HTML للصفحة الرئيسية.';
+        setSiteCrawlError(errMsg);
+        finishTrackedCrawlTask(taskId, 'failed', {
+          failedCount: 1,
+          errorMessage: errMsg,
+        });
         return;
       }
 
@@ -1449,10 +1851,30 @@ export function AdminDashboardView({
           selected: true,
         }))
       );
+      finishTrackedCrawlTask(taskId, 'completed', {
+        title: data.siteTitle || siteCrawlUrl.trim() || 'جلب موقع',
+        totalItems: data.items.length,
+        completedItems: data.items.length,
+        importedCount: data.items.length,
+      });
+      pushAdminNotification({
+        level: 'success',
+        title: 'اكتمل جلب موقع بالكامل',
+        message: `تم جلب ${data.items.length} عملاً من ${data.siteTitle || siteCrawlUrl}.`,
+        tabTarget: 'site_scraper',
+      });
       onNotify(`تم جلب ${data.items.length} عملًا من الموقع بنجاح!`);
     } catch {
-      setSiteCrawlError('تعذر سحب الموقع. جرّب وضع "لصق HTML الموقع".');
+      if (isTaskCancelled(controller)) return;
+      const errMsg = 'تعذر سحب الموقع. جرّب وضع "لصق HTML الموقع".';
+      setSiteCrawlError(errMsg);
+      finishTrackedCrawlTask(taskId, 'failed', {
+        failedCount: 1,
+        errorMessage: errMsg,
+      });
     } finally {
+      siteCrawlAbortRef.current = null;
+      setActiveSiteCrawlId((curr) => (curr === taskId ? null : curr));
       setSiteCrawling(false);
     }
   };
@@ -1528,7 +1950,7 @@ export function AdminDashboardView({
       onNotify(`تم نشر وحفظ ${count} عملًا في قاعدة بيانات Firestore دفعة واحدة!${noteSuffix}`);
       setSiteScrapedItems((prev) => prev.filter((i) => !publishedKeys.has(i.tempKey)));
       if (skippedCount === 0) {
-        setActiveTab('catalog');
+        navigateToTab('catalog');
       }
     } catch (err) {
       onNotify(formatFirestoreWriteError(err, 'حدث خطأ أثناء الحفظ الجماعي في Firestore'));
@@ -2629,92 +3051,242 @@ export function AdminDashboardView({
   }
 
   /* ---------------- Standalone Authenticated /admin Dashboard ---------------- */
+  const renderSidebarNavContent = (collapsed: boolean) => (
+    <nav aria-label="أقسام لوحة التحكم" className="space-y-3">
+      {ADMIN_NAV_GROUPS.map((group) => {
+        const visibleItems = group.items.filter((item) =>
+          isTabAccessible(item.id, isOwner, workspacePrefs.moderatorSubPermissions)
+        );
+        if (visibleItems.length === 0) return null;
+        const isGroupCollapsed = Boolean(workspacePrefs.collapsedGroups[group.id]);
+
+        return (
+          <div key={group.id} className="space-y-1">
+            {!collapsed && (
+              <button
+                type="button"
+                onClick={() =>
+                  updateWorkspacePrefs({
+                    collapsedGroups: {
+                      ...workspacePrefs.collapsedGroups,
+                      [group.id]: !isGroupCollapsed,
+                    },
+                  })
+                }
+                aria-expanded={!isGroupCollapsed}
+                className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-[11px] font-black text-[#b7c9ef]/75 hover:text-white cursor-pointer"
+              >
+                <span className="truncate">{group.label}</span>
+                <ChevronDown
+                  className={`w-3.5 h-3.5 shrink-0 transition-transform ${
+                    isGroupCollapsed ? 'rotate-90' : ''
+                  }`}
+                />
+              </button>
+            )}
+
+            {(!isGroupCollapsed || collapsed) && (
+              <div className="space-y-1">
+                {visibleItems.map((item) => {
+                  const active = activeTab === item.id;
+                  let badgeText: string | undefined;
+                  if (item.id === 'catalog') badgeText = String(catalog.length);
+                  else if (item.id === 'notifications' && totalBellBadgeCount > 0)
+                    badgeText = String(totalBellBadgeCount);
+                  else if (item.id === 'requests' && pendingRequestsCount > 0)
+                    badgeText = String(pendingRequestsCount);
+                  else if (item.id === 'crawl_operations' && runningCrawlCount > 0)
+                    badgeText = String(runningCrawlCount);
+                  else if (item.id === 'scraper_adapters' && scraperAdapters.length > 0)
+                    badgeText = String(scraperAdapters.length);
+                  else if (item.id === 'popup_shield')
+                    badgeText = activePopupShield.enabled ? 'نشط' : undefined;
+
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      title={collapsed ? item.label : item.description}
+                      onClick={() => {
+                        navigateToTab(item.id);
+                        if (
+                          item.id === 'settings' ||
+                          item.id === 'home_builder' ||
+                          item.id === 'typography' ||
+                          item.id === 'popup_shield' ||
+                          item.id === 'player_theme'
+                        ) {
+                          setSettingsForm({
+                            ...siteSettings,
+                            playerTheme: normalizePlayerTheme(
+                              siteSettings.playerTheme || loadStoredPlayerTheme()
+                            ),
+                            homeConfig: normalizeHomeConfig(
+                              siteSettings.homeConfig || loadStoredHomeConfig()
+                            ),
+                            typography: normalizeTypographyConfig(
+                              siteSettings.typography || loadStoredTypographyConfig()
+                            ),
+                            popupShield: normalizePopupShieldConfig(
+                              siteSettings.popupShield || loadStoredPopupShieldConfig()
+                            ),
+                          });
+                        }
+                      }}
+                      className={`flex w-full items-center ${
+                        collapsed ? 'justify-center px-2' : 'justify-between px-3.5'
+                      } gap-2 rounded-xl py-2.5 text-xs font-bold transition-colors cursor-pointer ${
+                        active
+                          ? 'bg-[#D92321] text-white shadow-md'
+                          : 'text-[#b7c9ef] hover:bg-[#1a242e] hover:text-white'
+                      }`}
+                    >
+                      <span className="truncate">
+                        {collapsed ? item.shortLabel.slice(0, 6) : item.label}
+                      </span>
+                      {!collapsed && badgeText && (
+                        <span
+                          className={`rounded-md px-1.5 py-0.5 text-[10px] font-black tabular-nums shrink-0 ${
+                            active
+                              ? 'bg-white/20 text-white'
+                              : 'bg-[#f9c400] text-[#06131c]'
+                          }`}
+                        >
+                          {badgeText}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </nav>
+  );
+
   return (
     <div className="min-h-screen bg-[#06131c] text-white flex flex-col">
       {/* Dedicated Standalone Admin Top Bar */}
       <header className="sticky top-0 z-40 border-b border-white/10 bg-[#0c1821]/95 backdrop-blur-md">
-        <div className="mx-auto flex max-w-[1520px] flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-3.5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#D92321] text-white shadow-lg">
+        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={() => setMobileDrawerOpen(true)}
+              aria-label="فتح قائمة أقسام الإدارة"
+              className="lg:hidden inline-flex h-10 w-10 items-center justify-center rounded-xl bg-[#1a242e] border border-white/10 text-white hover:bg-white/10 cursor-pointer shrink-0"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                updateWorkspacePrefs({ sidebarCollapsed: !workspacePrefs.sidebarCollapsed })
+              }
+              title={
+                workspacePrefs.sidebarCollapsed ? 'توسيع القائمة الجانبية' : 'طي القائمة الجانبية'
+              }
+              aria-label="تبديل عرض القائمة الجانبية"
+              className="hidden lg:inline-flex h-10 w-10 items-center justify-center rounded-xl bg-[#1a242e] border border-white/10 text-[#b7c9ef] hover:text-white cursor-pointer shrink-0"
+            >
+              {workspacePrefs.sidebarCollapsed ? (
+                <PanelRightOpen className="w-4 h-4" />
+              ) : (
+                <PanelRightClose className="w-4 h-4" />
+              )}
+            </button>
+
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#D92321] text-white shadow-lg shrink-0">
               <LayoutDashboard className="w-5 h-5" />
             </div>
-            <div>
+
+            <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <h1 className="font-display text-lg sm:text-xl font-extrabold text-white">
+                <h1 className="font-display text-base sm:text-lg font-extrabold text-white whitespace-nowrap">
                   إدارة RahaL TV
                 </h1>
                 <span className="font-latin rounded-lg bg-[#f9c400]/15 border border-[#f9c400]/30 px-2 py-0.5 text-[10px] font-black text-[#f9c400]">
                   /admin
                 </span>
                 <span
-                  className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-0.5 text-[11px] font-extrabold border ${
+                  className={`inline-flex items-center gap-1 rounded-lg px-2 py-0.5 text-[10px] font-extrabold border ${
                     isOwner
                       ? 'bg-[#f9c400]/15 border-[#f9c400]/35 text-[#f9c400]'
                       : 'bg-sky-500/15 border-sky-400/35 text-sky-300'
                   }`}
                 >
                   <ShieldCheck className="w-3 h-3" />
-                  {isOwner ? 'مسؤول — كل الصلاحيات' : 'مشرف — النشر والجلب والتعديل'}
+                  <span>{isOwner ? 'مسؤول' : 'مشرف'}</span>
                 </span>
-                <span className="inline-flex items-center gap-1 rounded-lg bg-[#4CAF50]/15 border border-[#4CAF50]/35 px-2.5 py-0.5 text-[11px] font-extrabold text-[#4CAF50]">
-                  <Database className="w-3 h-3" />
-                  متصل بـ Firestore
-                </span>
+                {tvModeActive && (
+                  <span className="inline-flex items-center gap-1 rounded-lg bg-sky-500/15 border border-sky-400/35 px-2 py-0.5 text-[10px] font-extrabold text-sky-300">
+                    <Tv className="w-3 h-3" />
+                    <span>TV D-Pad</span>
+                  </span>
+                )}
               </div>
-              <p className="text-[11px] text-[#b7c9ef] hidden sm:block">
-                {isOwner
-                  ? 'لوحة إدارة مستقلة — تحكم كامل بالمحتوى، الإعدادات، الصلاحيات، والصفحة الرئيسية'
-                  : 'صلاحيات المشرف — نشر وتعديل وحذف الأفلام والمسلسلات واستخدام أدوات الجلب'}
-              </p>
+
+              {/* Breadcrumb */}
+              <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-[#b7c9ef] mt-0.5">
+                <span className="text-[#b7c9ef]/70">{currentNavMeta.group.label}</span>
+                <ChevronLeft className="w-3 h-3 text-[#b7c9ef]/50" />
+                <span className="font-extrabold text-white">{currentNavMeta.item.label}</span>
+              </div>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {isOwner && (
-              <button
-                type="button"
-                onClick={() => setActiveTab('ai_editor')}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-[#f9c400]/20 border border-[#f9c400]/45 px-3.5 py-2 text-xs font-extrabold text-[#f9c400] cursor-pointer"
-              >
-                <Sparkles className="w-4 h-4" />
-                <span className="hidden md:inline">المساعد الذكي المحلي</span>
-              </button>
-            )}
-
+            {/* Global Command Palette Button */}
             <button
               type="button"
-              onClick={() => setActiveTab('site_scraper')}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-[#f9c400]/20 border border-[#f9c400]/40 px-3.5 py-2 text-xs font-extrabold text-[#f9c400] cursor-pointer"
+              onClick={() => setCommandPaletteOpen(true)}
+              className="inline-flex items-center gap-2 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 px-3 py-2 text-xs font-bold text-[#b7c9ef] hover:text-white cursor-pointer whitespace-nowrap shrink-0"
             >
-              <Globe className="w-4 h-4" />
-              <span className="hidden md:inline">جلب موقع بالكامل</span>
+              <Command className="w-3.5 h-3.5 text-[#f9c400]" />
+              <span className="hidden md:inline">بحث وانتقال سريع</span>
+              <span className="hidden lg:inline font-latin rounded bg-[#0c1821] px-1.5 py-0.5 text-[10px] text-[#f9c400]">
+                Ctrl+K
+              </span>
             </button>
 
+            {/* Notifications Bell */}
             <button
               type="button"
-              onClick={() => setActiveTab('scraper')}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-[#4CAF50]/20 border border-[#4CAF50]/40 px-3.5 py-2 text-xs font-extrabold text-[#4CAF50] cursor-pointer"
+              onClick={() => navigateToTab('notifications')}
+              aria-label="مركز الإشعارات والتنبيهات"
+              className={`relative inline-flex h-9 w-9 items-center justify-center rounded-xl border cursor-pointer shrink-0 ${
+                activeTab === 'notifications'
+                  ? 'bg-[#D92321] border-[#D92321] text-white'
+                  : 'bg-[#1a242e] border-white/10 text-[#b7c9ef] hover:text-white'
+              }`}
             >
-              <Wand2 className="w-4 h-4" />
-              <span className="hidden md:inline">جلب عمل واحد</span>
+              <Bell className="w-4 h-4" />
+              {totalBellBadgeCount > 0 && (
+                <span className="absolute -top-1.5 -left-1.5 inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-[#f9c400] px-1 text-[10px] font-black text-[#06131c] tabular-nums">
+                  {totalBellBadgeCount}
+                </span>
+              )}
             </button>
 
             <button
               type="button"
               onClick={openEditorForNew}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-4 py-2 text-xs font-extrabold text-white shadow-md cursor-pointer"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-3.5 py-2 text-xs font-extrabold text-white shadow-md cursor-pointer whitespace-nowrap shrink-0"
             >
               <Plus className="w-4 h-4" />
-              <span>إضافة عمل جديد</span>
+              <span className="hidden sm:inline">إضافة عمل جديد</span>
             </button>
 
             <button
               type="button"
               onClick={onExitDashboard}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 px-3.5 py-2 text-xs font-bold text-white cursor-pointer"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 px-3 py-2 text-xs font-bold text-white cursor-pointer whitespace-nowrap shrink-0"
             >
               <ExternalLink className="w-3.5 h-3.5" />
-              <span>معاينة الموقع</span>
+              <span className="hidden sm:inline">معاينة الموقع</span>
             </button>
 
             <div className="hidden xl:flex items-center gap-2 rounded-xl bg-[#1a242e] border border-white/10 px-3 py-1.5">
@@ -2727,10 +3299,10 @@ export function AdminDashboardView({
                 />
               )}
               <div className="text-right leading-tight">
-                <p className="text-[11px] font-extrabold text-white truncate max-w-[120px]">
+                <p className="text-[11px] font-extrabold text-white truncate max-w-[110px]">
                   {user.displayName || (isOwner ? 'مسؤول' : 'مشرف')}
                 </p>
-                <p className="font-latin text-[10px] text-[#b7c9ef] truncate max-w-[140px]">
+                <p className="font-latin text-[10px] text-[#b7c9ef] truncate max-w-[130px]">
                   {user.email}
                 </p>
               </div>
@@ -2738,6 +3310,7 @@ export function AdminDashboardView({
                 type="button"
                 onClick={() => void signOutFirebase()}
                 title="تسجيل الخروج"
+                aria-label="تسجيل الخروج"
                 className="mr-1 rounded-lg p-1 text-[#b7c9ef] hover:bg-[#D92321] hover:text-white cursor-pointer"
               >
                 <LogOut className="w-3.5 h-3.5" />
@@ -2747,708 +3320,347 @@ export function AdminDashboardView({
         </div>
       </header>
 
+      {/* Mobile Slide-Over Sidebar Drawer */}
+      {mobileDrawerOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="قائمة أقسام الإدارة"
+          data-rtv-focus-trap="true"
+          className="fixed inset-0 z-50 lg:hidden flex"
+        >
+          <div
+            className="fixed inset-0 bg-black/75 backdrop-blur-sm"
+            onClick={() => setMobileDrawerOpen(false)}
+          />
+          <aside className="relative z-10 w-80 max-w-[85vw] h-full bg-[#0c1821] border-l border-white/10 p-4 overflow-y-auto space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <span className="font-display text-sm font-extrabold text-white">أقسام RahaL TV</span>
+              <button
+                type="button"
+                onClick={() => setMobileDrawerOpen(false)}
+                aria-label="إغلاق القائمة"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/10 text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {renderSidebarNavContent(false)}
+          </aside>
+        </div>
+      )}
+
       {/* Main Split Workspace */}
-      <div className="mx-auto w-full max-w-[1520px] flex-1 px-4 sm:px-6 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Sidebar Navigation */}
-          <aside className="lg:col-span-3 rounded-3xl bg-[#0c1821] border border-white/[0.08] p-3 space-y-1.5 lg:sticky lg:top-24">
-            {(
-              [
-                { id: 'overview', label: 'نظرة عامة والإحصائيات', icon: BarChart3 },
-                {
-                  id: 'home_builder',
-                  label: 'تخصيص الصفحة الرئيسية والسلايدر',
-                  icon: SlidersHorizontal,
-                  badge: 'تحكم كامل',
-                },
-                {
-                  id: 'typography',
-                  label: 'الخطوط وحجم النصوص',
-                  icon: Type,
-                  badge: 'فونت',
-                },
-                {
-                  id: 'popup_shield',
-                  label: 'درع النوافذ المنبثقة',
-                  icon: ShieldCheck,
-                  badge: activePopupShield.enabled ? 'نشط' : 'متوقف',
-                },
-                { id: 'catalog', label: `الأفلام والمسلسلات (${catalog.length})`, icon: Film },
-                {
-                  id: 'images',
-                  label: 'جودة وإدارة الصور',
-                  icon: ImageIcon,
-                  badge: 'HQ',
-                },
-                {
-                  id: 'ai_editor',
-                  label: 'المساعد الذكي المحلي',
-                  icon: Sparkles,
-                  badge: 'محلي',
-                },
-                { id: 'scraper', label: 'جلب عمل واحد (رابط)', icon: Wand2 },
-                {
-                  id: 'site_scraper',
-                  label: 'جلب موقع بالكامل (Crawler)',
-                  icon: Globe,
-                },
-                {
-                  id: 'scraper_adapters',
-                  label: 'تطوير مصادر الجلب',
-                  icon: Wrench,
-                  badge: scraperAdapters.length > 0 ? String(scraperAdapters.length) : 'ذكي',
-                },
-                {
-                  id: 'requests',
-                  label: `طلبات الزوار (${requests.length})`,
-                  icon: MessageSquarePlus,
-                  badge: pendingRequestsCount > 0 ? String(pendingRequestsCount) : undefined,
-                },
-                { id: 'users', label: `الأعضاء والمشرفين (${usersList.length})`, icon: Users },
-                { id: 'settings', label: 'إعدادات المنصة', icon: Settings },
-              ] as const
-            )
-              .filter((tab) => isOwner || MODERATOR_ALLOWED_TABS.includes(tab.id))
-              .map((tab) => {
-              const Icon = tab.icon;
-              const active = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => {
-                    setActiveTab(tab.id);
-                    if (
-                      tab.id === 'settings' ||
-                      tab.id === 'home_builder' ||
-                      tab.id === 'typography' ||
-                      tab.id === 'popup_shield'
-                    ) {
-                      setSettingsForm({
-                        ...siteSettings,
-                        playerTheme: normalizePlayerTheme(
-                          siteSettings.playerTheme || loadStoredPlayerTheme()
-                        ),
-                        homeConfig: normalizeHomeConfig(
-                          siteSettings.homeConfig || loadStoredHomeConfig()
-                        ),
-                        typography: normalizeTypographyConfig(
-                          siteSettings.typography || loadStoredTypographyConfig()
-                        ),
-                        popupShield: normalizePopupShieldConfig(
-                          siteSettings.popupShield || loadStoredPopupShieldConfig()
-                        ),
-                      });
-                    }
-                  }}
-                  className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-xs sm:text-sm font-bold transition-colors cursor-pointer ${
-                    active
-                      ? 'bg-[#D92321] text-white shadow-md'
-                      : 'text-[#b7c9ef] hover:bg-[#1a242e] hover:text-white'
-                  }`}
-                >
-                  <span className="flex items-center gap-2.5">
-                    <Icon className="w-4 h-4 shrink-0" />
-                    <span>{tab.label}</span>
-                  </span>
-                  {'badge' in tab && tab.badge ? (
-                    <span className="rounded-md bg-[#f9c400] px-2 py-0.5 text-[10px] font-black text-[#06131c]">
-                      {tab.badge}
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
+      <div className="mx-auto w-full max-w-[1600px] flex-1 px-4 sm:px-6 py-6">
+        <div className="flex flex-col lg:flex-row gap-6 items-start">
+          {/* Desktop 9-Group Collapsible Sidebar */}
+          <aside
+            className={`hidden lg:block shrink-0 rounded-3xl bg-[#0c1821] border border-white/[0.08] p-3 lg:sticky lg:top-20 max-h-[calc(100vh-6rem)] overflow-y-auto transition-all ${
+              workspacePrefs.sidebarCollapsed ? 'w-24' : 'w-72'
+            }`}
+          >
+            {renderSidebarNavContent(workspacePrefs.sidebarCollapsed)}
           </aside>
 
           {/* Active Tab Workspace */}
-          <div className="lg:col-span-9 space-y-6">
-            {/* TAB 1: OVERVIEW (OWNER ONLY) */}
-            {isOwner && activeTab === 'overview' && (
-              <div className="space-y-6">
-                {!isFirestoreSeeded && (
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-3xl bg-gradient-to-l from-[#D92321]/20 via-[#1a242e] to-[#0c1821] border border-[#D92321]/40 p-5">
-                    <div>
-                      <h2 className="font-display text-base font-extrabold text-white flex items-center gap-2">
-                        <Sparkles className="w-4 h-4 text-[#f9c400]" />
-                        تهيئة قاعدة البيانات لأول مرة
-                      </h2>
-                      <p className="text-xs text-[#b7c9ef] mt-1">
-                        المكتبة المعروضة حاليًا هي البيانات المبدئية. اضغط لاستيراد الـ{' '}
-                        {CATALOG_ITEMS.length} عملًا إلى Firestore لتتمكن من تعديلها وحذفها وحفظها فعليًا.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={busyAction}
-                      onClick={handleSeedDatabase}
-                      className="shrink-0 rounded-xl bg-[#4CAF50] hover:bg-[#43a047] disabled:opacity-50 px-5 py-3 text-xs font-extrabold text-white shadow-lg cursor-pointer"
-                    >
-                      {busyAction ? 'جاري الاستيراد...' : 'استيراد المكتبة إلى Firestore الآن'}
-                    </button>
-                  </div>
+          <main className="flex-1 min-w-0 w-full space-y-6">
+            <Suspense
+              fallback={
+                <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-12 flex flex-col items-center justify-center gap-3 text-xs font-bold text-[#b7c9ef]">
+                  <Loader2 className="w-6 h-6 text-[#D92321] animate-spin" />
+                  <span>جاري تحميل وحدة التحكم...</span>
+                </div>
+              }
+            >
+              {/* GROUP 1: OVERVIEW & ANALYTICS */}
+              {isOwner && activeTab === 'overview' && (
+                <AdminExecutiveOverview
+                  mode="overview"
+                  catalog={catalog}
+                  requests={requests}
+                  usersList={usersList}
+                  adminsList={adminsList}
+                  siteSettings={siteSettings}
+                  isFirestoreSeeded={isFirestoreSeeded}
+                  busyAction={busyAction}
+                  customApiUrl={customApiUrl}
+                  onSeedDatabase={handleSeedDatabase}
+                  onNavigateTab={navigateToTab}
+                  onOpenNewMedia={openEditorForNew}
+                  onEditMedia={openEditorForExisting}
+                />
+              )}
+
+              {activeTab === 'analytics' &&
+                isTabAccessible('analytics', isOwner, workspacePrefs.moderatorSubPermissions) && (
+                  <AdminExecutiveOverview
+                    mode="analytics"
+                    catalog={catalog}
+                    requests={requests}
+                    usersList={usersList}
+                    adminsList={adminsList}
+                    siteSettings={siteSettings}
+                    isFirestoreSeeded={isFirestoreSeeded}
+                    busyAction={busyAction}
+                    customApiUrl={customApiUrl}
+                    onSeedDatabase={handleSeedDatabase}
+                    onNavigateTab={navigateToTab}
+                    onOpenNewMedia={openEditorForNew}
+                    onEditMedia={openEditorForExisting}
+                  />
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-                  <div className="rounded-2xl bg-[#0c1821] border border-white/[0.08] p-5">
-                    <div className="flex items-center justify-between text-xs text-[#b7c9ef] mb-2">
-                      <span>إجمالي الأعمال</span>
-                      <Film className="w-4 h-4 text-[#D92321]" />
-                    </div>
-                    <p className="text-3xl font-black text-white tabular-nums">{catalog.length}</p>
-                    <p className="text-[11px] text-[#4CAF50] mt-1 font-bold">
-                      {isFirestoreSeeded ? 'محفوظة في Firestore' : 'بيانات مبدئية'}
-                    </p>
-                  </div>
+              {activeTab === 'notifications' && (
+                <AdminNotificationsPanel
+                  catalog={catalog}
+                  requests={requests}
+                  isOwner={isOwner}
+                  isFirestoreSeeded={isFirestoreSeeded}
+                  onNavigateTab={navigateToTab}
+                  onNotify={(msg) => {
+                    onNotify(msg);
+                    setUnreadNotificationsCount(
+                      loadAdminNotifications().filter((n) => !n.read).length
+                    );
+                  }}
+                />
+              )}
 
-                  <div className="rounded-2xl bg-[#0c1821] border border-white/[0.08] p-5">
-                    <div className="flex items-center justify-between text-xs text-[#b7c9ef] mb-2">
-                      <span>إجمالي المشاهدات</span>
-                      <Eye className="w-4 h-4 text-[#f9c400]" />
-                    </div>
-                    <p className="text-3xl font-black text-white tabular-nums">
-                      {totalViews.toLocaleString('en-US')}
-                    </p>
-                    <p className="text-[11px] text-[#b7c9ef] mt-1">عبر جميع الأقسام</p>
-                  </div>
+              {/* GROUP 2: CONTENT & CATALOG */}
+              {activeTab === 'catalog' && (
+                <AdminCatalogPanel
+                  catalog={catalog}
+                  filteredCatalog={filteredCatalog}
+                  searchQuery={searchQuery}
+                  onSearchChange={setSearchQuery}
+                  kindFilter={kindFilter}
+                  onKindFilterChange={setKindFilter}
+                  selectedMediaIds={selectedMediaIds}
+                  onToggleSelection={toggleMediaSelection}
+                  onSelectFiltered={handleSelectAllFiltered}
+                  onSelectAllCatalog={handleSelectAllCatalog}
+                  onClearSelection={handleClearMediaSelection}
+                  onSetSelectedIds={setSelectedMediaIds}
+                  tablePrefs={workspacePrefs.catalogTable}
+                  onUpdateTablePrefs={updateCatalogTablePrefs}
+                  serverStatuses={serverStatuses}
+                  checkingCatalogLinks={checkingCatalogLinks}
+                  onCheckCatalogLinks={async () => {
+                    const urls = filteredCatalog
+                      .slice(0, 20)
+                      .flatMap((it) => (it.servers || []).map((s) => resolveWatchServerUrl(s)))
+                      .filter((u) => /^https?:\/\//i.test(u));
+                    if (urls.length === 0) {
+                      onNotify('لا توجد روابط مشاهدة لفحصها في النتائج المعروضة');
+                      return;
+                    }
+                    setCheckingCatalogLinks(true);
+                    await checkServerUrls(urls, true);
+                    setCheckingCatalogLinks(false);
+                    onNotify(`تم فحص ${Math.min(urls.length, 40)} رابط مشاهدة`);
+                  }}
+                  onCheckItemServers={(urls) => void checkServerUrls(urls, true)}
+                  resolveWatchServerUrl={resolveWatchServerUrl}
+                  isOwner={isOwner}
+                  isFirestoreSeeded={isFirestoreSeeded}
+                  hasDismissedStarters={hasDismissedStarters}
+                  busyAction={busyAction}
+                  onSeedDatabase={handleSeedDatabase}
+                  onRestoreStarterItems={onRestoreStarterItems}
+                  onOpenNewMedia={openEditorForNew}
+                  onOpenBulkDelete={(mode) => setConfirmBulkDeleteMode(mode)}
+                  onTogglePin={handleTogglePin}
+                  onPreviewMedia={onPreviewMedia}
+                  onEditMedia={openEditorForExisting}
+                  onRequestDeleteMedia={(id) => setConfirmDeleteId(id)}
+                  onNavigateTab={navigateToTab}
+                  onNotify={onNotify}
+                />
+              )}
 
-                  <div className="rounded-2xl bg-[#0c1821] border border-white/[0.08] p-5">
-                    <div className="flex items-center justify-between text-xs text-[#b7c9ef] mb-2">
-                      <span>طلبات بانتظار المراجعة</span>
-                      <MessageSquarePlus className="w-4 h-4 text-[#f9c400]" />
-                    </div>
-                    <p className="text-3xl font-black text-white tabular-nums">
-                      {pendingRequestsCount}
-                    </p>
-                    <p className="text-[11px] text-[#b7c9ef] mt-1">من أصل {requests.length} طلب</p>
-                  </div>
-
-                  <div className="rounded-2xl bg-[#0c1821] border border-white/[0.08] p-5">
-                    <div className="flex items-center justify-between text-xs text-[#b7c9ef] mb-2">
-                      <span>الأعضاء المسجلون</span>
-                      <Users className="w-4 h-4 text-[#4CAF50]" />
-                    </div>
-                    <p className="text-3xl font-black text-white tabular-nums">{usersList.length}</p>
-                    <p className="text-[11px] text-[#b7c9ef] mt-1">
-                      مشرفون إضافيون: {adminsList.length}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 space-y-4">
-                    <h2 className="font-display text-base font-extrabold text-white">
-                      توزيع المكتبة حسب النوع
-                    </h2>
-                    {(['movie', 'series', 'tv', 'wrestling'] as MediaKind[]).map((kind) => {
-                      const count = catalog.filter((c) => c.kind === kind).length;
-                      const pct = catalog.length ? Math.round((count / catalog.length) * 100) : 0;
-                      return (
-                        <div key={kind} className="space-y-1.5">
-                          <div className="flex justify-between text-xs font-bold">
-                            <span className="text-white">{KIND_LABELS[kind]}</span>
-                            <span className="text-[#b7c9ef] tabular-nums">
-                              {count} ({pct}%)
-                            </span>
-                          </div>
-                          <div className="h-2 rounded-full bg-[#1a242e] overflow-hidden">
-                            <div
-                              className="h-full rounded-full bg-[#D92321]"
-                              style={{ width: `${pct}%` }}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5">
-                    <h2 className="font-display text-base font-extrabold text-white mb-4">
-                      الأعمال الأعلى تقييمًا (IMDb)
-                    </h2>
-                    <div className="space-y-2.5">
-                      {[...catalog]
-                        .sort((a, b) => b.imdb - a.imdb)
-                        .slice(0, 5)
-                        .map((item) => (
-                          <div
-                            key={item.id}
-                            className="flex items-center justify-between gap-3 rounded-2xl bg-[#1a242e]/65 p-2.5"
-                          >
-                            <div className="flex items-center gap-3 min-w-0">
-                              <img
-                                src={getPosterUrl(item)}
-                                alt={item.title}
-                                className="h-12 w-9 rounded-lg object-cover object-top shrink-0"
-                              />
-                              <div className="min-w-0">
-                                <p className="text-xs font-extrabold text-white truncate">
-                                  {item.title}
-                                </p>
-                                <p className="text-[11px] text-[#b7c9ef]">
-                                  {item.year} • {item.quality}
-                                </p>
-                              </div>
-                            </div>
-                            <span className="inline-flex items-center gap-1 rounded-lg bg-[#f9c400]/15 px-2.5 py-1 text-xs font-black text-[#f9c400] tabular-nums">
-                              <Star className="w-3.5 h-3.5 fill-current" />
-                              {item.imdb.toFixed(1)}
-                            </span>
-                          </div>
-                        ))}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-3xl bg-gradient-to-l from-[#1a1a1a] via-[#121c26] to-[#0c1821] border border-white/10 p-5">
-                  <div>
-                    <h2 className="font-display text-base font-extrabold text-white flex items-center gap-2">
-                      <SlidersHorizontal className="w-4 h-4 text-[#E50914]" />
-                      التحكم الكامل في الصفحة الرئيسية
-                    </h2>
-                    <p className="text-xs text-[#b7c9ef] mt-1">
-                      رتّب أقسام الصفحة الرئيسية، اختر البطل والنمط (شبكة أو صفوف أفقية)، وأخفِ أي عنصر لتقليل الزحام بضغطة واحدة.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('home_builder')}
-                    className="shrink-0 inline-flex items-center gap-2 rounded-xl bg-[#E50914] hover:bg-[#f40612] px-5 py-3 text-xs font-extrabold text-white shadow-lg cursor-pointer"
-                  >
-                    <SlidersHorizontal className="w-4 h-4" />
-                    <span>فتح محرر الصفحة الرئيسية</span>
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* TAB 1B: FULL HOME PAGE BUILDER (OWNER ONLY) */}
-            {isOwner && activeTab === 'home_builder' && (
-              <HomeBuilderPanel
-                catalog={catalog}
-                homeConfig={activeHomeConfig}
-                tickerEnabled={settingsForm.tickerEnabled}
-                busyAction={busyAction}
-                onChangeHomeConfig={(next) =>
-                  setSettingsForm((prev) => ({ ...prev, homeConfig: next }))
-                }
-                onChangeTickerEnabled={(enabled) =>
-                  setSettingsForm((prev) => ({ ...prev, tickerEnabled: enabled }))
-                }
-                onSaveHomeConfig={handleSaveHomeConfig}
-                onPreviewHome={onExitDashboard}
-                onOpenTypographyTab={() => setActiveTab('typography')}
-                onNotify={onNotify}
-              />
-            )}
-
-            {/* TAB 1B-2: TYPOGRAPHY & CUSTOM FONTS (OWNER ONLY) */}
-            {isOwner && activeTab === 'typography' && (
-              <TypographyPanel
-                typography={activeTypography}
-                customFonts={effectiveCustomFonts}
-                busyAction={busyAction}
-                onChangeTypography={(next) =>
-                  setSettingsForm((prev) => ({ ...prev, typography: next }))
-                }
-                onSaveTypography={handleSaveTypography}
-                onUploadCustomFont={handleUploadCustomFont}
-                onDeleteCustomFont={handleDeleteCustomFont}
-                onPreviewHome={onExitDashboard}
-                onNotify={onNotify}
-              />
-            )}
-
-            {/* TAB 1B-3: SMART POPUP SHIELD (OWNER ONLY) */}
-            {isOwner && activeTab === 'popup_shield' && (
-              <PopupShieldPanel
-                catalog={catalog}
-                shieldConfig={activePopupShield}
-                busyAction={busyAction}
-                onChangeShieldConfig={(next) => {
-                  const clean = saveStoredPopupShieldConfig(next);
-                  setSettingsForm((prev) => ({ ...prev, popupShield: clean }));
-                  onPopupShieldChange?.(clean);
-                }}
-                onSaveShieldConfig={handleSavePopupShield}
-                onNotify={onNotify}
-              />
-            )}
-
-            {/* TAB 1C: DUAL HIGH-RES IMAGE MANAGER */}
-            {activeTab === 'images' && user && (
-              <AdminImageManagerPanel
-                user={user}
-                catalog={catalog}
-                isFirestoreSeeded={isFirestoreSeeded}
-                onNotify={onNotify}
-              />
-            )}
-
-            {/* TAB 1D: AI BULK CONTENT EDITOR (OWNER ONLY) */}
-            {isOwner && activeTab === 'ai_editor' && (
-              <AdminAiBulkEditor
-                user={user}
-                catalog={catalog}
-                isFirestoreSeeded={isFirestoreSeeded}
-                onNotify={onNotify}
-                onPreviewMedia={onPreviewMedia}
-              />
-            )}
-
-            {/* TAB 2: CATALOG MANAGEMENT */}
-            {activeTab === 'catalog' && (
-              <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 space-y-5">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="relative flex-1">
-                    <Search className="w-4 h-4 text-[#D92321] absolute right-3.5 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="ابحث باسم الفيلم أو المسلسل أو السنة..."
-                      className="w-full rounded-xl bg-[#1a242e] border border-white/10 pr-10 pl-4 py-2.5 text-xs font-bold text-white focus:border-[#D92321] focus:outline-none"
-                    />
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <select
-                      value={kindFilter}
-                      onChange={(e) => setKindFilter(e.target.value)}
-                      aria-label="تصفية حسب النوع"
-                      className="rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2.5 text-xs font-bold text-white focus:outline-none"
-                    >
-                      <option value="all">كل الأنواع</option>
-                      <option value="movie">أفلام</option>
-                      <option value="series">مسلسلات</option>
-                      <option value="tv">برامج ومسرحيات</option>
-                      <option value="wrestling">مصارعة حرة</option>
-                    </select>
-
-                    <button
-                      type="button"
-                      disabled={checkingCatalogLinks || filteredCatalog.length === 0}
-                      onClick={async () => {
-                        const urls = filteredCatalog
-                          .slice(0, 20)
-                          .flatMap((it) => (it.servers || []).map((s) => resolveWatchServerUrl(s)))
-                          .filter((u) => /^https?:\/\//i.test(u));
-                        if (urls.length === 0) {
-                          onNotify('لا توجد روابط مشاهدة لفحصها في النتائج المعروضة');
-                          return;
-                        }
-                        setCheckingCatalogLinks(true);
-                        await checkServerUrls(urls, true);
-                        setCheckingCatalogLinks(false);
-                        onNotify(`تم فحص ${Math.min(urls.length, 40)} رابط مشاهدة`);
-                      }}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-sky-500/20 border border-sky-400/30 disabled:opacity-40 px-3.5 py-2.5 text-xs font-extrabold text-sky-300 cursor-pointer"
-                    >
-                      {checkingCatalogLinks ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      ) : (
-                        <RefreshCw className="w-3.5 h-3.5" />
-                      )}
-                      <span>فحص حالة السيرفرات</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={openEditorForNew}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-4 py-2.5 text-xs font-extrabold text-white cursor-pointer"
-                    >
-                      <Plus className="w-4 h-4" />
-                      <span>إضافة فيلم / مسلسل</span>
-                    </button>
-
-                    {isOwner && !isFirestoreSeeded && catalog.length > 0 && (
-                      <button
-                        type="button"
-                        disabled={busyAction}
-                        onClick={handleSeedDatabase}
-                        className="rounded-xl bg-[#4CAF50] hover:bg-[#43a047] px-3.5 py-2.5 text-xs font-extrabold text-white cursor-pointer"
-                      >
-                        استيراد المبدئي لـ Firestore
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Bulk Selection & Mass Delete Toolbar */}
-                {filteredCatalog.length > 0 ? (
-                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-[#1a242e]/75 border border-white/10 px-4 py-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={handleSelectAllFiltered}
-                        className="rounded-xl bg-[#0c1821] hover:bg-white/10 border border-white/10 px-3 py-1.5 text-xs font-bold text-white cursor-pointer"
-                      >
-                        تحديد المعروض ({filteredCatalog.length})
-                      </button>
-
-                      {catalog.length > filteredCatalog.length && (
-                        <button
-                          type="button"
-                          onClick={handleSelectAllCatalog}
-                          className="rounded-xl bg-[#0c1821] hover:bg-white/10 border border-white/10 px-3 py-1.5 text-xs font-bold text-[#f9c400] cursor-pointer"
-                        >
-                          تحديد كل المكتبة ({catalog.length})
-                        </button>
-                      )}
-
-                      {selectedMediaIds.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={handleClearMediaSelection}
-                          className="rounded-xl bg-[#0c1821] hover:bg-white/10 border border-white/10 px-3 py-1.5 text-xs font-bold text-[#b7c9ef] cursor-pointer"
-                        >
-                          إلغاء التحديد
-                        </button>
-                      )}
-
-                      <span className="rounded-lg bg-[#0c1821] px-2.5 py-1 text-[11px] font-extrabold text-[#b7c9ef] tabular-nums">
-                        المحدد: <strong className="text-white">{selectedMediaIds.length}</strong>
-                      </span>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        disabled={busyAction || selectedMediaIds.length === 0}
-                        onClick={() => setConfirmBulkDeleteMode('selected')}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] disabled:opacity-40 px-3.5 py-1.5 text-xs font-extrabold text-white cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>حذف المحدد ({selectedMediaIds.length})</span>
-                      </button>
-                      {isOwner && (
-                        <button
-                          type="button"
-                          disabled={busyAction || catalog.length === 0}
-                          onClick={() => setConfirmBulkDeleteMode('all')}
-                          className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321]/15 hover:bg-[#D92321] border border-[#D92321]/50 disabled:opacity-40 px-3.5 py-1.5 text-xs font-extrabold text-[#ff8a88] hover:text-white transition-colors cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>حذف كل المحتوى ({catalog.length})</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="rounded-2xl bg-[#1a242e]/50 border border-dashed border-white/15 p-8 text-center space-y-3">
-                    <p className="text-sm font-extrabold text-white">
-                      {catalog.length === 0
-                        ? 'لا يوجد أي محتوى حاليًا في المنصة'
-                        : 'لا توجد نتائج تطابق بحثك الحالي'}
-                    </p>
-                    <div className="flex flex-wrap items-center justify-center gap-2.5">
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab('site_scraper')}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] px-4 py-2 text-xs font-black text-[#06131c] cursor-pointer"
-                      >
-                        <Globe className="w-3.5 h-3.5" />
-                        <span>جلب محتوى من موقع بالكامل</span>
-                      </button>
-                      {isOwner && !isFirestoreSeeded && hasDismissedStarters && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onRestoreStarterItems();
-                            onNotify('تمت استعادة المحتوى الافتراضي المبدئي');
-                          }}
-                          className="rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/15 px-4 py-2 text-xs font-bold text-[#b7c9ef] cursor-pointer"
-                        >
-                          استعادة المحتوى المبدئي
-                        </button>
-                      )}
-                    </div>
-                  </div>
+              {activeTab === 'categories' &&
+                isTabAccessible('categories', isOwner, workspacePrefs.moderatorSubPermissions) && (
+                  <AdminCategoriesPanel
+                    catalog={catalog}
+                    adminUid={user.uid}
+                    adminName={user.displayName || user.email || 'Admin'}
+                    isFirestoreSeeded={isFirestoreSeeded}
+                    onNavigateTab={navigateToTab}
+                    onNotify={onNotify}
+                  />
                 )}
 
-                <div className="overflow-x-auto">
-                  <table className="w-full text-right border-collapse">
-                    <thead>
-                      <tr className="border-b border-white/10 text-[11px] font-extrabold text-[#b7c9ef]">
-                        <th className="py-3 px-2 w-10 text-center">
-                          <input
-                            type="checkbox"
-                            aria-label="تحديد أو إلغاء تحديد كل المعروض"
-                            checked={
-                              filteredCatalog.length > 0 &&
-                              filteredCatalog.every((item) => selectedMediaIds.includes(item.id))
-                            }
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                handleSelectAllFiltered();
-                              } else {
-                                const filteredSet = new Set(filteredCatalog.map((i) => i.id));
-                                setSelectedMediaIds((prev) => prev.filter((id) => !filteredSet.has(id)));
-                              }
-                            }}
-                            className="h-4 w-4 accent-[#D92321] cursor-pointer"
-                          />
-                        </th>
-                        <th className="py-3 px-2">العمل</th>
-                        <th className="py-3 px-2">النوع</th>
-                        <th className="py-3 px-2">السيرفرات / التحميل</th>
-                        <th className="py-3 px-2">IMDb</th>
-                        <th className="py-3 px-2">مثبت</th>
-                        <th className="py-3 px-2 text-left">إجراءات</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/[0.06] text-xs">
-                      {filteredCatalog.map((item) => {
-                        const isSelected = selectedMediaIds.includes(item.id);
-                        return (
-                        <tr
-                          key={item.id}
-                          className={`transition-colors ${
-                            isSelected ? 'bg-[#D92321]/[0.08]' : 'hover:bg-white/[0.02]'
-                          }`}
-                        >
-                          <td className="py-3 px-2 text-center">
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => toggleMediaSelection(item.id)}
-                              aria-label={`تحديد ${item.title}`}
-                              className="h-4 w-4 accent-[#D92321] cursor-pointer"
-                            />
-                          </td>
-                          <td className="py-3 px-2">
-                            <div className="flex items-center gap-3">
-                              <img
-                                src={getPosterUrl(item)}
-                                alt={item.title}
-                                className="h-14 w-10 rounded-lg object-cover object-top shrink-0"
-                              />
-                              <div className="min-w-0 max-w-[230px]">
-                                <p className="font-extrabold text-white truncate">{item.title}</p>
-                                <p className="text-[11px] text-[#b7c9ef] truncate">
-                                  {item.quality} • {item.year}
-                                </p>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="py-3 px-2">
-                            <span className="rounded-lg bg-[#1a242e] px-2.5 py-1 text-[11px] font-bold text-[#b7c9ef]">
-                              {KIND_LABELS[item.kind]}
-                            </span>
-                          </td>
-                          <td className="py-3 px-2 font-bold text-[#b7c9ef] tabular-nums space-y-1">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <span>
-                                {item.servers?.length || 0} سيرفر • {item.downloads?.length || 0} تحميل
-                                {item.seasons && item.seasons.length > 0
-                                  ? ` • ${item.seasons.reduce((a, s) => a + s.episodes.length, 0)} حلقة`
-                                  : ''}
-                              </span>
-                              {(item.servers || []).some((s) => /^https?:\/\//i.test(resolveWatchServerUrl(s))) && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const urls = (item.servers || [])
-                                      .map((s) => resolveWatchServerUrl(s))
-                                      .filter((u) => /^https?:\/\//i.test(u));
-                                    void checkServerUrls(urls, true);
-                                  }}
-                                  title="فحص روابط سيرفرات هذا العمل"
-                                  className="inline-flex items-center gap-1 rounded-md bg-white/5 hover:bg-sky-500/20 border border-white/10 px-1.5 py-0.5 text-[10px] font-bold text-sky-300 cursor-pointer"
-                                >
-                                  <RefreshCw className="w-2.5 h-2.5" />
-                                  <span>فحص</span>
-                                </button>
-                              )}
-                            </div>
-                            {(() => {
-                              const urls = (item.servers || [])
-                                .map((s) => resolveWatchServerUrl(s))
-                                .filter((u) => /^https?:\/\//i.test(u));
-                              const checked = urls.map((u) => serverStatuses[u]).filter(Boolean);
-                              if (checked.length === 0) return null;
-                              const workingCount = checked.filter((c) => c.status === 'working').length;
-                              const warnCount = checked.filter((c) => c.status === 'warning').length;
-                              const brokenCount = checked.filter((c) => c.status === 'broken').length;
-                              const checkingCount = checked.filter((c) => c.status === 'checking').length;
-                              return (
-                                <div className="flex flex-wrap items-center gap-1 text-[10px] font-extrabold">
-                                  {checkingCount > 0 && (
-                                    <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-sky-300">
-                                      جاري الفحص ({checkingCount})
-                                    </span>
-                                  )}
-                                  {workingCount > 0 && (
-                                    <span className="rounded bg-[#4CAF50]/15 px-1.5 py-0.5 text-[#4CAF50]">
-                                      ● {workingCount} يعمل
-                                    </span>
-                                  )}
-                                  {warnCount > 0 && (
-                                    <span className="rounded bg-[#f9c400]/15 px-1.5 py-0.5 text-[#f9c400]">
-                                      ● {warnCount} تحذير تضمين
-                                    </span>
-                                  )}
-                                  {brokenCount > 0 && (
-                                    <span className="rounded bg-[#D92321]/20 px-1.5 py-0.5 text-[#ff8a88]">
-                                      ● {brokenCount} معطل
-                                    </span>
-                                  )}
-                                </div>
-                              );
-                            })()}
-                          </td>
-                          <td className="py-3 px-2 font-black text-[#f9c400] tabular-nums">
-                            ★ {item.imdb.toFixed(1)}
-                          </td>
-                          <td className="py-3 px-2">
-                            <button
-                              type="button"
-                              onClick={() => handleTogglePin(item)}
-                              aria-label="تبديل التثبيت"
-                              className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-colors cursor-pointer ${
-                                item.pinned
-                                  ? 'bg-[#f9c400] border-[#f9c400] text-[#06131c]'
-                                  : 'bg-[#1a242e] border-white/10 text-[#b7c9ef]'
-                              }`}
-                            >
-                              <Pin className="w-3.5 h-3.5" />
-                            </button>
-                          </td>
-                          <td className="py-3 px-2">
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => onPreviewMedia(item)}
-                                aria-label="معاينة"
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#1a242e] text-[#b7c9ef] hover:text-white cursor-pointer"
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => openEditorForExisting(item)}
-                                aria-label="تعديل"
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#1a242e] text-sky-300 hover:bg-sky-500 hover:text-white cursor-pointer"
-                              >
-                                <Edit3 className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setConfirmDeleteId(item.id)}
-                                aria-label="حذف"
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#1a242e] text-[#D92321] hover:bg-[#D92321] hover:text-white cursor-pointer"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
+              {activeTab === 'bulk_editor' &&
+                isTabAccessible('bulk_editor', isOwner, workspacePrefs.moderatorSubPermissions) && (
+                  <AdminBulkEditorPanel
+                    catalog={catalog}
+                    adminUid={user.uid}
+                    adminName={user.displayName || user.email || 'Admin'}
+                    isFirestoreSeeded={isFirestoreSeeded}
+                    onDeleteStarterItems={onDeleteStarterItems}
+                    onNotify={onNotify}
+                  />
+                )}
+
+              {activeTab === 'images' && (
+                <AdminImageManagerPanel
+                  user={user}
+                  catalog={catalog}
+                  isFirestoreSeeded={isFirestoreSeeded}
+                  onNotify={onNotify}
+                />
+              )}
+
+              {activeTab === 'content_audit' &&
+                isTabAccessible(
+                  'content_audit',
+                  isOwner,
+                  workspacePrefs.moderatorSubPermissions
+                ) && (
+                  <AdminContentAuditPanel
+                    catalog={catalog}
+                    onEditMedia={openEditorForExisting}
+                    onNavigateImages={() => navigateToTab('images')}
+                  />
+                )}
+
+              {/* GROUP 3: PLAYER, SERVERS & SHIELD */}
+              {activeTab === 'watch_servers' &&
+                isTabAccessible(
+                  'watch_servers',
+                  isOwner,
+                  workspacePrefs.moderatorSubPermissions
+                ) && (
+                  <AdminWatchServersPanel
+                    mode="watch_servers"
+                    catalog={catalog}
+                    activePlayerTheme={activePlayerTheme}
+                    busyAction={busyAction}
+                    onEditMedia={openEditorForExisting}
+                    onUpdatePlayerTheme={updatePlayerTheme}
+                    onSavePlayerTheme={handleSavePlayerThemeOnly}
+                    onNotify={onNotify}
+                  />
+                )}
+
+              {isOwner && activeTab === 'player_theme' && (
+                <AdminWatchServersPanel
+                  mode="player_theme"
+                  catalog={catalog}
+                  activePlayerTheme={activePlayerTheme}
+                  busyAction={busyAction}
+                  onEditMedia={openEditorForExisting}
+                  onUpdatePlayerTheme={updatePlayerTheme}
+                  onSavePlayerTheme={handleSavePlayerThemeOnly}
+                  onNotify={onNotify}
+                />
+              )}
+
+              {isOwner && activeTab === 'popup_shield' && (
+                <PopupShieldPanel
+                  catalog={catalog}
+                  shieldConfig={activePopupShield}
+                  busyAction={busyAction}
+                  onChangeShieldConfig={(next) => {
+                    const clean = saveStoredPopupShieldConfig(next);
+                    setSettingsForm((prev) => ({ ...prev, popupShield: clean }));
+                    onPopupShieldChange?.(clean);
+                  }}
+                  onSaveShieldConfig={handleSavePopupShield}
+                  onNotify={onNotify}
+                />
+              )}
+
+              {/* GROUP 4 (Partial): CRAWL OPERATIONS & AI EDITOR */}
+              {activeTab === 'crawl_operations' &&
+                isTabAccessible(
+                  'crawl_operations',
+                  isOwner,
+                  workspacePrefs.moderatorSubPermissions
+                ) && (
+                  <AdminCrawlOperationsPanel onNavigateTab={navigateToTab} onNotify={onNotify} />
+                )}
+
+              {isOwner && activeTab === 'ai_editor' && (
+                <AdminAiBulkEditor
+                  user={user}
+                  catalog={catalog}
+                  isFirestoreSeeded={isFirestoreSeeded}
+                  onNotify={onNotify}
+                  onPreviewMedia={onPreviewMedia}
+                />
+              )}
+
+              {/* GROUP 5: DESIGN & DEVICE MODES */}
+              {isOwner && activeTab === 'home_builder' && (
+                <HomeBuilderPanel
+                  catalog={catalog}
+                  homeConfig={activeHomeConfig}
+                  tickerEnabled={settingsForm.tickerEnabled}
+                  busyAction={busyAction}
+                  onChangeHomeConfig={(next) =>
+                    setSettingsForm((prev) => ({ ...prev, homeConfig: next }))
+                  }
+                  onChangeTickerEnabled={(enabled) =>
+                    setSettingsForm((prev) => ({ ...prev, tickerEnabled: enabled }))
+                  }
+                  onSaveHomeConfig={handleSaveHomeConfig}
+                  onPreviewHome={onExitDashboard}
+                  onOpenTypographyTab={() => navigateToTab('typography')}
+                  onNotify={onNotify}
+                />
+              )}
+
+              {isOwner && activeTab === 'typography' && (
+                <TypographyPanel
+                  typography={activeTypography}
+                  customFonts={effectiveCustomFonts}
+                  busyAction={busyAction}
+                  onChangeTypography={(next) =>
+                    setSettingsForm((prev) => ({ ...prev, typography: next }))
+                  }
+                  onSaveTypography={handleSaveTypography}
+                  onUploadCustomFont={handleUploadCustomFont}
+                  onDeleteCustomFont={handleDeleteCustomFont}
+                  onPreviewHome={onExitDashboard}
+                  onNotify={onNotify}
+                />
+              )}
+
+              {isOwner && activeTab === 'display_modes' && (
+                <AdminDisplayModesPanel onNotify={onNotify} />
+              )}
+
+              {/* GROUP 7 (Logs & Rules), GROUP 8 (System Health & Backup) */}
+              {isOwner && activeTab === 'security_rules' && (
+                <AdminSecurityLogsPanel mode="security_rules" onNotify={onNotify} />
+              )}
+
+              {isOwner && activeTab === 'audit_logs' && (
+                <AdminSecurityLogsPanel mode="audit_logs" onNotify={onNotify} />
+              )}
+
+              {isOwner && activeTab === 'system_health' && (
+                <AdminSystemHealthPanel
+                  user={user}
+                  catalog={catalog}
+                  adapters={scraperAdapters}
+                  customApiUrl={customApiUrl}
+                  onNotify={onNotify}
+                />
+              )}
+
+              {isOwner && activeTab === 'backup_restore' && (
+                <AdminBackupRestorePanel
+                  catalog={catalog}
+                  siteSettings={siteSettings}
+                  adapters={scraperAdapters}
+                  requests={requests}
+                  adminUid={user.uid}
+                  adminName={user.displayName || user.email || 'Admin'}
+                  onNotify={onNotify}
+                />
+              )}
 
             {/* TAB 3: EXTERNAL CONTENT SCRAPER */}
             {activeTab === 'scraper' && (
@@ -3530,18 +3742,31 @@ export function AdminDashboardView({
                     )}
 
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <button
-                        type="submit"
-                        disabled={scraping}
-                        className="inline-flex items-center gap-2 rounded-xl bg-[#4CAF50] hover:bg-[#43a047] disabled:opacity-60 px-6 py-3 text-xs font-extrabold text-white shadow-lg cursor-pointer"
-                      >
-                        {scraping ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Wand2 className="w-4 h-4" />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="submit"
+                          disabled={scraping}
+                          className="inline-flex items-center gap-2 rounded-xl bg-[#4CAF50] hover:bg-[#43a047] disabled:opacity-60 px-6 py-3 text-xs font-extrabold text-white shadow-lg cursor-pointer whitespace-nowrap shrink-0"
+                        >
+                          {scraping ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Wand2 className="w-4 h-4" />
+                          )}
+                          <span>{scraping ? 'جاري تحليل واستخراج البيانات...' : 'استخراج البيانات الآن'}</span>
+                        </button>
+
+                        {scraping && activeSingleCrawlId && (
+                          <button
+                            type="button"
+                            onClick={handleCancelSingleScrape}
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-4 py-3 text-xs font-extrabold text-white shadow cursor-pointer whitespace-nowrap shrink-0"
+                          >
+                            <StopCircle className="w-4 h-4" />
+                            <span>إيقاف الجلب</span>
+                          </button>
                         )}
-                        <span>{scraping ? 'جاري تحليل واستخراج البيانات...' : 'استخراج البيانات الآن'}</span>
-                      </button>
+                      </div>
 
                       {matchedSingleAdapter ? (
                         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#4CAF50]/35 bg-[#4CAF50]/10 px-3 py-1.5 text-[11px] text-[#4CAF50]">
@@ -3551,7 +3776,7 @@ export function AdminDashboardView({
                           </span>
                           <button
                             type="button"
-                            onClick={() => setActiveTab('scraper_adapters')}
+                            onClick={() => navigateToTab('scraper_adapters')}
                             className="underline font-bold text-[#f9c400] cursor-pointer"
                           >
                             تعديل في مطوّر المصادر
@@ -3560,7 +3785,7 @@ export function AdminDashboardView({
                       ) : scrapeMode === 'url' && scrapeUrl.trim() ? (
                         <button
                           type="button"
-                          onClick={() => setActiveTab('scraper_adapters')}
+                          onClick={() => navigateToTab('scraper_adapters')}
                           className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-[#1a242e] hover:border-[#f9c400]/40 px-3 py-1.5 text-[11px] font-bold text-[#b7c9ef] hover:text-white cursor-pointer"
                         >
                           <Wrench className="w-3.5 h-3.5 text-[#f9c400]" />
@@ -3586,7 +3811,7 @@ export function AdminDashboardView({
                         )}
                         <button
                           type="button"
-                          onClick={() => setActiveTab('settings')}
+                          onClick={() => navigateToTab('settings')}
                           className="inline-flex items-center gap-1 rounded-lg bg-[#f9c400] hover:bg-[#dfb20b] px-3 py-1.5 text-[11px] font-black text-[#06131c] cursor-pointer"
                         >
                           <Settings className="w-3.5 h-3.5" />
@@ -3600,6 +3825,23 @@ export function AdminDashboardView({
                 {/* Scraped Results Preview */}
                 {scrapedResult && (
                   <div className="rounded-3xl bg-[#0c1821] border border-[#4CAF50]/40 p-6 space-y-5 shadow-2xl">
+                    {matchedExistingSingleItem && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-[#f9c400]/15 border border-[#f9c400]/40 px-4 py-2.5 text-xs">
+                        <span className="font-bold text-[#fde68a] flex items-center gap-1.5">
+                          <AlertTriangle className="w-4 h-4 text-[#f9c400] shrink-0" />
+                          <span>
+                            موجود مسبقاً في الكتالوج: <strong className="text-white">{matchedExistingSingleItem.title}</strong> ({matchedExistingSingleItem.year})
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => openEditorForExisting(matchedExistingSingleItem)}
+                          className="rounded-lg bg-[#f9c400] hover:bg-[#dfb20b] px-3 py-1 text-[11px] font-black text-[#06131c] cursor-pointer"
+                        >
+                          تعديل العمل الموجود
+                        </button>
+                      </div>
+                    )}
                     <div className="flex flex-col md:flex-row gap-5">
                       {scrapedResult.poster_url || scrapedResult.poster ? (
                         <img
@@ -4208,22 +4450,35 @@ export function AdminDashboardView({
                     </div>
 
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <button
-                        type="submit"
-                        disabled={siteCrawling}
-                        className="inline-flex items-center gap-2 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] disabled:opacity-60 px-6 py-3 text-xs font-black text-[#06131c] shadow-lg cursor-pointer"
-                      >
-                        {siteCrawling ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Globe className="w-4 h-4" />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="submit"
+                          disabled={siteCrawling}
+                          className="inline-flex items-center gap-2 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] disabled:opacity-60 px-6 py-3 text-xs font-black text-[#06131c] shadow-lg cursor-pointer whitespace-nowrap shrink-0"
+                        >
+                          {siteCrawling ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Globe className="w-4 h-4" />
+                          )}
+                          <span>
+                            {siteCrawling
+                              ? 'جاري فحص الموقع وجلب جميع المحتويات...'
+                              : 'بدء جلب جميع محتوى الموقع الآن'}
+                          </span>
+                        </button>
+
+                        {siteCrawling && activeSiteCrawlId && (
+                          <button
+                            type="button"
+                            onClick={handleCancelSiteScrape}
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-4 py-3 text-xs font-extrabold text-white shadow cursor-pointer whitespace-nowrap shrink-0"
+                          >
+                            <StopCircle className="w-4 h-4" />
+                            <span>إيقاف الجلب</span>
+                          </button>
                         )}
-                        <span>
-                          {siteCrawling
-                            ? 'جاري فحص الموقع وجلب جميع المحتويات...'
-                            : 'بدء جلب جميع محتوى الموقع الآن'}
-                        </span>
-                      </button>
+                      </div>
 
                       {matchedSiteAdapter && (
                         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#4CAF50]/35 bg-[#4CAF50]/10 px-3 py-1.5 text-[11px] text-[#4CAF50]">
@@ -4233,7 +4488,7 @@ export function AdminDashboardView({
                           </span>
                           <button
                             type="button"
-                            onClick={() => setActiveTab('scraper_adapters')}
+                            onClick={() => navigateToTab('scraper_adapters')}
                             className="underline font-bold text-[#f9c400] cursor-pointer"
                           >
                             إدارة الـ Adapter
@@ -4428,6 +4683,14 @@ export function AdminDashboardView({
                                 <span className="rounded-md bg-[#0c1821] px-2 py-0.5 text-[10px] font-bold text-[#b7c9ef]">
                                   {item.year} • {item.quality}
                                 </span>
+                                {(existingCatalogByTitle.has(normalizeTitleForDuplicateCheck(item.title)) ||
+                                  existingCatalogByTitle.has(
+                                    normalizeTitleForDuplicateCheck(item.englishTitle)
+                                  )) && (
+                                  <span className="rounded-md bg-[#f9c400]/20 border border-[#f9c400]/45 px-2 py-0.5 text-[10px] font-black text-[#f9c400]">
+                                    موجود مسبقاً
+                                  </span>
+                                )}
                               </div>
                               <h4 className="text-xs sm:text-sm font-extrabold text-white line-clamp-1">
                                 {item.title}
@@ -4832,6 +5095,66 @@ export function AdminDashboardView({
                   )}
                 </div>
 
+                {/* Granular Moderator Sub-Permissions Matrix */}
+                <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
+                    <div>
+                      <h2 className="font-display text-base font-extrabold text-white">
+                        مصفوفة الصلاحيات الدقيقة للمشرفين (Moderator Sub-Permissions)
+                      </h2>
+                      <p className="text-xs text-[#b7c9ef] mt-1">
+                        تحكّم في الأدوات الفرعية المتاحة للمشرفين (Moderator) على مساحة العمل دون التأثير على صلاحيات المالك الكاملة.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateWorkspacePrefs({
+                          moderatorSubPermissions: { ...DEFAULT_MODERATOR_SUB_PERMS },
+                        });
+                        onNotify('تمت استعادة الصلاحيات الافتراضية للمشرفين');
+                      }}
+                      className="rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 px-3 py-1.5 text-[11px] font-bold text-[#b7c9ef] hover:text-white cursor-pointer"
+                    >
+                      استعادة الافتراضي
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {MODERATOR_PERM_LABELS.map((perm) => {
+                      const enabled = Boolean(workspacePrefs.moderatorSubPermissions[perm.key]);
+                      return (
+                        <label
+                          key={perm.key}
+                          className={`flex items-center justify-between gap-3 rounded-2xl border p-3.5 cursor-pointer transition-colors ${
+                            enabled
+                              ? 'bg-[#1a242e]/85 border-[#4CAF50]/40'
+                              : 'bg-[#1a242e]/40 border-white/10 opacity-80'
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <p className="text-xs font-extrabold text-white">{perm.title}</p>
+                            <p className="text-[11px] text-[#b7c9ef] mt-0.5">{perm.desc}</p>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={enabled}
+                            onChange={(e) => {
+                              updateModeratorPerm(perm.key, e.target.checked);
+                              onNotify(
+                                e.target.checked
+                                  ? `تم تفعيل صلاحية "${perm.title}" للمشرفين`
+                                  : `تم تعطيل صلاحية "${perm.title}" للمشرفين`
+                              );
+                            }}
+                            className="h-4 w-4 accent-[#4CAF50] shrink-0 cursor-pointer"
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5">
                   <h2 className="font-display text-base font-extrabold text-white mb-4">
                     الأعضاء المسجلون في قاعدة البيانات ({usersList.length})
@@ -5200,448 +5523,46 @@ export function AdminDashboardView({
                   )}
                 </div>
 
-                {/* Firestore Security Rules Publisher Helper */}
-                <div className="rounded-2xl bg-[#1a242e]/65 border border-[#f9c400]/25 p-5 space-y-3.5">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="space-y-1 flex-1 min-w-[240px]">
+                {/* Direct Links to Dedicated Security Rules & Player Theme Modules */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="rounded-2xl bg-[#1a242e]/65 border border-[#f9c400]/25 p-4 flex flex-col justify-between gap-3">
+                    <div>
                       <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
                         <ShieldCheck className="w-4 h-4 text-[#f9c400]" />
-                        <span>قواعد أمان Firestore المطلوبة (لتفعيل التقييمات والخطوط والسلايدر)</span>
+                        <span>قواعد أمان Firestore</span>
                       </h3>
-                      <p className="text-[11px] leading-relaxed text-[#b7c9ef]">
-                        لتشغيل تقييمات النجوم (<span className="font-latin text-white">ratings</span>)، ورفع الخطوط (<span className="font-latin text-white">fonts</span>)، ومزامنة السلايدر وأحجام النصوص في قاعدة البيانات{' '}
-                        <span className="font-latin text-[#f9c400]">{firebaseConfig.firestoreDatabaseId}</span>، انسخ القواعد الجاهزة وانشرها في Firebase Console.
+                      <p className="text-[11px] text-[#b7c9ef] mt-1 leading-relaxed">
+                        تم نقل معاينة ونسخ قواعد أمان القاعدة ورابط محرر Firebase Console إلى القسم المخصص.
                       </p>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (navigator.clipboard?.writeText) {
-                            void navigator.clipboard
-                              .writeText(firestoreRulesSource)
-                              .then(() => onNotify('تم نسخ قواعد firestore.rules الكاملة إلى الحافظة!'))
-                              .catch(() => onNotify('تعذر النسخ التلقائي — انسخ القواعد من ملف firestore.rules'));
-                          } else {
-                            onNotify('انسخ محتوى ملف firestore.rules من المستودع.');
-                          }
-                        }}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] px-3.5 py-2 text-[11px] font-black text-[#06131c] cursor-pointer"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>نسخ قواعد firestore.rules</span>
-                      </button>
-                      <a
-                        href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/${firebaseConfig.firestoreDatabaseId}/rules`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 px-3.5 py-2 text-[11px] font-extrabold text-white"
-                      >
-                        <span>فتح محرر Rules في Firebase</span>
-                        <ExternalLink className="w-3.5 h-3.5 text-[#f9c400]" />
-                      </a>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => navigateToTab('security_rules')}
+                      className="self-start inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] px-4 py-2 text-xs font-black text-[#06131c] cursor-pointer"
+                    >
+                      <span>فتح قواعد أمان Firestore</span>
+                      <ArrowLeft className="w-3.5 h-3.5" />
+                    </button>
                   </div>
 
-                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-[#b7c9ef] bg-[#0c1821]/70 border border-white/5 rounded-xl p-3">
-                    <li>اضغط على <span className="text-white font-bold">نسخ قواعد firestore.rules</span> أعلاه.</li>
-                    <li>افتح <span className="text-white font-bold">محرر Rules في Firebase</span> وتأكد من اختيار قاعدة <span className="font-latin text-[#f9c400]">{firebaseConfig.firestoreDatabaseId}</span>.</li>
-                    <li>استبدل القواعد القديمة بالكامل بالقواعد المنسوخة ثم اضغط <span className="font-latin text-white">Publish</span>.</li>
-                  </ol>
-                </div>
-
-                {/* Internal Video Player Theme Customizer */}
-                <div className="rounded-2xl bg-[#1a242e]/65 border border-white/10 p-5 space-y-5">
-                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-4">
-                    <div className="flex items-center gap-3">
-                      <div
-                        style={{
-                          backgroundColor: `${activePlayerTheme.accentColor}22`,
-                          borderColor: `${activePlayerTheme.accentColor}55`,
-                          color: activePlayerTheme.accentColor,
-                        }}
-                        className="flex h-10 w-10 items-center justify-center rounded-xl border"
-                      >
-                        <Palette className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h3 className="text-sm font-extrabold text-white">
-                          تخصيص ثيم المشغّل الداخلي (يُطبّق تلقائياً)
-                        </h3>
-                        <p className="text-[11px] text-[#b7c9ef] mt-0.5">
-                          تحكّم في ألوان الإطار، شكل الحواف، اسم المشغّل، وأشرطة التحكم — بمجرد الحفظ يتغير المشغّل تلقائياً في كل الموقع.
-                        </p>
-                      </div>
+                  <div className="rounded-2xl bg-[#1a242e]/65 border border-white/10 p-4 flex flex-col justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
+                        <Palette className="w-4 h-4 text-[#D92321]" />
+                        <span>تخصيص ثيم المشغّل الداخلي</span>
+                      </h3>
+                      <p className="text-[11px] text-[#b7c9ef] mt-1 leading-relaxed">
+                        تحكّم في ألوان الإطار والحواف والتوهج واسم المشغّل مع معاينة فورية من القسم المخصص.
+                      </p>
                     </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const resetTheme = { ...DEFAULT_PLAYER_THEME };
-                          saveStoredPlayerTheme(resetTheme);
-                          setSettingsForm((prev) => ({ ...prev, playerTheme: resetTheme }));
-                          onNotify('تمت استعادة الثيم الافتراضي للمشغّل — اضغط حفظ لتعميمه');
-                        }}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-[#0c1821] hover:bg-white/10 border border-white/10 px-3 py-2 text-[11px] font-bold text-[#b7c9ef] hover:text-white cursor-pointer"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        <span>استعادة الافتراضي</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        disabled={busyAction}
-                        onClick={() => void handleSavePlayerThemeOnly(activePlayerTheme)}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] px-4 py-2 text-[11px] font-black text-[#06131c] shadow cursor-pointer"
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>{busyAction ? 'جاري التعميم...' : 'تطبيق وحفظ الثيم تلقائياً'}</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Quick Presets */}
-                  <div className="space-y-2">
-                    <label className="block text-xs font-bold text-[#b7c9ef]">
-                      ثيمات جاهزة سريعة
-                    </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-                      {PLAYER_THEME_PRESETS.map((preset) => {
-                        const isSelected = activePlayerTheme.presetId === preset.id;
-                        return (
-                          <button
-                            key={preset.id}
-                            type="button"
-                            onClick={() => updatePlayerTheme(preset.theme, true)}
-                            className={`text-right rounded-xl border p-3 transition-all cursor-pointer ${
-                              isSelected
-                                ? 'bg-[#0c1821] border-white/40 shadow-lg'
-                                : 'bg-[#0c1821]/60 border-white/10 hover:border-white/25'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between gap-2 mb-1.5">
-                              <span className="text-xs font-extrabold text-white truncate">
-                                {preset.name}
-                              </span>
-                              <div className="flex items-center gap-1 shrink-0">
-                                <span
-                                  className="h-3.5 w-3.5 rounded-full border border-white/25"
-                                  style={{ backgroundColor: preset.theme.accentColor }}
-                                />
-                                <span
-                                  className="h-3.5 w-3.5 rounded-full border border-white/25"
-                                  style={{ backgroundColor: preset.theme.frameBgColor }}
-                                />
-                              </div>
-                            </div>
-                            <p className="text-[10px] text-[#b7c9ef]/80 leading-snug">
-                              {preset.subtitle}
-                            </p>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Theme Controls + Live Mini Preview Grid */}
-                  <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
-                    {/* Controls Column */}
-                    <div className="xl:col-span-6 space-y-4">
-                      <div>
-                        <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
-                          اسم المشغّل الظاهر داخل الإطار
-                        </label>
-                        <input
-                          type="text"
-                          maxLength={40}
-                          value={activePlayerTheme.brandLabel}
-                          onChange={(e) =>
-                            updatePlayerTheme({ brandLabel: e.target.value })
-                          }
-                          placeholder="RahaL TV"
-                          className="w-full rounded-xl bg-[#0c1821] border border-white/10 px-3.5 py-2 text-xs font-bold text-white focus:border-[#f9c400] focus:outline-none"
-                        />
-                      </div>
-
-                      {/* Color Pickers */}
-                      <div className="grid grid-cols-3 gap-2.5">
-                        <label className="block rounded-xl bg-[#0c1821] border border-white/10 p-2.5 cursor-pointer hover:border-white/25">
-                          <span className="block text-[10px] font-bold text-[#b7c9ef] mb-1.5">
-                            اللون المميز
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="color"
-                              value={activePlayerTheme.accentColor}
-                              onChange={(e) =>
-                                updatePlayerTheme({ accentColor: e.target.value })
-                              }
-                              className="h-7 w-9 rounded border-0 bg-transparent cursor-pointer"
-                            />
-                            <span className="font-latin text-[11px] font-bold text-white uppercase">
-                              {activePlayerTheme.accentColor}
-                            </span>
-                          </div>
-                        </label>
-
-                        <label className="block rounded-xl bg-[#0c1821] border border-white/10 p-2.5 cursor-pointer hover:border-white/25">
-                          <span className="block text-[10px] font-bold text-[#b7c9ef] mb-1.5">
-                            خلفية الإطار
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="color"
-                              value={activePlayerTheme.frameBgColor}
-                              onChange={(e) =>
-                                updatePlayerTheme({ frameBgColor: e.target.value })
-                              }
-                              className="h-7 w-9 rounded border-0 bg-transparent cursor-pointer"
-                            />
-                            <span className="font-latin text-[11px] font-bold text-white uppercase">
-                              {activePlayerTheme.frameBgColor}
-                            </span>
-                          </div>
-                        </label>
-
-                        <label className="block rounded-xl bg-[#0c1821] border border-white/10 p-2.5 cursor-pointer hover:border-white/25">
-                          <span className="block text-[10px] font-bold text-[#b7c9ef] mb-1.5">
-                            خلفية النافذة
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="color"
-                              value={activePlayerTheme.modalBgColor}
-                              onChange={(e) =>
-                                updatePlayerTheme({ modalBgColor: e.target.value })
-                              }
-                              className="h-7 w-9 rounded border-0 bg-transparent cursor-pointer"
-                            />
-                            <span className="font-latin text-[11px] font-bold text-white uppercase">
-                              {activePlayerTheme.modalBgColor}
-                            </span>
-                          </div>
-                        </label>
-                      </div>
-
-                      {/* Radius & Glow Controls */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <span className="block text-[11px] font-bold text-[#b7c9ef] mb-1.5">
-                            استدارة الحواف
-                          </span>
-                          <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-[#0c1821] p-1 border border-white/10">
-                            {(
-                              [
-                                { id: 'sharp', label: 'حاد' },
-                                { id: 'rounded', label: 'ناعم' },
-                                { id: 'cinema', label: 'سينمائي' },
-                              ] as const
-                            ).map((opt) => (
-                              <button
-                                key={opt.id}
-                                type="button"
-                                onClick={() => updatePlayerTheme({ borderRadius: opt.id })}
-                                className={`rounded-lg py-1.5 text-[11px] font-extrabold cursor-pointer transition-colors ${
-                                  activePlayerTheme.borderRadius === opt.id
-                                    ? 'bg-white/15 text-white'
-                                    : 'text-[#b7c9ef] hover:text-white'
-                                }`}
-                              >
-                                {opt.label}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div>
-                          <span className="block text-[11px] font-bold text-[#b7c9ef] mb-1.5">
-                            شدة التوهج حول المربع
-                          </span>
-                          <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-[#0c1821] p-1 border border-white/10">
-                            {(
-                              [
-                                { id: 'none', label: 'بدون' },
-                                { id: 'soft', label: 'خفيف' },
-                                { id: 'strong', label: 'قوي' },
-                              ] as const
-                            ).map((opt) => (
-                              <button
-                                key={opt.id}
-                                type="button"
-                                onClick={() => updatePlayerTheme({ glowIntensity: opt.id })}
-                                className={`rounded-lg py-1.5 text-[11px] font-extrabold cursor-pointer transition-colors ${
-                                  activePlayerTheme.glowIntensity === opt.id
-                                    ? 'bg-white/15 text-white'
-                                    : 'text-[#b7c9ef] hover:text-white'
-                                }`}
-                              >
-                                {opt.label}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Visibility Toggles */}
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                        <label className="flex items-center gap-2 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-[11px] font-bold text-white cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={activePlayerTheme.showHeaderBar}
-                            onChange={(e) =>
-                              updatePlayerTheme({ showHeaderBar: e.target.checked })
-                            }
-                            className="h-3.5 w-3.5 accent-[#f9c400]"
-                          />
-                          <span>الشريط العلوي</span>
-                        </label>
-                        <label className="flex items-center gap-2 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-[11px] font-bold text-white cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={activePlayerTheme.showFooterBar}
-                            onChange={(e) =>
-                              updatePlayerTheme({ showFooterBar: e.target.checked })
-                            }
-                            className="h-3.5 w-3.5 accent-[#f9c400]"
-                          />
-                          <span>الشريط السفلي</span>
-                        </label>
-                        <label className="flex items-center gap-2 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-[11px] font-bold text-white cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={activePlayerTheme.showBrandBadge}
-                            onChange={(e) =>
-                              updatePlayerTheme({ showBrandBadge: e.target.checked })
-                            }
-                            className="h-3.5 w-3.5 accent-[#f9c400]"
-                          />
-                          <span>شعار المشغّل</span>
-                        </label>
-                      </div>
-                    </div>
-
-                    {/* Live Mini-Player Preview Column */}
-                    <div className="xl:col-span-6 space-y-2">
-                      <div className="flex items-center justify-between text-[11px] font-bold text-[#b7c9ef]">
-                        <span>معاينة حية لمربع المشغّل الداخلي</span>
-                        <span className="font-latin text-[10px] text-white/60">Live Preview</span>
-                      </div>
-
-                      <div
-                        style={{
-                          ...buildPlayerThemeVars(activePlayerTheme),
-                          backgroundColor: 'var(--pt-modal)',
-                          borderColor: 'var(--pt-accent-20)',
-                          borderRadius: 'var(--pt-radius)',
-                        }}
-                        className="border p-3 shadow-2xl"
-                      >
-                        <div className="grid grid-cols-12 gap-2.5 items-stretch">
-                          {/* Mini Server Sidebar */}
-                          <div className="col-span-4 rounded-xl bg-black/25 border border-white/[0.07] p-2 space-y-1.5">
-                            <div className="flex items-center justify-between px-1 pb-1 border-b border-white/[0.06] text-[10px] font-bold text-white/80">
-                              <span>السيرفرات</span>
-                              <span
-                                style={{
-                                  backgroundColor: 'var(--pt-accent-12)',
-                                  color: 'var(--pt-accent)',
-                                }}
-                                className="font-latin rounded px-1.5 py-0.5 text-[9px] font-black tabular-nums"
-                              >
-                                2
-                              </span>
-                            </div>
-                            <div
-                              style={{
-                                backgroundColor: 'var(--pt-accent)',
-                                color: 'var(--pt-accent-contrast)',
-                                borderColor: 'var(--pt-accent-55)',
-                              }}
-                              className="flex items-center justify-between rounded-lg border px-2 py-1.5 text-[10px] font-extrabold"
-                            >
-                              <span>سيرفر 1</span>
-                              <span className="font-latin text-[9px] opacity-85">HD</span>
-                            </div>
-                            <div className="flex items-center justify-between rounded-lg border border-white/[0.06] bg-white/[0.04] px-2 py-1.5 text-[10px] font-bold text-white/75">
-                              <span>سيرفر 2</span>
-                              <span className="font-latin text-[9px] text-white/50">HD</span>
-                            </div>
-                          </div>
-
-                          {/* Mini Player Cinema Box */}
-                          <div
-                            style={{
-                              backgroundColor: 'var(--pt-frame)',
-                              borderColor: 'var(--pt-accent-35)',
-                              borderRadius: 'var(--pt-radius)',
-                              boxShadow: 'var(--pt-shadow)',
-                            }}
-                            className="col-span-8 flex flex-col border overflow-hidden"
-                          >
-                            {activePlayerTheme.showHeaderBar && (
-                              <div
-                                style={{ backgroundColor: 'var(--pt-frame)' }}
-                                className="flex items-center justify-between gap-2 px-2.5 py-1.5 border-b border-white/[0.08]"
-                              >
-                                <div className="flex items-center gap-1.5 min-w-0">
-                                  {activePlayerTheme.showBrandBadge && (
-                                    <span
-                                      style={{
-                                        backgroundColor: 'var(--pt-accent)',
-                                        color: 'var(--pt-accent-contrast)',
-                                      }}
-                                      className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded"
-                                    >
-                                      <Play className="w-2.5 h-2.5 fill-current" />
-                                    </span>
-                                  )}
-                                  <span className="text-[10px] font-extrabold text-white truncate">
-                                    {activePlayerTheme.brandLabel || 'RahaL TV'}
-                                  </span>
-                                </div>
-                                <span className="rounded bg-white/[0.08] px-1.5 py-0.5 text-[9px] font-bold text-white/75">
-                                  تكبير
-                                </span>
-                              </div>
-                            )}
-
-                            <div className="aspect-video w-full bg-[#03060a] flex items-center justify-center">
-                              <div
-                                style={{
-                                  backgroundColor: 'var(--pt-accent-20)',
-                                  borderColor: 'var(--pt-accent-55)',
-                                  color: 'var(--pt-accent)',
-                                }}
-                                className="flex h-9 w-9 items-center justify-center rounded-full border"
-                              >
-                                <Play className="w-4 h-4 fill-current" />
-                              </div>
-                            </div>
-
-                            {activePlayerTheme.showFooterBar && (
-                              <div
-                                style={{ backgroundColor: 'var(--pt-frame)' }}
-                                className="flex items-center justify-between gap-2 px-2.5 py-1.5 border-t border-white/[0.08]"
-                              >
-                                <span className="text-[9px] font-bold text-white/60 truncate">
-                                  مشغل {activePlayerTheme.brandLabel || 'RahaL TV'} المحمي
-                                </span>
-                                <span
-                                  style={{
-                                    backgroundColor: 'var(--pt-accent)',
-                                    color: 'var(--pt-accent-contrast)',
-                                  }}
-                                  className="rounded px-2 py-0.5 text-[9px] font-extrabold shrink-0"
-                                >
-                                  السيرفر التالي
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => navigateToTab('player_theme')}
+                      className="self-start inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-4 py-2 text-xs font-extrabold text-white cursor-pointer"
+                    >
+                      <span>فتح مظهر المشغّل</span>
+                      <ArrowLeft className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
 
@@ -5655,13 +5576,20 @@ export function AdminDashboardView({
                 </button>
               </form>
             )}
-          </div>
+            </Suspense>
+          </main>
         </div>
       </div>
 
       {/* ---------------- COMPLETE 4-TAB ADD/EDIT MEDIA MODAL ---------------- */}
       {editingItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={isCreatingNew ? 'إضافة فيلم أو مسلسل جديد' : `تعديل ${editingItem.title}`}
+          data-rtv-focus-trap="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5"
+        >
           <div
             className="fixed inset-0 bg-black/82 backdrop-blur-sm"
             onClick={() => setEditingItem(null)}
@@ -6970,89 +6898,54 @@ export function AdminDashboardView({
         </div>
       )}
 
-      {/* ---------------- DELETE CONFIRMATION MODAL ---------------- */}
-      {confirmDeleteId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div
-            className="fixed inset-0 bg-black/80 backdrop-blur-sm"
-            onClick={() => setConfirmDeleteId(null)}
-          />
-          <div className="relative z-10 w-full max-w-sm rounded-3xl bg-[#0c1821] border border-white/15 p-6 text-center space-y-4 shadow-2xl">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#D92321]/15 text-[#D92321]">
-              <Trash2 className="w-6 h-6" />
-            </div>
-            <h3 className="font-display text-base font-extrabold text-white">
-              تأكيد حذف العمل نهائيًا؟
-            </h3>
-            <p className="text-xs text-[#b7c9ef]">
-              سيتم حذف هذا العمل وسيرفراته من قاعدة بيانات Firestore ولن يظهر للزوار بعد الآن.
-            </p>
-            <div className="flex items-center justify-center gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setConfirmDeleteId(null)}
-                className="rounded-xl bg-[#1a242e] px-5 py-2.5 text-xs font-bold text-white cursor-pointer"
-              >
-                إلغاء
-              </button>
-              <button
-                type="button"
-                disabled={busyAction}
-                onClick={() => void handleDeleteMedia(confirmDeleteId)}
-                className="rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-5 py-2.5 text-xs font-extrabold text-white cursor-pointer"
-              >
-                {busyAction ? 'جاري الحذف...' : 'نعم، احذف العمل'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* ---------------- ACCESSIBLE DELETE & BULK CONFIRM DIALOGS ---------------- */}
+      <ConfirmDialog
+        isOpen={Boolean(confirmDeleteId)}
+        title="تأكيد حذف العمل نهائيًا؟"
+        description="سيتم حذف هذا العمل وسيرفراته من قاعدة بيانات Firestore ولن يظهر للزوار بعد الآن."
+        confirmLabel={busyAction ? 'جاري الحذف...' : 'نعم، احذف العمل'}
+        busy={busyAction}
+        danger
+        onConfirm={() => {
+          if (confirmDeleteId) void handleDeleteMedia(confirmDeleteId);
+        }}
+        onCancel={() => setConfirmDeleteId(null)}
+      />
 
-      {/* ---------------- BULK DELETE CONFIRMATION MODAL ---------------- */}
-      {confirmBulkDeleteMode && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div
-            className="fixed inset-0 bg-black/80 backdrop-blur-sm"
-            onClick={() => setConfirmBulkDeleteMode(null)}
-          />
-          <div className="relative z-10 w-full max-w-md rounded-3xl bg-[#0c1821] border border-[#D92321]/40 p-6 text-center space-y-4 shadow-2xl">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#D92321]/20 text-[#D92321]">
-              <Trash2 className="w-6 h-6" />
-            </div>
-            <h3 className="font-display text-base font-extrabold text-white">
-              {confirmBulkDeleteMode === 'all'
-                ? `تأكيد حذف كل المحتوى (${catalog.length} عمل)؟`
-                : `تأكيد حذف الأعمال المحددة (${selectedMediaIds.length} عمل)؟`}
-            </h3>
-            <p className="text-xs text-[#b7c9ef] leading-relaxed">
-              {confirmBulkDeleteMode === 'all'
-                ? 'سيتم مسح جميع الأفلام والمسلسلات والعروض وسيرفراتها نهائيًا من قاعدة بيانات Firestore ولا يمكن التراجع عن هذا الإجراء.'
-                : 'سيتم حذف جميع الأعمال التي قمت بتحديدها نهائيًا من قاعدة بيانات Firestore.'}
-            </p>
-            <div className="flex items-center justify-center gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setConfirmBulkDeleteMode(null)}
-                className="rounded-xl bg-[#1a242e] px-5 py-2.5 text-xs font-bold text-white cursor-pointer"
-              >
-                إلغاء
-              </button>
-              <button
-                type="button"
-                disabled={busyAction}
-                onClick={() => void handleConfirmBulkDelete()}
-                className="rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-5 py-2.5 text-xs font-extrabold text-white shadow-lg cursor-pointer"
-              >
-                {busyAction
-                  ? 'جاري الحذف الجماعي...'
-                  : confirmBulkDeleteMode === 'all'
-                    ? 'نعم، احذف كل المحتوى'
-                    : 'نعم، احذف المحدد'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        isOpen={Boolean(confirmBulkDeleteMode)}
+        title={
+          confirmBulkDeleteMode === 'all'
+            ? `تأكيد حذف كل المحتوى (${catalog.length} عمل)؟`
+            : `تأكيد حذف الأعمال المحددة (${selectedMediaIds.length} عمل)؟`
+        }
+        description={
+          confirmBulkDeleteMode === 'all'
+            ? 'سيتم مسح جميع الأفلام والمسلسلات والعروض وسيرفراتها نهائيًا من قاعدة بيانات Firestore ولا يمكن التراجع عن هذا الإجراء.'
+            : 'سيتم حذف جميع الأعمال التي قمت بتحديدها نهائيًا من قاعدة بيانات Firestore.'
+        }
+        confirmLabel={
+          busyAction
+            ? 'جاري الحذف الجماعي...'
+            : confirmBulkDeleteMode === 'all'
+              ? 'نعم، احذف كل المحتوى'
+              : 'نعم، احذف المحدد'
+        }
+        busy={busyAction}
+        danger
+        onConfirm={() => void handleConfirmBulkDelete()}
+        onCancel={() => setConfirmBulkDeleteMode(null)}
+      />
+
+      {/* ---------------- GLOBAL COMMAND PALETTE (Cmd/Ctrl + K) ---------------- */}
+      <GlobalCommandPalette
+        isOpen={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        accessibleItems={accessibleNavItems}
+        catalog={catalog}
+        onNavigateTab={navigateToTab}
+        onEditMedia={openEditorForExisting}
+      />
 
       {/* ---------------- PRE-PUBLISH LIVE MEDIA PREVIEW MODAL ---------------- */}
       <MediaPreviewModal

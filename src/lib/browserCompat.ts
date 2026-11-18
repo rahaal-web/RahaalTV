@@ -21,6 +21,8 @@ export interface ClientCapabilities {
   supportsBackdropFilter: boolean;
   supportsNativeHls: boolean;
   supportsMse: boolean;
+  supportsPictureInPicture: boolean;
+  supportsIntersectionObserver: boolean;
   supportsServiceWorker: boolean;
   prefersReducedMotion: boolean;
   isTouchDevice: boolean;
@@ -294,6 +296,8 @@ export function detectClientCapabilities(): ClientCapabilities {
       supportsBackdropFilter: false,
       supportsNativeHls: false,
       supportsMse: false,
+      supportsPictureInPicture: false,
+      supportsIntersectionObserver: false,
       supportsServiceWorker: false,
       prefersReducedMotion: false,
       isTouchDevice: false,
@@ -377,6 +381,12 @@ export function detectClientCapabilities(): ClientCapabilities {
     typeof window.MediaSource !== 'undefined' ||
     typeof (window as unknown as { ManagedMediaSource?: unknown }).ManagedMediaSource !== 'undefined';
 
+  const supportsPictureInPicture =
+    typeof document !== 'undefined' &&
+    Boolean((document as Document & { pictureInPictureEnabled?: boolean }).pictureInPictureEnabled);
+
+  const supportsIntersectionObserver = typeof IntersectionObserver !== 'undefined';
+
   const supportsServiceWorker = 'serviceWorker' in navigator;
 
   const prefersReducedMotion =
@@ -398,11 +408,19 @@ export function detectClientCapabilities(): ClientCapabilities {
 
   if ((browserName.includes('Chrome') || browserName.includes('Edge')) && majorVer > 0 && majorVer < 90) {
     baselineSupported = false;
-    baselineNotes.push(`إصدار Chromium (${majorVer}) أقدم من الحد الأدنى الموصى به (90+).`);
+    baselineNotes.push(`إصدار Chromium (${majorVer}) أقدم من الحد الأدنى المدعوم (90+).`);
+  }
+  if (browserName === 'Firefox' && majorVer > 0 && majorVer < 90) {
+    baselineSupported = false;
+    baselineNotes.push(`إصدار Firefox (${majorVer}) أقدم من الحد الأدنى المدعوم (90+).`);
+  }
+  if (browserName === 'Samsung Internet' && majorVer > 0 && majorVer < 15) {
+    baselineSupported = false;
+    baselineNotes.push(`إصدار Samsung Internet (${majorVer}) أقدم من الحد الأدنى المدعوم (15+).`);
   }
   if (browserName === 'Safari' && majorVer > 0 && majorVer < 15) {
     baselineSupported = false;
-    baselineNotes.push(`إصدار Safari (${majorVer}) أقدم من الحد الأدنى الموصى به (15+).`);
+    baselineNotes.push(`إصدار Safari (${majorVer}) أقدم من الحد الأدنى المدعوم (15+).`);
   }
   if (!supportsDvh) {
     baselineNotes.push('المتصفح لا يدعم 100dvh — تم تفعيل بديل 100vh تلقائياً.');
@@ -425,6 +443,8 @@ export function detectClientCapabilities(): ClientCapabilities {
     supportsBackdropFilter,
     supportsNativeHls,
     supportsMse,
+    supportsPictureInPicture,
+    supportsIntersectionObserver,
     supportsServiceWorker,
     prefersReducedMotion,
     isTouchDevice,

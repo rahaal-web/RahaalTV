@@ -189,6 +189,39 @@ export function installTvSpatialNavigation(options: TvNavigationOptions = {}): (
       return;
     }
 
+    // Trap Tab / Shift+Tab focus inside active aria-modal dialog
+    if (key === 'Tab') {
+      const modals = Array.from(
+        document.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"], [data-rtv-focus-trap="true"]')
+      ).filter(isElementVisibleForFocus);
+      if (modals.length > 0) {
+        const activeModal = modals[modals.length - 1];
+        const focusables = Array.from(activeModal.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+          isElementVisibleForFocus
+        );
+        if (focusables.length > 0) {
+          const first = focusables[0];
+          const last = focusables[focusables.length - 1];
+          if (!active || !activeModal.contains(active)) {
+            e.preventDefault();
+            first.focus();
+            return;
+          }
+          if (e.shiftKey && active === first) {
+            e.preventDefault();
+            last.focus();
+            return;
+          }
+          if (!e.shiftKey && active === last) {
+            e.preventDefault();
+            first.focus();
+            return;
+          }
+        }
+      }
+      return;
+    }
+
     // Back / Escape / Android TV Back button
     if (key === 'Escape' || key === 'BrowserBack' || key === 'GoBack') {
       const handled = options.onBack?.();

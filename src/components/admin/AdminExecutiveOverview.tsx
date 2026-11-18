@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -9,9 +9,11 @@ import {
   Film,
   Heart,
   Image as ImageIcon,
+  Layers,
   MessageSquarePlus,
   Plus,
   Server,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
   Star,
@@ -20,8 +22,18 @@ import {
   Wand2,
 } from 'lucide-react';
 import { CATALOG_ITEMS } from '../../data/catalog';
-import { runCatalogContentAudit } from '../../lib/contentAudit';
-import { getMediaImageQualityStatus } from '../../lib/mediaImages';
+import { ClientErrorRecord, loadClientErrorLogs } from '../../lib/adminPreferences';
+import {
+  extractServerResolvedUrl,
+  isSuspiciousServerUrl,
+  runCatalogContentAudit,
+} from '../../lib/contentAudit';
+import {
+  CrawlTaskRecord,
+  loadCrawlTasks,
+  subscribeCrawlTasks,
+} from '../../lib/crawlTasksDb';
+import { getMediaImageQualityStatus, getPosterUrl } from '../../lib/mediaImages';
 import {
   AdminRoleRecord,
   MediaItem,
@@ -71,6 +83,16 @@ export function AdminExecutiveOverview({
   onEditMedia,
 }: AdminExecutiveOverviewProps) {
   const [analyticsSort, setAnalyticsSort] = useState<'views' | 'rating' | 'likes'>('views');
+  const [crawlTasks, setCrawlTasks] = useState<CrawlTaskRecord[]>(() => loadCrawlTasks());
+  const [clientErrors, setClientErrors] = useState<ClientErrorRecord[]>(() => loadClientErrorLogs());
+
+  useEffect(() => {
+    setCrawlTasks(loadCrawlTasks());
+    setClientErrors(loadClientErrorLogs());
+    return subscribeCrawlTasks(() => {
+      setCrawlTasks(loadCrawlTasks());
+    });
+  }, []);
 
   const auditReport = useMemo(() => runCatalogContentAudit(catalog), [catalog]);
 
@@ -85,15 +107,32 @@ export function AdminExecutiveOverview({
         : '0.0';
 
     let totalServers = 0;
+    let healthyServers = 0;
+    let suspiciousServers = 0;
     let totalEpisodes = 0;
+    let totalSeasons = 0;
     let hqImages = 0;
+
+    const inspectServerList = (servers?: Array<{ url?: string; embedCode?: string }>) => {
+      for (const srv of servers || []) {
+        totalServers += 1;
+        const resolved = extractServerResolvedUrl(srv);
+        if (isSuspiciousServerUrl(resolved)) {
+          suspiciousServers += 1;
+        } else {
+          healthyServers += 1;
+        }
+      }
+    };
+
     for (const item of catalog) {
-      totalServers += item.servers?.length || 0;
+      inspectServerList(item.servers);
       if (item.seasons) {
+        totalSeasons += item.seasons.length;
         for (const s of item.seasons) {
           totalEpisodes += s.episodes?.length || 0;
           for (const ep of s.episodes || []) {
-            totalServers += ep.servers?.length || 0;
+            inspectServerList(ep.servers);
           }
         }
       }
@@ -112,11 +151,20 @@ export function AdminExecutiveOverview({
       pinnedCount,
       avgImdb,
       totalServers,
+      healthyServers,
+      suspiciousServers,
       totalEpisodes,
+      totalSeasons,
       hqImages,
       healthScore,
     };
   }, [catalog, requests, auditReport.healthyCount]);
+
+  const recentMedia = useMemo(() => catalog.slice(0, 5), [catalog]);
+  const runningCrawlCount = useMemo(
+    () => crawlTasks.filter((t) => t.status === 'running').length,
+    [crawlTasks]
+  );
 
   const topGenres = useMemo(() => {
     const map = new Map<string, { count: number; views: number }>();
@@ -566,6 +614,170 @@ export function AdminExecutiveOverview({
               </button>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Live Crawl Tasks + Client Errors Feed */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="lg:col-span-6 rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 space-y-3.5">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="font-display text-sm font-extrabold text-white flex items-center gap-2">
+              <Layers className="w-4 h-4 text-[#4CAF50]" />
+              <span>عمليات الجلب الأخيرة ({crawlTasks.length})</span>
+              {runningCrawlCount > 0 && (
+                <span className="rounded-md bg-[#4CAF50]/20 px-2 py-0.5 text-[10px] font-black text-[#4CAF50]">
+                  {runningCrawlCount} جارية الآن
+                </span>
+              )}
+            </h3>
+            <button
+              type="button"
+              onClick={() => onNavigateTab('crawl_operations')}
+              className="text-[11px] font-extrabold text-[#f9c400] hover:underline cursor-pointer"
+            >
+              مركز العمليات &larr;
+            </button>
+          </div>
+
+          {crawlTasks.length === 0 ? (
+            <p className="rounded-2xl bg-[#1a242e]/50 border border-white/[0.06] p-4 text-xs text-[#b7c9ef]">
+              لم تُنفذ عمليات جلب مسجلة في هذه الجلسة بعد.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {crawlTasks.slice(0, 4).map((task) => (
+                <div
+                  key={task.id}
+                  className="flex items-center justify-between gap-3 rounded-2xl bg-[#1a242e]/65 border border-white/[0.06] px-3.5 py-2.5 text-xs"
+                >
+                  <div className="min-w-0">
+                    <p className="font-extrabold text-white truncate">{task.title}</p>
+                    <p className="font-latin text-[10px] text-[#b7c9ef] truncate mt-0.5" dir="ltr">
+                      {task.targetUrl || '—'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="font-latin text-[10px] text-[#b7c9ef] tabular-nums">
+                      {task.completedItems}/{task.totalItems}
+                    </span>
+                    <span
+                      className={`rounded-md px-2 py-0.5 text-[10px] font-black ${
+                        task.status === 'running'
+                          ? 'bg-sky-500/20 text-sky-300'
+                          : task.status === 'completed'
+                            ? 'bg-[#4CAF50]/20 text-[#4CAF50]'
+                            : task.status === 'cancelled'
+                              ? 'bg-[#f9c400]/20 text-[#f9c400]'
+                              : 'bg-[#D92321]/20 text-[#ff8a88]'
+                      }`}
+                    >
+                      {task.status === 'running'
+                        ? 'جارية'
+                        : task.status === 'completed'
+                          ? 'مكتملة'
+                          : task.status === 'cancelled'
+                            ? 'متوقفة'
+                            : 'فشلت'}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="lg:col-span-6 rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 space-y-3.5">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="font-display text-sm font-extrabold text-white flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-[#f9c400]" />
+              <span>أحدث تنبيهات المتصفح ({clientErrors.length})</span>
+            </h3>
+            <button
+              type="button"
+              onClick={() => onNavigateTab('audit_logs')}
+              className="text-[11px] font-extrabold text-[#f9c400] hover:underline cursor-pointer"
+            >
+              فتح السجل الكامل &larr;
+            </button>
+          </div>
+
+          {clientErrors.length === 0 ? (
+            <p className="rounded-2xl bg-[#4CAF50]/10 border border-[#4CAF50]/25 p-4 text-xs font-bold text-[#4CAF50]">
+              لا توجد أخطاء متصفح مسجلة — التطبيق يعمل باستقرار.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {clientErrors.slice(0, 4).map((err) => (
+                <div
+                  key={err.id}
+                  className="rounded-2xl bg-[#1a242e]/65 border border-white/[0.06] px-3.5 py-2.5 text-xs space-y-1"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-latin text-[10px] font-black text-[#f9c400] truncate">
+                      {err.scope}
+                    </span>
+                    <span className="font-latin text-[10px] text-[#b7c9ef] tabular-nums shrink-0">
+                      {new Date(err.createdAt).toLocaleTimeString('en-GB', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-white/90 line-clamp-1">{err.message}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Recently Added Works + Servers Summary */}
+      <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 space-y-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <h3 className="font-display text-sm font-extrabold text-white">
+              أحدث الأعمال في المكتبة
+            </h3>
+            <span className="text-[11px] font-bold text-[#b7c9ef] tabular-nums">
+              {metrics.totalSeasons} موسم • {metrics.totalEpisodes} حلقة • {metrics.healthyServers} سيرفر سليم
+              {metrics.suspiciousServers > 0 ? ` • ${metrics.suspiciousServers} رابط يحتاج مراجعة` : ''}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigateTab('catalog')}
+            className="text-[11px] font-extrabold text-[#f9c400] hover:underline cursor-pointer"
+          >
+            إدارة الكتالوج بالكامل &larr;
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          {recentMedia.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onEditMedia(item)}
+              className="group flex items-center gap-3 rounded-2xl bg-[#1a242e]/70 hover:bg-[#1a242e] border border-white/[0.06] hover:border-[#D92321]/50 p-2.5 text-right transition-all cursor-pointer"
+            >
+              <img
+                src={getPosterUrl(item)}
+                alt={item.title}
+                loading="lazy"
+                decoding="async"
+                referrerPolicy="no-referrer"
+                className="h-14 w-10 rounded-lg object-cover shrink-0 bg-[#06131c]"
+              />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-extrabold text-white group-hover:text-[#f9c400] truncate">
+                  {item.title}
+                </p>
+                <p className="text-[10px] text-[#b7c9ef] mt-0.5 truncate">
+                  {KIND_LABELS[item.kind]} • {item.year} • ★ {(Number(item.imdb) || 0).toFixed(1)}
+                </p>
+              </div>
+            </button>
+          ))}
         </div>
       </div>
 
