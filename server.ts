@@ -9,12 +9,14 @@ import {
   cleanExternalSearchTitle,
   extractBackgroundImageUrl,
   extractCleanEnglishTitleCandidate,
+  extractImdbIdFromText,
   extractJsonLdImageUrl,
   extractJsonLdNodes,
   isJunkImageCandidate,
+  isLowTrustScrapedPosterUrl,
   parseSrcsetBestUrl,
   scoreExternalTitleMatch,
-} from './src/lib/imageMatching';
+} from './src/lib/imageMatching.ts';
 
 const PORT = 3000;
 
@@ -353,27 +355,32 @@ function extractBestImageFromElementServer(
   return '';
 }
 
+const EXCLUDED_POSTER_CONTAINERS_SELECTOR =
+  'header, nav, footer, aside, .navbar, .related, .related-videos, .similar, .recommended, .suggest, .comments, .sidebar, .widget, .carousel, .owl-carousel, .swiper, .pm-ul-carousel-videos, [class*="related"], [class*="similar"], [class*="widget"], [id*="related"], [id*="sidebar"]';
+
 function pickFirstValidImageFromSelectorsServer(
   $: cheerio.CheerioAPI,
   selectors: string,
   baseUrl: string,
-  skipChromeAndRelated = false
+  skipChromeAndRelated = true
 ): string {
   let found = '';
+  let lowTrustFallback = '';
   $(selectors).each((_, el) => {
     if (found) return;
     const $el = $(el);
-    if (
-      skipChromeAndRelated &&
-      $el.closest('header, nav, footer, aside, .navbar, .related, .similar, .comments, .sidebar')
-        .length > 0
-    ) {
+    if (skipChromeAndRelated && $el.closest(EXCLUDED_POSTER_CONTAINERS_SELECTOR).length > 0) {
       return;
     }
     const candidate = extractBestImageFromElementServer($, $el, baseUrl);
-    if (candidate) found = candidate;
+    if (!candidate) return;
+    if (isLowTrustScrapedPosterUrl(candidate)) {
+      if (!lowTrustFallback) lowTrustFallback = candidate;
+      return;
+    }
+    found = candidate;
   });
-  return found;
+  return found || lowTrustFallback;
 }
 
 async function queryTmdbHighResImages(params: {
@@ -517,27 +524,379 @@ async function queryTmdbHighResImages(params: {
   }
 }
 
+function buildCandidateSearchQueriesServer(
+  title: string,
+  englishTitle: string,
+  extraTitle?: string
+): string[] {
+  const candidates = [
+    cleanExternalSearchTitle(title, englishTitle),
+    extraTitle ? cleanExternalSearchTitle(extraTitle, extraTitle) : '',
+    extractCleanEnglishTitleCandidate(title),
+    cleanExternalSearchTitle(title, ''),
+  ];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const q of candidates) {
+    const clean = q.trim();
+    const key = clean.toLowerCase();
+    if (clean.length >= 2 && !seen.has(key)) {
+      seen.add(key);
+      out.push(clean);
+    }
+  }
+  return out;
+}
+
+const WIKIDATA_FILM_QIDS_SERVER = new Set([
+  'Q11424',
+  'Q24869',
+  'Q202866',
+  'Q226730',
+  'Q506240',
+  'Q24856',
+]);
+const WIKIDATA_SERIES_QIDS_SERVER = new Set([
+  'Q5398426',
+  'Q1259759',
+  'Q1107',
+  'Q63952888',
+  'Q581714',
+  'Q15416',
+]);
+
+async function queryWikidataBridgeServer(params: {
+  queries: string[];
+  title: string;
+  englishTitle: string;
+  year: string;
+  kind: string;
+}): Promise<{ imdbId: string; englishTitle: string; year: string } | null> {
+  const { queries, title, englishTitle, year, kind } = params;
+  for (const term of queries.slice(0, 2)) {
+    const hasArabic = /[\u0600-\u06FF]/.test(term);
+    const langs = hasArabic ? ['ar', 'en'] : ['en', 'ar'];
+    for (const lang of langs) {
+      try {
+        const sRes = await fetch(
+          `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(term)}&language=${lang}&limit=6&format=json`,
+          { signal: AbortSignal.timeout(5500) }
+        );
+        if (!sRes.ok) continue;
+        const sJson = (await sRes.json()) as { search?: Array<{ id?: string }> };
+        const ids = (sJson.search || []).map((s) => s.id).filter((id): id is string => Boolean(id));
+        if (!ids.length) continue;
+
+        const eRes = await fetch(
+          `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${ids.join('|')}&props=labels|aliases|claims&languages=ar|en&format=json`,
+          { signal: AbortSignal.timeout(5500) }
+        );
+        if (!eRes.ok) continue;
+        const eJson = (await eRes.json()) as {
+          entities?: Record<
+            string,
+            {
+              labels?: { ar?: { value?: string }; en?: { value?: string } };
+              aliases?: { ar?: Array<{ value?: string }>; en?: Array<{ value?: string }> };
+              claims?: Record<
+                string,
+                Array<{ mainsnak?: { datavalue?: { value?: string | { id?: string; time?: string } } } }>
+              >;
+            }
+          >;
+        };
+
+        let bestMatch: { score: number; imdbId: string; englishTitle: string; year: string } | null = null;
+        for (const id of ids) {
+          const ent = eJson.entities?.[id];
+          if (!ent?.claims) continue;
+          const imdbVal = ent.claims.P345?.[0]?.mainsnak?.datavalue?.value;
+          const imdbId = typeof imdbVal === 'string' && /^tt\d{6,10}$/i.test(imdbVal) ? imdbVal : '';
+          if (!imdbId) continue;
+
+          const p31Ids = (ent.claims.P31 || [])
+            .map((c) => {
+              const v = c?.mainsnak?.datavalue?.value;
+              return typeof v === 'object' && v?.id ? v.id : '';
+            })
+            .filter(Boolean);
+          const isSeriesQid = p31Ids.some((q) => WIKIDATA_SERIES_QIDS_SERVER.has(q));
+          const isFilmQid = p31Ids.some((q) => WIKIDATA_FILM_QIDS_SERVER.has(q));
+          if (kind === 'movie' && isSeriesQid && !isFilmQid) continue;
+          if (kind === 'series' && isFilmQid && !isSeriesQid) continue;
+
+          const dateVal =
+            ent.claims.P577?.[0]?.mainsnak?.datavalue?.value ||
+            ent.claims.P580?.[0]?.mainsnak?.datavalue?.value;
+          const candYear =
+            typeof dateVal === 'object' && dateVal?.time
+              ? dateVal.time.match(/(\d{4})/)?.[1] || ''
+              : '';
+
+          const check = scoreExternalTitleMatch({
+            queryTitle: title,
+            englishTitle,
+            expectedYear: year,
+            expectedYearExplicit: Boolean(year && year !== '2026'),
+            candidateTitles: [
+              ent.labels?.ar?.value,
+              ent.labels?.en?.value,
+              ...(ent.aliases?.ar || []).map((a) => a.value),
+              ...(ent.aliases?.en || []).map((a) => a.value),
+            ],
+            candidateYear: candYear,
+          });
+          if (check.matched && (!bestMatch || check.score > bestMatch.score)) {
+            bestMatch = {
+              score: check.score,
+              imdbId,
+              englishTitle: ent.labels?.en?.value || ent.labels?.ar?.value || '',
+              year: candYear,
+            };
+          }
+        }
+        if (bestMatch) return { imdbId: bestMatch.imdbId, englishTitle: bestMatch.englishTitle, year: bestMatch.year };
+      } catch {
+        // ignore Wikidata error
+      }
+    }
+  }
+  return null;
+}
+
+async function queryImdbSuggestionServer(params: {
+  queries: string[];
+  imdbId?: string;
+  title: string;
+  englishTitle: string;
+  year: string;
+  kind: string;
+}): Promise<{ imdbId: string; poster: string; pw: number; ph: number } | null> {
+  const { queries, imdbId = '', title, englishTitle, year, kind } = params;
+  const searchList = imdbId ? [imdbId, ...queries] : queries;
+  interface ImdbSuggestEntry {
+    id?: string;
+    l?: string;
+    qid?: string;
+    y?: number;
+    i?: { imageUrl?: string; width?: number; height?: number };
+  }
+
+  for (const rawQ of searchList.slice(0, 3)) {
+    const cleanQ = rawQ.trim();
+    if (cleanQ.length < 2) continue;
+    const isDirectId = /^tt\d{6,10}$/i.test(cleanQ);
+    const firstChar = cleanQ.charAt(0).toLowerCase();
+    const prefix = /[a-z0-9]/.test(firstChar) ? firstChar : 'a';
+    try {
+      const res = await fetch(
+        `https://v3.sg.media-imdb.com/suggestion/${prefix}/${encodeURIComponent(cleanQ.toLowerCase())}.json`,
+        { signal: AbortSignal.timeout(6500) }
+      );
+      if (!res.ok) continue;
+      const json = (await res.json()) as { d?: ImdbSuggestEntry[] };
+      let best: { score: number; entry: ImdbSuggestEntry } | null = null;
+      for (const item of (json.d || []).slice(0, 10)) {
+        if (!item?.id || !/^tt\d+$/i.test(item.id) || !item.i?.imageUrl) continue;
+        const qid = (item.qid || '').toLowerCase();
+        if (kind === 'movie' && qid && !['movie', 'feature', 'tvmovie', 'short', 'video'].includes(qid)) {
+          continue;
+        }
+        if (kind === 'series' && qid && !['tvseries', 'tvminiseries'].includes(qid)) {
+          continue;
+        }
+        if (isDirectId && item.id.toLowerCase() === cleanQ.toLowerCase()) {
+          best = { score: 2, entry: item };
+          break;
+        }
+        const check = scoreExternalTitleMatch({
+          queryTitle: title,
+          englishTitle,
+          expectedYear: year,
+          expectedYearExplicit: Boolean(year && year !== '2026'),
+          candidateTitles: [item.l],
+          candidateYear: item.y ? String(item.y) : undefined,
+        });
+        if (check.matched && (!best || check.score > best.score)) {
+          best = { score: check.score, entry: item };
+        }
+      }
+      if (best?.entry?.id && best.entry.i?.imageUrl) {
+        return {
+          imdbId: best.entry.id,
+          poster: upgradeKnownImageUrlServer(best.entry.i.imageUrl),
+          pw: best.entry.i.width || 0,
+          ph: best.entry.i.height || 0,
+        };
+      }
+    } catch {
+      // ignore IMDb suggestion error
+    }
+  }
+  return null;
+}
+
+async function queryCinemetaImagesServer(params: {
+  queries: string[];
+  imdbId?: string;
+  title: string;
+  englishTitle: string;
+  year: string;
+  kind: string;
+}): Promise<{
+  imdbId: string;
+  poster: string;
+  backdrop: string;
+  pw: number;
+  ph: number;
+  bw: number;
+  bh: number;
+  source: string;
+} | null> {
+  const { queries, imdbId = '', title, englishTitle, year, kind } = params;
+  const cmType = kind === 'series' ? 'series' : 'movie';
+
+  const resolveFromImdbId = async (ttId: string) => {
+    try {
+      const metaRes = await fetch(
+        `https://v3-cinemeta.strem.io/meta/${cmType}/${encodeURIComponent(ttId)}.json`,
+        { signal: AbortSignal.timeout(6000) }
+      );
+      let metaPoster = '';
+      let metaBackdrop = '';
+      if (metaRes.ok) {
+        const metaJson = (await metaRes.json()) as {
+          meta?: { poster?: string; background?: string };
+        };
+        metaPoster = metaJson.meta?.poster || '';
+        metaBackdrop = metaJson.meta?.background || '';
+      }
+      const largePoster = `https://images.metahub.space/poster/large/${ttId}/img`;
+      const largeBackdrop = `https://images.metahub.space/background/large/${ttId}/img`;
+
+      const [pLarge, bLarge] = await Promise.all([
+        probeRemoteImageDimensions(largePoster, 5500),
+        probeRemoteImageDimensions(largeBackdrop, 5500),
+      ]);
+
+      let poster = '';
+      let pw = 0;
+      let ph = 0;
+      if (pLarge.ok && pLarge.height >= pLarge.width) {
+        poster = largePoster;
+        pw = pLarge.width;
+        ph = pLarge.height;
+      } else if (metaPoster) {
+        const pMeta = await probeRemoteImageDimensions(metaPoster, 5000);
+        if (pMeta.ok && pMeta.height >= pMeta.width) {
+          poster = metaPoster;
+          pw = pMeta.width;
+          ph = pMeta.height;
+        }
+      }
+
+      let backdrop = '';
+      let bw = 0;
+      let bh = 0;
+      if (bLarge.ok && bLarge.width > bLarge.height) {
+        backdrop = largeBackdrop;
+        bw = bLarge.width;
+        bh = bLarge.height;
+      } else if (metaBackdrop) {
+        const bMeta = await probeRemoteImageDimensions(metaBackdrop, 5000);
+        if (bMeta.ok && bMeta.width > bMeta.height) {
+          backdrop = metaBackdrop;
+          bw = bMeta.width;
+          bh = bMeta.height;
+        }
+      }
+
+      if (!poster && !backdrop) return null;
+      return {
+        imdbId: ttId,
+        poster,
+        backdrop,
+        pw,
+        ph,
+        bw,
+        bh,
+        source: backdrop ? 'cinemeta' : 'metahub',
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  if (imdbId && /^tt\d{6,10}$/i.test(imdbId)) {
+    const byId = await resolveFromImdbId(imdbId);
+    if (byId) return byId;
+  }
+
+  for (const q of queries.slice(0, 3)) {
+    try {
+      const searchRes = await fetch(
+        `https://v3-cinemeta.strem.io/catalog/${cmType}/top/search=${encodeURIComponent(q)}.json`,
+        { signal: AbortSignal.timeout(6500) }
+      );
+      if (!searchRes.ok) continue;
+      const json = (await searchRes.json()) as {
+        metas?: Array<{ id?: string; name?: string; releaseInfo?: string; year?: string | number }>;
+      };
+      let bestTtId = '';
+      let bestScore = 0;
+      for (const m of (json.metas || []).slice(0, 10)) {
+        if (!m?.id || !/^tt\d+$/i.test(m.id) || !m.name) continue;
+        const candYear = String(m.year || m.releaseInfo || '').slice(0, 4);
+        const check = scoreExternalTitleMatch({
+          queryTitle: title,
+          englishTitle,
+          expectedYear: year,
+          expectedYearExplicit: Boolean(year && year !== '2026'),
+          candidateTitles: [m.name],
+          candidateYear: candYear,
+        });
+        if (check.matched && check.score > bestScore) {
+          bestScore = check.score;
+          bestTtId = m.id;
+        }
+      }
+      if (bestTtId) {
+        const resolved = await resolveFromImdbId(bestTtId);
+        if (resolved) return resolved;
+      }
+    } catch {
+      // ignore Cinemeta search error
+    }
+  }
+  return null;
+}
+
 async function resolveHighResImagesServer(params: {
   title: string;
   englishTitle?: string;
   year?: string;
   kind?: string;
+  imdbId?: string;
   currentPoster?: string;
   currentBackdrop?: string;
+  preferOfficial?: boolean;
 }) {
   const {
     title,
     englishTitle = '',
     year = '',
     kind = 'movie',
+    imdbId = '',
     currentPoster = '',
     currentBackdrop = '',
+    preferOfficial = false,
   } = params;
 
   const sanitizedCurrentPoster = isJunkImageCandidate(currentPoster) ? '' : currentPoster;
   const sanitizedCurrentBackdrop = isJunkImageCandidate(currentBackdrop) ? '' : currentBackdrop;
 
-  const cleanQuery = cleanExternalSearchTitle(title, englishTitle);
+  const queries = buildCandidateSearchQueriesServer(title, englishTitle);
+  const cleanQuery = queries[0] || '';
   const candidatePoster = sanitizedCurrentPoster ? upgradeKnownImageUrlServer(sanitizedCurrentPoster) : '';
   const candidateBackdrop =
     sanitizedCurrentBackdrop && sanitizedCurrentBackdrop !== sanitizedCurrentPoster
@@ -559,52 +918,176 @@ async function resolveHighResImagesServer(params: {
   let backdrop_height = curB?.ok && curB.width > curB.height ? curB.height : 0;
   let image_source = poster_url || backdrop_url ? 'scraped' : 'none';
 
-  const hasUnmeasuredScrapedPoster = Boolean(candidatePoster && !curP?.ok);
+  const posterIsLandscape = poster_width > 0 && poster_height > 0 && poster_width > poster_height * 1.05;
+  const posterIsLowTrust = isLowTrustScrapedPosterUrl(poster_url) || posterIsLandscape;
+
+  const tryAcceptOfficialPosterServer = async (
+    candUrl: string,
+    knownW: number,
+    knownH: number,
+    sourceLabel: string
+  ) => {
+    if (!candUrl) return false;
+    let cw = knownW;
+    let ch = knownH;
+    if (!cw || !ch) {
+      const pr = await probeRemoteImageDimensions(candUrl);
+      if (!pr.ok) return false;
+      cw = pr.width;
+      ch = pr.height;
+    }
+    if (ch < cw || cw < 500) return false;
+
+    const alreadyOfficial =
+      image_source === 'tmdb' || image_source === 'imdb' || image_source === 'cinemeta' || image_source === 'metahub';
+    const shouldReplace =
+      !poster_url ||
+      posterIsLowTrust ||
+      poster_width === 0 ||
+      (preferOfficial && !alreadyOfficial) ||
+      cw > poster_width;
+
+    if (shouldReplace) {
+      poster_url = candUrl;
+      poster_width = cw;
+      poster_height = ch;
+      image_source = sourceLabel;
+      return true;
+    }
+    return false;
+  };
+
+  const tryAcceptOfficialBackdropServer = async (
+    candUrl: string,
+    knownW: number,
+    knownH: number,
+    sourceLabel: string
+  ) => {
+    if (!candUrl) return false;
+    let cw = knownW;
+    let ch = knownH;
+    if (!cw || !ch) {
+      const br = await probeRemoteImageDimensions(candUrl);
+      if (!br.ok) return false;
+      cw = br.width;
+      ch = br.height;
+    }
+    if (cw <= ch || cw < 960) return false;
+    if (!backdrop_url || cw > backdrop_width) {
+      backdrop_url = candUrl;
+      backdrop_width = cw;
+      backdrop_height = ch;
+      if (image_source === 'scraped' || image_source === 'none') {
+        image_source = sourceLabel;
+      }
+      return true;
+    }
+    return false;
+  };
 
   // Prefer TMDB genuine 2:3 & 16:9 high-res assets when title+year verified
   if (tmdbRes) {
     if (tmdbRes.poster_url) {
-      let pw = tmdbRes.poster_width;
-      let ph = tmdbRes.poster_height;
-      if (!pw || !ph) {
-        const pr = await probeRemoteImageDimensions(tmdbRes.poster_url);
-        if (pr.ok) {
-          pw = pr.width;
-          ph = pr.height;
-        }
-      }
-      const minWidth = hasUnmeasuredScrapedPoster ? 500 : Math.max(500, poster_width);
-      if (pw >= minWidth && (ph === 0 || ph >= pw)) {
-        poster_url = tmdbRes.poster_url;
-        poster_width = pw;
-        poster_height = ph;
-        image_source = 'tmdb';
-      }
+      await tryAcceptOfficialPosterServer(tmdbRes.poster_url, tmdbRes.poster_width, tmdbRes.poster_height, 'tmdb');
     }
     if (tmdbRes.backdrop_url) {
-      let bw = tmdbRes.backdrop_width;
-      let bh = tmdbRes.backdrop_height;
-      if (!bw || !bh) {
-        const br = await probeRemoteImageDimensions(tmdbRes.backdrop_url);
-        if (br.ok) {
-          bw = br.width;
-          bh = br.height;
-        }
+      await tryAcceptOfficialBackdropServer(tmdbRes.backdrop_url, tmdbRes.backdrop_width, tmdbRes.backdrop_height, 'tmdb');
+    }
+  }
+
+  const needsOfficialPoster =
+    preferOfficial || !poster_url || poster_width === 0 || poster_width < 900 || posterIsLowTrust;
+  const needsOfficialBackdrop = !backdrop_url || backdrop_width < 1200;
+
+  let resolvedImdbId = imdbId;
+  let extraEngTitle = '';
+  let extraYear = year;
+
+  const hasArabicOnlyQuery =
+    queries.length > 0 && queries.every((q) => /[\u0600-\u06FF]/.test(q) && !/[A-Za-z]{2,}/.test(q));
+
+  if (!resolvedImdbId && hasArabicOnlyQuery && (needsOfficialPoster || needsOfficialBackdrop)) {
+    const wikiRes = await queryWikidataBridgeServer({ queries, title, englishTitle, year, kind });
+    if (wikiRes) {
+      resolvedImdbId = wikiRes.imdbId;
+      extraEngTitle = wikiRes.englishTitle;
+      if (!year && wikiRes.year) extraYear = wikiRes.year;
+    }
+  }
+
+  const expandedQueries = buildCandidateSearchQueriesServer(title, englishTitle, extraEngTitle);
+  const searchEng = extraEngTitle || englishTitle;
+
+  // IMDb Suggestion API
+  if ((needsOfficialPoster || needsOfficialBackdrop) && image_source !== 'tmdb' && (expandedQueries.length > 0 || resolvedImdbId)) {
+    const imdbRes = await queryImdbSuggestionServer({
+      queries: expandedQueries,
+      imdbId: resolvedImdbId,
+      title,
+      englishTitle: searchEng,
+      year: extraYear,
+      kind,
+    });
+    if (imdbRes) {
+      if (imdbRes.imdbId && !resolvedImdbId) resolvedImdbId = imdbRes.imdbId;
+      if (imdbRes.poster) {
+        await tryAcceptOfficialPosterServer(imdbRes.poster, imdbRes.pw, imdbRes.ph, 'imdb');
       }
-      if (bw > bh && bw >= Math.max(1000, backdrop_width)) {
-        backdrop_url = tmdbRes.backdrop_url;
-        backdrop_width = bw;
-        backdrop_height = bh;
-        image_source = 'tmdb';
+    }
+  }
+
+  // Wikidata bridge fallback if IMDb Suggestion didn't match directly
+  if (!resolvedImdbId && expandedQueries.length > 0 && image_source !== 'tmdb' && (needsOfficialPoster || needsOfficialBackdrop)) {
+    const wikiRes = await queryWikidataBridgeServer({
+      queries: expandedQueries,
+      title,
+      englishTitle: searchEng,
+      year: extraYear,
+      kind,
+    });
+    if (wikiRes?.imdbId) {
+      resolvedImdbId = wikiRes.imdbId;
+      if (wikiRes.englishTitle) extraEngTitle = wikiRes.englishTitle;
+      const imdbByWikiId = await queryImdbSuggestionServer({
+        queries: [],
+        imdbId: resolvedImdbId,
+        title,
+        englishTitle: extraEngTitle || searchEng,
+        year: extraYear,
+        kind,
+      });
+      if (imdbByWikiId?.poster) {
+        await tryAcceptOfficialPosterServer(imdbByWikiId.poster, imdbByWikiId.pw, imdbByWikiId.ph, 'imdb');
+      }
+    }
+  }
+
+  // Cinemeta + Metahub (16:9 Backdrops + Official Posters)
+  if ((needsOfficialPoster || needsOfficialBackdrop) && (resolvedImdbId || expandedQueries.length > 0)) {
+    const cmRes = await queryCinemetaImagesServer({
+      queries: buildCandidateSearchQueriesServer(title, searchEng, extraEngTitle),
+      imdbId: resolvedImdbId,
+      title,
+      englishTitle: searchEng,
+      year: extraYear,
+      kind,
+    });
+    if (cmRes) {
+      if (cmRes.poster && (preferOfficial || posterIsLowTrust || !poster_url || poster_width < 700)) {
+        await tryAcceptOfficialPosterServer(cmRes.poster, cmRes.pw, cmRes.ph, cmRes.source);
+      }
+      if (cmRes.backdrop) {
+        await tryAcceptOfficialBackdropServer(cmRes.backdrop, cmRes.bw, cmRes.bh, cmRes.source);
       }
     }
   }
 
   // TVmaze fallback ONLY for TV series, strictly verified by title + year via /search/shows
-  if (cleanQuery && kind === 'series' && (!backdrop_url || poster_width < 800)) {
+  const primaryQuery = expandedQueries[0] || '';
+  if (primaryQuery && kind === 'series' && (!backdrop_url || poster_width < 800 || posterIsLowTrust)) {
     try {
       const searchRes = await fetch(
-        `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(cleanQuery)}`,
+        `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(primaryQuery)}`,
         { signal: AbortSignal.timeout(6000) }
       );
       if (searchRes.ok) {
@@ -618,9 +1101,9 @@ async function resolveHighResImagesServer(params: {
           if (!show?.id || !show.name) continue;
           const check = scoreExternalTitleMatch({
             queryTitle: title,
-            englishTitle,
-            expectedYear: year,
-            expectedYearExplicit: Boolean(year && year !== '2026'),
+            englishTitle: searchEng,
+            expectedYear: extraYear,
+            expectedYearExplicit: Boolean(extraYear && extraYear !== '2026'),
             candidateTitles: [show.name],
             candidateYear: show.premiered?.slice(0, 4),
           });
@@ -661,41 +1144,10 @@ async function resolveHighResImagesServer(params: {
               ?.resolutions?.original;
 
             if (pBest?.url) {
-              let pw = pBest.width || 0;
-              let ph = pBest.height || 0;
-              if (!pw) {
-                const pCheck = await probeRemoteImageDimensions(pBest.url);
-                if (pCheck.ok) {
-                  pw = pCheck.width;
-                  ph = pCheck.height;
-                }
-              }
-              const minWidth = hasUnmeasuredScrapedPoster ? 600 : poster_width + 1;
-              if (pw >= minWidth && (ph === 0 || ph >= pw)) {
-                poster_url = pBest.url;
-                poster_width = pw;
-                poster_height = ph;
-                image_source = 'tvmaze';
-              }
+              await tryAcceptOfficialPosterServer(pBest.url, pBest.width || 0, pBest.height || 0, 'tvmaze');
             }
-            if (bBest?.url && (bBest.width || 0) > backdrop_width) {
-              let bw = bBest.width || 0;
-              let bh = bBest.height || 0;
-              if (!bw) {
-                const bCheck = await probeRemoteImageDimensions(bBest.url);
-                if (bCheck.ok && bCheck.width > bCheck.height) {
-                  bw = bCheck.width;
-                  bh = bCheck.height;
-                }
-              }
-              if (bw > bh && bw >= Math.max(1000, backdrop_width)) {
-                backdrop_url = bBest.url;
-                backdrop_width = bw;
-                backdrop_height = bh;
-                if (image_source === 'scraped' || image_source === 'none') {
-                  image_source = 'tvmaze';
-                }
-              }
+            if (bBest?.url) {
+              await tryAcceptOfficialBackdropServer(bBest.url, bBest.width || 0, bBest.height || 0, 'tvmaze');
             }
           }
         }
@@ -706,10 +1158,10 @@ async function resolveHighResImagesServer(params: {
   }
 
   // iTunes fallback ONLY for movies, verified strictly against movie title & year
-  if (cleanQuery && kind === 'movie' && poster_width < 800) {
+  if (primaryQuery && kind === 'movie' && (poster_width < 800 || posterIsLowTrust) && image_source !== 'imdb' && image_source !== 'tmdb') {
     try {
       const itRes = await fetch(
-        `https://itunes.apple.com/search?term=${encodeURIComponent(cleanQuery)}&media=movie&entity=movie&limit=8`,
+        `https://itunes.apple.com/search?term=${encodeURIComponent(primaryQuery)}&media=movie&entity=movie&limit=8`,
         { signal: AbortSignal.timeout(6000) }
       );
       if (itRes.ok) {
@@ -727,9 +1179,9 @@ async function resolveHighResImagesServer(params: {
           if (!r.artworkUrl100) continue;
           const check = scoreExternalTitleMatch({
             queryTitle: title,
-            englishTitle,
-            expectedYear: year,
-            expectedYearExplicit: Boolean(year && year !== '2026'),
+            englishTitle: searchEng,
+            expectedYear: extraYear,
+            expectedYearExplicit: Boolean(extraYear && extraYear !== '2026'),
             candidateTitles: [r.trackName, r.collectionName],
             candidateYear: r.releaseDate?.slice(0, 4),
           });
@@ -739,16 +1191,7 @@ async function resolveHighResImagesServer(params: {
           }
         }
         if (bestArt) {
-          const itProbe = await probeRemoteImageDimensions(bestArt);
-          const minWidth = hasUnmeasuredScrapedPoster ? 600 : poster_width + 1;
-          if (itProbe.ok && itProbe.height >= itProbe.width && itProbe.width >= minWidth) {
-            poster_url = itProbe.url;
-            poster_width = itProbe.width;
-            poster_height = itProbe.height;
-            if (image_source === 'scraped' || image_source === 'none') {
-              image_source = 'itunes';
-            }
-          }
+          await tryAcceptOfficialPosterServer(bestArt, 0, 0, 'itunes');
         }
       }
     } catch {
@@ -923,6 +1366,7 @@ function parseHtmlToMediaWithHints(
   let jsonLdTrailer = '';
   let jsonLdImdb = 0;
   let jsonLdType = '';
+  let jsonLdImdbId = '';
   const jsonLdCast: { name: string; role: string; initials: string }[] = [];
 
   $('script[type="application/ld+json"]').each((_, el) => {
@@ -931,6 +1375,11 @@ function parseHtmlToMediaWithHints(
       const typeVal = String(obj['@type'] || '');
       if (typeVal === 'Movie' || typeVal === 'TVSeries') {
         jsonLdType = typeVal;
+        if (obj.sameAs && !jsonLdImdbId) {
+          const sameAsStr = Array.isArray(obj.sameAs) ? obj.sameAs.join(' ') : String(obj.sameAs);
+          const foundId = extractImdbIdFromText(sameAsStr);
+          if (foundId) jsonLdImdbId = foundId;
+        }
         if (obj.name && !jsonLdTitle) jsonLdTitle = cleanText(String(obj.name));
         if (obj.description && !jsonLdDesc) jsonLdDesc = cleanText(String(obj.description));
         if (obj.image && !jsonLdImage) {
@@ -1008,17 +1457,36 @@ function parseHtmlToMediaWithHints(
     ? ''
     : upgradeKnownImageUrlServer(jsonLdImage);
 
-  const singlePoster =
+  const strictSinglePoster =
     pickFirstValidImageFromSelectorsServer(
       $,
-      '.single-poster img, .single-right img, .poster img, .movie-poster img, .film-poster img, .entry-poster img, .pm-video-thumb img, .video-thumb img, .Thumb--GridItem img, .Poster--Block img, img[itemprop="image"], meta[itemprop="image"]',
-      sourceUrl
+      '.single-poster img, .single-right img, .movie-poster img, .film-poster img, .entry-poster img, img[itemprop="image"], meta[itemprop="image"], link[rel="image_src"]',
+      sourceUrl,
+      true
     ) ||
     pickFirstValidImageFromSelectorsServer(
       $,
-      '.single-poster, .single-right, .poster, .movie-poster, .film-poster, .entry-poster, .Thumb--GridItem, .Poster--Block, [data-poster], [data-bg]',
-      sourceUrl
+      '.single-poster, .single-right, .movie-poster, .film-poster, .entry-poster, [data-poster]',
+      sourceUrl,
+      true
     );
+
+  const genericPoster =
+    strictSinglePoster ||
+    pickFirstValidImageFromSelectorsServer(
+      $,
+      '.poster img, .pm-video-thumb img, .video-thumb img, .Thumb--GridItem img, .Poster--Block img',
+      sourceUrl,
+      true
+    ) ||
+    pickFirstValidImageFromSelectorsServer(
+      $,
+      '.poster, .Thumb--GridItem, .Poster--Block, [data-bg]',
+      sourceUrl,
+      true
+    );
+
+  const singlePoster = strictSinglePoster || genericPoster;
 
   const fallbackBodyPoster =
     singlePoster || ogImage || safeJsonLdImage || twitterImage
@@ -1034,12 +1502,22 @@ function parseHtmlToMediaWithHints(
     pickFirstValidImageFromSelectorsServer(
       $,
       '.backdrop img, .hero img, .hero-bg img, .cover img, .single-cover img, .movie-backdrop img, .single-cover, .movie-backdrop',
-      sourceUrl
+      sourceUrl,
+      true
     ) ||
     upgradeKnownImageUrlServer(resolveUrl(sourceUrl, $('video').first().attr('poster')));
 
-  const poster =
-    singlePoster || ogImage || safeJsonLdImage || twitterImage || fallbackBodyPoster || '';
+  const cleanCandidates = [
+    strictSinglePoster,
+    safeJsonLdImage,
+    ogImage,
+    genericPoster,
+    twitterImage,
+    fallbackBodyPoster,
+  ].filter(Boolean);
+  const preferredCleanPoster = cleanCandidates.find((u) => !isLowTrustScrapedPosterUrl(u));
+  const poster = preferredCleanPoster || cleanCandidates[0] || '';
+
   const cleanExplicitBackdrop = isJunkImageCandidate(explicitBackdrop) ? '' : explicitBackdrop;
   const distinctBackdropCandidate =
     cleanExplicitBackdrop && cleanExplicitBackdrop !== poster
@@ -1050,6 +1528,7 @@ function parseHtmlToMediaWithHints(
           ? ogImage
           : '';
   const backdrop = distinctBackdropCandidate;
+  const extractedImdbId = jsonLdImdbId || extractImdbIdFromText(html);
 
   // 4. Story / Description
   const storySelector = cleanText(
@@ -1647,6 +2126,7 @@ function parseHtmlToMediaWithHints(
     tagline: story.slice(0, 140),
     story,
     sourceUrl: sourceUrl || '',
+    imdbId: extractedImdbId || '',
     shortUrl: '',
     trailerUrl,
     cast: jsonLdCast,
@@ -2194,8 +2674,10 @@ async function scrapeFullItemWithSubpages(
           englishTitle: media.englishTitle,
           year: media.year,
           kind: media.kind,
+          imdbId: media.imdbId,
           currentPoster: media.poster,
           currentBackdrop: media.backdrop,
+          preferOfficial: true,
         }),
   ]);
 
@@ -2766,6 +3248,7 @@ async function startServer() {
                 tagline: card.title,
                 story: card.title,
                 sourceUrl: card.url,
+                imdbId: '',
                 shortUrl: '',
                 trailerUrl: '',
                 cast: [],
@@ -2808,6 +3291,7 @@ async function startServer() {
             tagline: card.title,
             story: card.title,
             sourceUrl: card.url,
+            imdbId: '',
             shortUrl: '',
             trailerUrl: '',
             cast: [],
@@ -3363,7 +3847,7 @@ async function startServer() {
     }
   });
 
-  // Resolve independent high-res 2:3 Portrait Poster & 16:9 Landscape Backdrop (server-side TMDB + fallbacks + dimension verification)
+  // Resolve independent high-res 2:3 Portrait Poster & 16:9 Landscape Backdrop (server-side TMDB + IMDb + Cinemeta + Wikidata + dimension verification)
   app.post('/api/images/resolve', async (req, res) => {
     try {
       const body = (req.body || {}) as {
@@ -3371,10 +3855,12 @@ async function startServer() {
         englishTitle?: string;
         year?: string;
         kind?: string;
+        imdbId?: string;
         currentPoster?: string;
         currentBackdrop?: string;
+        preferOfficial?: boolean;
       };
-      if (!body.title && !body.englishTitle && !body.currentPoster) {
+      if (!body.title && !body.englishTitle && !body.currentPoster && !body.imdbId) {
         return res.status(400).json({ ok: false, error: 'title or currentPoster required' });
       }
       const result = await resolveHighResImagesServer({
@@ -3382,8 +3868,10 @@ async function startServer() {
         englishTitle: String(body.englishTitle || ''),
         year: String(body.year || ''),
         kind: String(body.kind || 'movie'),
+        imdbId: String(body.imdbId || ''),
         currentPoster: String(body.currentPoster || ''),
         currentBackdrop: String(body.currentBackdrop || ''),
+        preferOfficial: Boolean(body.preferOfficial),
       });
       return res.json({ ok: true, result });
     } catch (err) {

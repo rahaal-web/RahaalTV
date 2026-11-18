@@ -241,6 +241,7 @@ export function AdminImageManagerPanel({
           kind: item.kind,
           currentPoster: beforePoster,
           currentBackdrop: beforeBInfo.hasDedicatedBackdrop ? beforeBInfo.url : '',
+          preferOfficial: true,
         });
 
         const hasPosterUpgrade =
@@ -270,7 +271,7 @@ export function AdminImageManagerPanel({
 
       if (candidates.length === 0) {
         onNotify(
-          'تم فحص العناصر الناقصة ولم يتم العثور على صور أفضل موثوقة تلقائياً — يمكنك تعديلها يدوياً أو إضافة TMDB_API_KEY في الخادم.'
+          'تم فحص العناصر الناقصة ولم يتم العثور على صور أفضل موثوقة تلقائياً — يمكنك تعديلها يدوياً.'
         );
       } else {
         setBatchCandidates(candidates);
@@ -334,6 +335,7 @@ export function AdminImageManagerPanel({
         kind: item.kind,
         currentPoster: curPoster,
         currentBackdrop: curBackdrop.hasDedicatedBackdrop ? curBackdrop.url : '',
+        preferOfficial: true,
       });
       setSinglePreview({ item, resolved });
     } catch {

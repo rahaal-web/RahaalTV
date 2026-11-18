@@ -4,9 +4,11 @@ import {
   cleanExternalSearchTitle,
   extractBackgroundImageUrl,
   extractCleanEnglishTitleCandidate,
+  extractImdbIdFromText,
   extractJsonLdImageUrl,
   extractJsonLdNodes,
   isJunkImageCandidate,
+  isLowTrustScrapedPosterUrl,
   parseSrcsetBestUrl,
   scoreExternalTitleMatch,
 } from '../src/lib/imageMatching';
@@ -139,4 +141,36 @@ test('HTML & JSON-LD image helpers parse srcset, CSS backgrounds, @graph, and re
   const movieNode = nodes.find((n) => n['@type'] === 'Movie');
   assert.ok(movieNode);
   assert.equal(extractJsonLdImageUrl(movieNode.image), 'https://cdn.example.com/poster-real.jpg');
+});
+
+test('sequel/subtitle matching and low-trust thumbnail detection handle Dune 3, Headless Horror, and qfilm thumbs', () => {
+  const dune3Match = scoreExternalTitleMatch({
+    queryTitle: 'فيلم Dune 3 2026 مترجم',
+    englishTitle: 'Dune 3',
+    expectedYear: '2026',
+    expectedYearExplicit: true,
+    candidateTitles: ['Dune: Part Three'],
+    candidateYear: '2026',
+  });
+  assert.equal(dune3Match.matched, true);
+
+  const headlessHorrorMatch = scoreExternalTitleMatch({
+    queryTitle: 'فيلم The Headless Horror 2025 مترجم',
+    englishTitle: 'The Headless Horror',
+    expectedYear: '2025',
+    expectedYearExplicit: true,
+    candidateTitles: ['Detective Kien: The Headless Horror'],
+    candidateYear: '2025',
+  });
+  assert.equal(headlessHorrorMatch.matched, true);
+
+  assert.equal(isJunkImageCandidate('https://a.qfilm.tv/social-thumb.php?vid=2cc3cd47c'), true);
+  assert.equal(isLowTrustScrapedPosterUrl('https://a.qfilm.tv/uploads/thumbs/82019e14d-1.jpg'), true);
+  assert.equal(isLowTrustScrapedPosterUrl('https://image.tmdb.org/t/p/original/abc123.jpg'), false);
+
+  assert.equal(
+    extractImdbIdFromText('https://www.imdb.com/title/tt31378509/?ref_=fn_al_tt_1'),
+    'tt31378509'
+  );
+  assert.equal(extractImdbIdFromText('no imdb id here'), '');
 });

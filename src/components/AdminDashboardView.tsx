@@ -1871,6 +1871,7 @@ export function AdminDashboardView({
         kind: editingItem.kind,
         currentPoster,
         currentBackdrop,
+        preferOfficial: true,
       });
       setEditorImageProposal(resolved);
       onNotify('تم فحص وإحضار أفضل الصور المقترحة — راجع المعاينة قبل الاعتماد');

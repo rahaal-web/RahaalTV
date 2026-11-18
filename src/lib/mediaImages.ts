@@ -1,11 +1,14 @@
 import { ImageQualityStatus, MediaItem, MediaKind } from '../types/media';
 import {
+  fetchViaBrowserOrCorsRelay,
   resolveApiEndpoint,
   shouldSkipBackendApiCalls,
 } from './clientScraper';
 import {
   cleanExternalSearchTitle,
+  extractCleanEnglishTitleCandidate,
   isJunkImageCandidate,
+  isLowTrustScrapedPosterUrl,
   scoreExternalTitleMatch,
 } from './imageMatching';
 import { FALLBACK_BACKDROP, FALLBACK_POSTER, resolveMediaAssetUrl } from './mediaFilters';
@@ -531,26 +534,411 @@ async function queryItunesPosterInBrowser(params: {
   }
 }
 
+function buildCandidateSearchQueries(
+  title: string,
+  englishTitle: string,
+  extraTitle?: string
+): string[] {
+  const candidates = [
+    cleanExternalSearchTitle(title, englishTitle),
+    extraTitle ? cleanExternalSearchTitle(extraTitle, extraTitle) : '',
+    extractCleanEnglishTitleCandidate(title),
+    cleanExternalSearchTitle(title, ''),
+  ];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const q of candidates) {
+    const clean = q.trim();
+    const key = clean.toLowerCase();
+    if (clean.length >= 2 && !seen.has(key)) {
+      seen.add(key);
+      out.push(clean);
+    }
+  }
+  return out;
+}
+
+interface OfficialExternalMatch {
+  imdbId?: string;
+  poster?: string;
+  backdrop?: string;
+  pw?: number;
+  ph?: number;
+  bw?: number;
+  bh?: number;
+  source: string;
+}
+
+const WIKIDATA_FILM_QIDS = new Set([
+  'Q11424', // film
+  'Q24869', // feature film
+  'Q202866', // animated film
+  'Q226730', // silent film
+  'Q506240', // television film
+  'Q24856', // film series
+]);
+
+const WIKIDATA_SERIES_QIDS = new Set([
+  'Q5398426', // television series
+  'Q1259759', // miniseries
+  'Q1107', // anime
+  'Q63952888', // anime television series
+  'Q581714', // animated series
+  'Q15416', // television program
+]);
+
+async function queryWikidataBridgeInBrowser(params: {
+  queries: string[];
+  title: string;
+  englishTitle: string;
+  year: string;
+  kind: MediaKind;
+}): Promise<{ imdbId: string; englishTitle: string; year: string } | null> {
+  const { queries, title, englishTitle, year, kind } = params;
+  const searchTerms = queries.slice(0, 2);
+  if (searchTerms.length === 0) return null;
+
+  for (const term of searchTerms) {
+    const hasArabic = /[\u0600-\u06FF]/.test(term);
+    const langs = hasArabic ? ['ar', 'en'] : ['en', 'ar'];
+    for (const lang of langs) {
+      try {
+        const searchUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(term)}&language=${lang}&limit=6&format=json&origin=*`;
+        const searchRes = await fetch(searchUrl, { signal: AbortSignal.timeout(5500) });
+        if (!searchRes.ok) continue;
+        const searchJson = (await searchRes.json()) as {
+          search?: Array<{ id?: string; label?: string }>;
+        };
+        const ids = (searchJson.search || []).map((s) => s.id).filter((id): id is string => Boolean(id));
+        if (ids.length === 0) continue;
+
+        const entUrl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${ids.join('|')}&props=labels|aliases|claims&languages=ar|en&format=json&origin=*`;
+        const entRes = await fetch(entUrl, { signal: AbortSignal.timeout(5500) });
+        if (!entRes.ok) continue;
+        const entJson = (await entRes.json()) as {
+          entities?: Record<
+            string,
+            {
+              labels?: { ar?: { value?: string }; en?: { value?: string } };
+              aliases?: {
+                ar?: Array<{ value?: string }>;
+                en?: Array<{ value?: string }>;
+              };
+              claims?: Record<
+                string,
+                Array<{
+                  mainsnak?: {
+                    datavalue?: {
+                      value?: string | { id?: string; time?: string };
+                    };
+                  };
+                }>
+              >;
+            }
+          >;
+        };
+
+        let bestMatch: { score: number; imdbId: string; englishTitle: string; year: string } | null = null;
+        for (const id of ids) {
+          const ent = entJson.entities?.[id];
+          if (!ent?.claims) continue;
+
+          const imdbClaim = ent.claims.P345?.[0]?.mainsnak?.datavalue?.value;
+          const imdbId = typeof imdbClaim === 'string' && /^tt\d{6,10}$/i.test(imdbClaim) ? imdbClaim : '';
+          if (!imdbId) continue;
+
+          const p31Ids = (ent.claims.P31 || [])
+            .map((c) => {
+              const v = c?.mainsnak?.datavalue?.value;
+              return typeof v === 'object' && v?.id ? v.id : '';
+            })
+            .filter(Boolean);
+
+          const isSeriesQid = p31Ids.some((qid) => WIKIDATA_SERIES_QIDS.has(qid));
+          const isFilmQid = p31Ids.some((qid) => WIKIDATA_FILM_QIDS.has(qid));
+          if (kind === 'movie' && isSeriesQid && !isFilmQid) continue;
+          if (kind === 'series' && isFilmQid && !isSeriesQid) continue;
+
+          const dateClaim =
+            ent.claims.P577?.[0]?.mainsnak?.datavalue?.value ||
+            ent.claims.P580?.[0]?.mainsnak?.datavalue?.value;
+          const candYearMatch =
+            typeof dateClaim === 'object' && dateClaim?.time
+              ? dateClaim.time.match(/(\d{4})/)
+              : null;
+          const candYear = candYearMatch?.[1] || '';
+
+          const candidateTitles = [
+            ent.labels?.ar?.value,
+            ent.labels?.en?.value,
+            ...(ent.aliases?.ar || []).map((a) => a.value),
+            ...(ent.aliases?.en || []).map((a) => a.value),
+          ];
+
+          const check = scoreExternalTitleMatch({
+            queryTitle: title,
+            englishTitle,
+            expectedYear: year,
+            expectedYearExplicit: Boolean(year && year !== '2026'),
+            candidateTitles,
+            candidateYear: candYear,
+          });
+
+          if (check.matched && (!bestMatch || check.score > bestMatch.score)) {
+            bestMatch = {
+              score: check.score,
+              imdbId,
+              englishTitle: ent.labels?.en?.value || ent.labels?.ar?.value || '',
+              year: candYear,
+            };
+          }
+        }
+
+        if (bestMatch) {
+          return {
+            imdbId: bestMatch.imdbId,
+            englishTitle: bestMatch.englishTitle,
+            year: bestMatch.year,
+          };
+        }
+      } catch {
+        // Ignore Wikidata network errors
+      }
+    }
+  }
+  return null;
+}
+
+async function queryImdbSuggestionInBrowser(params: {
+  queries: string[];
+  imdbId?: string;
+  title: string;
+  englishTitle: string;
+  year: string;
+  kind: MediaKind;
+}): Promise<OfficialExternalMatch | null> {
+  const { queries, imdbId = '', title, englishTitle, year, kind } = params;
+  const searchList = imdbId ? [imdbId, ...queries] : queries;
+
+  interface ImdbSuggestEntry {
+    id?: string;
+    l?: string;
+    qid?: string;
+    q?: string;
+    y?: number;
+    i?: { imageUrl?: string; width?: number; height?: number };
+  }
+
+  for (const rawQ of searchList.slice(0, 3)) {
+    const cleanQ = rawQ.trim();
+    if (cleanQ.length < 2) continue;
+    const isDirectId = /^tt\d{6,10}$/i.test(cleanQ);
+    const firstChar = cleanQ.charAt(0).toLowerCase();
+    const prefix = /[a-z0-9]/.test(firstChar) ? firstChar : 'a';
+    const endpoint = `https://v3.sg.media-imdb.com/suggestion/${prefix}/${encodeURIComponent(cleanQ.toLowerCase())}.json`;
+
+    try {
+      const fetched = await fetchViaBrowserOrCorsRelay(endpoint, 7500);
+      if (!fetched.ok || !fetched.text.trim().startsWith('{')) continue;
+      const json = JSON.parse(fetched.text) as { d?: ImdbSuggestEntry[] };
+      const entries = json.d || [];
+
+      let best: { score: number; entry: ImdbSuggestEntry } | null = null;
+      for (const item of entries.slice(0, 10)) {
+        if (!item?.id || !/^tt\d+$/i.test(item.id) || !item.i?.imageUrl) continue;
+        const qid = (item.qid || '').toLowerCase();
+        if (kind === 'movie' && qid && !['movie', 'feature', 'tvmovie', 'short', 'video'].includes(qid)) {
+          continue;
+        }
+        if (kind === 'series' && qid && !['tvseries', 'tvminiseries'].includes(qid)) {
+          continue;
+        }
+
+        if (isDirectId && item.id.toLowerCase() === cleanQ.toLowerCase()) {
+          best = { score: 2, entry: item };
+          break;
+        }
+
+        const check = scoreExternalTitleMatch({
+          queryTitle: title,
+          englishTitle,
+          expectedYear: year,
+          expectedYearExplicit: Boolean(year && year !== '2026'),
+          candidateTitles: [item.l],
+          candidateYear: item.y ? String(item.y) : undefined,
+        });
+        if (check.matched && (!best || check.score > best.score)) {
+          best = { score: check.score, entry: item };
+        }
+      }
+
+      if (best?.entry?.id && best.entry.i?.imageUrl) {
+        const posterUrl = upgradeKnownImageUrl(best.entry.i.imageUrl);
+        return {
+          imdbId: best.entry.id,
+          poster: posterUrl,
+          pw: best.entry.i.width || 0,
+          ph: best.entry.i.height || 0,
+          source: 'imdb',
+        };
+      }
+    } catch {
+      // Ignore IMDb suggestion errors and try next query
+    }
+  }
+  return null;
+}
+
+async function queryCinemetaImagesInBrowser(params: {
+  queries: string[];
+  imdbId?: string;
+  title: string;
+  englishTitle: string;
+  year: string;
+  kind: MediaKind;
+}): Promise<OfficialExternalMatch | null> {
+  const { queries, imdbId = '', title, englishTitle, year, kind } = params;
+  const cmType = kind === 'series' ? 'series' : 'movie';
+
+  const resolveFromImdbId = async (ttId: string): Promise<OfficialExternalMatch | null> => {
+    try {
+      const metaRes = await fetch(
+        `https://v3-cinemeta.strem.io/meta/${cmType}/${encodeURIComponent(ttId)}.json`,
+        { signal: AbortSignal.timeout(6000) }
+      );
+      let metaPoster = '';
+      let metaBackdrop = '';
+      if (metaRes.ok) {
+        const metaJson = (await metaRes.json()) as {
+          meta?: { poster?: string; background?: string };
+        };
+        metaPoster = metaJson.meta?.poster || '';
+        metaBackdrop = metaJson.meta?.background || '';
+      }
+      const largePoster = `https://images.metahub.space/poster/large/${ttId}/img`;
+      const largeBackdrop = `https://images.metahub.space/background/large/${ttId}/img`;
+
+      const [pLargeProbe, bLargeProbe] = await Promise.all([
+        probeImageDimensionsInBrowser(largePoster, 5500),
+        probeImageDimensionsInBrowser(largeBackdrop, 5500),
+      ]);
+
+      let chosenPoster = '';
+      let pw = 0;
+      let ph = 0;
+      if (pLargeProbe.ok && pLargeProbe.height >= pLargeProbe.width) {
+        chosenPoster = largePoster;
+        pw = pLargeProbe.width;
+        ph = pLargeProbe.height;
+      } else if (metaPoster) {
+        const pMetaProbe = await probeImageDimensionsInBrowser(metaPoster, 5000);
+        if (pMetaProbe.ok && pMetaProbe.height >= pMetaProbe.width) {
+          chosenPoster = metaPoster;
+          pw = pMetaProbe.width;
+          ph = pMetaProbe.height;
+        }
+      }
+
+      let chosenBackdrop = '';
+      let bw = 0;
+      let bh = 0;
+      if (bLargeProbe.ok && bLargeProbe.width > bLargeProbe.height) {
+        chosenBackdrop = largeBackdrop;
+        bw = bLargeProbe.width;
+        bh = bLargeProbe.height;
+      } else if (metaBackdrop) {
+        const bMetaProbe = await probeImageDimensionsInBrowser(metaBackdrop, 5000);
+        if (bMetaProbe.ok && bMetaProbe.width > bMetaProbe.height) {
+          chosenBackdrop = metaBackdrop;
+          bw = bMetaProbe.width;
+          bh = bMetaProbe.height;
+        }
+      }
+
+      if (!chosenPoster && !chosenBackdrop) return null;
+      return {
+        imdbId: ttId,
+        poster: chosenPoster,
+        backdrop: chosenBackdrop,
+        pw,
+        ph,
+        bw,
+        bh,
+        source: chosenBackdrop ? 'cinemeta' : 'metahub',
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  if (imdbId && /^tt\d{6,10}$/i.test(imdbId)) {
+    const byId = await resolveFromImdbId(imdbId);
+    if (byId) return byId;
+  }
+
+  for (const q of queries.slice(0, 3)) {
+    try {
+      const searchRes = await fetch(
+        `https://v3-cinemeta.strem.io/catalog/${cmType}/top/search=${encodeURIComponent(q)}.json`,
+        { signal: AbortSignal.timeout(6500) }
+      );
+      if (!searchRes.ok) continue;
+      const json = (await searchRes.json()) as {
+        metas?: Array<{ id?: string; name?: string; releaseInfo?: string; year?: string | number }>;
+      };
+      let bestTtId = '';
+      let bestScore = 0;
+      for (const m of (json.metas || []).slice(0, 10)) {
+        if (!m?.id || !/^tt\d+$/i.test(m.id) || !m.name) continue;
+        const candYear = String(m.year || m.releaseInfo || '').slice(0, 4);
+        const check = scoreExternalTitleMatch({
+          queryTitle: title,
+          englishTitle,
+          expectedYear: year,
+          expectedYearExplicit: Boolean(year && year !== '2026'),
+          candidateTitles: [m.name],
+          candidateYear: candYear,
+        });
+        if (check.matched && check.score > bestScore) {
+          bestScore = check.score;
+          bestTtId = m.id;
+        }
+      }
+      if (bestTtId) {
+        const resolved = await resolveFromImdbId(bestTtId);
+        if (resolved) return resolved;
+      }
+    } catch {
+      // ignore Cinemeta search error
+    }
+  }
+  return null;
+}
+
 /**
  * Resolves independent high-res 2:3 Portrait Poster & 16:9 Landscape Backdrop with measured pixel verification.
- * Uses server /api/images/resolve (TMDB + public metadata + binary dimension probing) when available,
- * and safely falls back to browser-native dimension probing + strictly-verified TVmaze / iTunes + URL upgrades.
+ * Uses server /api/images/resolve (TMDB + IMDb + Cinemeta/Metahub + Wikidata + binary dimension probing) when available,
+ * and seamlessly resolves client-side via IMDb Suggestion + Cinemeta/Metahub + Wikidata + TVmaze + iTunes.
  */
 export async function resolveHighResImagesClient(params: {
   title: string;
   englishTitle?: string;
   year?: string;
   kind?: MediaKind;
+  imdbId?: string;
   currentPoster?: string;
   currentBackdrop?: string;
+  preferOfficial?: boolean;
 }): Promise<ResolvedImageBundle> {
   const {
     title,
     englishTitle = '',
     year = '',
     kind = 'movie',
+    imdbId = '',
     currentPoster = '',
     currentBackdrop = '',
+    preferOfficial = false,
   } = params;
 
   const sanitizedCurrentPoster = isJunkImageCandidate(currentPoster) ? '' : currentPoster;
@@ -567,8 +955,10 @@ export async function resolveHighResImagesClient(params: {
           englishTitle,
           year,
           kind,
+          imdbId,
           currentPoster: sanitizedCurrentPoster,
           currentBackdrop: sanitizedCurrentBackdrop,
+          preferOfficial,
         }),
       });
       const ct = response.headers.get('content-type') || '';
@@ -586,7 +976,7 @@ export async function resolveHighResImagesClient(params: {
     }
   }
 
-  // 2. Client fallback: upgrade known CDN URLs & query strictly-verified public metadata sources
+  // 2. Client fallback: upgrade known CDN URLs & query strictly-verified official public metadata sources
   const notes: string[] = [];
   let posterUrl = sanitizedCurrentPoster ? upgradeKnownImageUrl(sanitizedCurrentPoster) : '';
   let backdropUrl =
@@ -594,8 +984,6 @@ export async function resolveHighResImagesClient(params: {
       ? upgradeKnownImageUrl(sanitizedCurrentBackdrop)
       : '';
   let imageSource = posterUrl ? 'upgraded_url' : 'none';
-
-  const cleanQuery = cleanExternalSearchTitle(title, englishTitle);
 
   const [posterProbeInitial, backdropProbeInitial] = await Promise.all([
     posterUrl ? probeImageDimensionsInBrowser(posterUrl) : Promise.resolve(null),
@@ -618,61 +1006,206 @@ export async function resolveHighResImagesClient(params: {
     notes.push('تم رفض الخلفية الحالية لأنها طولية وليست 16:9 أفقية');
   }
 
-  const hasValidUnmeasuredScrapedPoster = Boolean(posterUrl && !posterProbeInitial?.ok);
-
-  // TVmaze fallback ONLY for series/TV shows, verified strictly against title & year
-  if (cleanQuery && kind === 'series' && (!backdropUrl || pw < 800)) {
-    const tvm = await queryTvmazeImagesInBrowser({
-      query: cleanQuery,
-      title,
-      englishTitle,
-      year,
-    });
-    if (tvm) {
-      if (tvm.poster) {
-        const pTest = await probeImageDimensionsInBrowser(tvm.poster);
-        const minAcceptWidth = hasValidUnmeasuredScrapedPoster ? 600 : Math.max(400, pw);
-        if (pTest.ok && pTest.height >= pTest.width && pTest.width >= minAcceptWidth) {
-          posterUrl = tvm.poster;
-          pw = pTest.width;
-          ph = pTest.height;
-          imageSource = 'tvmaze';
-        }
-      }
-      if (tvm.backdrop) {
-        const bTest = await probeImageDimensionsInBrowser(tvm.backdrop);
-        if (bTest.ok && bTest.width > bTest.height && bTest.width >= Math.max(1000, bw)) {
-          backdropUrl = tvm.backdrop;
-          bw = bTest.width;
-          bh = bTest.height;
-          if (imageSource === 'none' || imageSource === 'upgraded_url') {
-            imageSource = 'tvmaze';
-          }
-        }
-      }
-    }
+  const posterIsLandscape = pw > 0 && ph > 0 && pw > ph * 1.05;
+  const posterIsLowTrust = isLowTrustScrapedPosterUrl(posterUrl) || posterIsLandscape;
+  if (posterIsLandscape) {
+    notes.push(`تم رصد بوستر أفقي غير قياسي (${pw}×${ph}) وسيتم البحث عن البوستر العمودي الأصلي`);
   }
 
-  // iTunes fallback ONLY for movies, verified strictly against movie title & year (never overwrite an unmeasured scraped poster unless >=600px portrait match)
-  if (cleanQuery && kind === 'movie' && pw < 800) {
-    const itunesMatch = await queryItunesPosterInBrowser({
-      query: cleanQuery,
+  const queries = buildCandidateSearchQueries(title, englishTitle);
+  const needsOfficialPoster =
+    preferOfficial || !posterUrl || pw === 0 || pw < 900 || posterIsLowTrust;
+  const needsOfficialBackdrop = !backdropUrl || bw < 1200;
+
+  let resolvedImdbId = imdbId;
+  let extraEngTitle = '';
+  let extraYear = year;
+
+  // 2a. If query has Arabic script (or no Latin letters), check Wikidata first to get English title + IMDb ID
+  const hasArabicOnlyQuery =
+    queries.length > 0 &&
+    queries.every((q) => /[\u0600-\u06FF]/.test(q) && !/[A-Za-z]{2,}/.test(q));
+
+  if (!resolvedImdbId && hasArabicOnlyQuery && (needsOfficialPoster || needsOfficialBackdrop)) {
+    const wikiRes = await queryWikidataBridgeInBrowser({
+      queries,
       title,
       englishTitle,
       year,
       kind,
     });
-    if (itunesMatch?.url) {
-      const itProbe = await probeImageDimensionsInBrowser(itunesMatch.url);
-      const minAcceptWidth = hasValidUnmeasuredScrapedPoster ? 600 : pw + 1;
-      if (itProbe.ok && itProbe.height >= itProbe.width && itProbe.width >= minAcceptWidth) {
-        posterUrl = itunesMatch.url;
-        pw = itProbe.width;
-        ph = itProbe.height;
-        if (imageSource === 'none' || imageSource === 'upgraded_url') {
-          imageSource = 'itunes';
+    if (wikiRes) {
+      resolvedImdbId = wikiRes.imdbId;
+      extraEngTitle = wikiRes.englishTitle;
+      if (!year && wikiRes.year) extraYear = wikiRes.year;
+    }
+  }
+
+  const expandedQueries = buildCandidateSearchQueries(title, englishTitle, extraEngTitle);
+  const searchTitle = title;
+  const searchEng = extraEngTitle || englishTitle;
+
+  const tryAcceptOfficialPoster = async (
+    candidateUrl: string,
+    knownW: number,
+    knownH: number,
+    sourceLabel: string
+  ): Promise<boolean> => {
+    if (!candidateUrl) return false;
+    let cw = knownW;
+    let ch = knownH;
+    if (!cw || !ch) {
+      const pTest = await probeImageDimensionsInBrowser(candidateUrl);
+      if (!pTest.ok) return false;
+      cw = pTest.width;
+      ch = pTest.height;
+    }
+    // Official posters must be portrait or near-portrait (height >= width) and at least 500px wide
+    if (ch < cw || cw < 500) return false;
+
+    const currentIsAlreadyOfficial =
+      imageSource === 'tmdb' || imageSource === 'imdb' || imageSource === 'cinemeta' || imageSource === 'metahub';
+
+    const shouldReplace =
+      !posterUrl ||
+      posterIsLowTrust ||
+      pw === 0 ||
+      (preferOfficial && !currentIsAlreadyOfficial) ||
+      cw > pw;
+
+    if (shouldReplace) {
+      posterUrl = candidateUrl;
+      pw = cw;
+      ph = ch;
+      imageSource = sourceLabel;
+      return true;
+    }
+    return false;
+  };
+
+  const tryAcceptOfficialBackdrop = (
+    candidateUrl: string,
+    cw: number,
+    ch: number,
+    sourceLabel: string
+  ): boolean => {
+    if (!candidateUrl || cw <= ch || cw < 960) return false;
+    if (!backdropUrl || cw > bw) {
+      backdropUrl = candidateUrl;
+      bw = cw;
+      bh = ch;
+      if (imageSource === 'none' || imageSource === 'upgraded_url') {
+        imageSource = sourceLabel;
+      }
+      return true;
+    }
+    return false;
+  };
+
+  // 2b. IMDb Suggestion API (original studio poster CDN + IMDb ID)
+  if ((needsOfficialPoster || needsOfficialBackdrop) && (expandedQueries.length > 0 || resolvedImdbId)) {
+    const imdbRes = await queryImdbSuggestionInBrowser({
+      queries: expandedQueries,
+      imdbId: resolvedImdbId,
+      title: searchTitle,
+      englishTitle: searchEng,
+      year: extraYear,
+      kind,
+    });
+    if (imdbRes) {
+      if (imdbRes.imdbId && !resolvedImdbId) resolvedImdbId = imdbRes.imdbId;
+      if (imdbRes.poster) {
+        await tryAcceptOfficialPoster(imdbRes.poster, imdbRes.pw || 0, imdbRes.ph || 0, 'imdb');
+      }
+    }
+  }
+
+  // 2c. If still no IMDb ID (e.g. non-Latin match failed on IMDb Suggestion), try Wikidata bridge as general fallback
+  if (!resolvedImdbId && expandedQueries.length > 0 && (needsOfficialPoster || needsOfficialBackdrop)) {
+    const wikiRes = await queryWikidataBridgeInBrowser({
+      queries: expandedQueries,
+      title: searchTitle,
+      englishTitle: searchEng,
+      year: extraYear,
+      kind,
+    });
+    if (wikiRes?.imdbId) {
+      resolvedImdbId = wikiRes.imdbId;
+      if (wikiRes.englishTitle) extraEngTitle = wikiRes.englishTitle;
+      if (!posterUrl || posterIsLowTrust || (preferOfficial && imageSource !== 'imdb')) {
+        const imdbByWikiId = await queryImdbSuggestionInBrowser({
+          queries: [],
+          imdbId: resolvedImdbId,
+          title: searchTitle,
+          englishTitle: extraEngTitle || searchEng,
+          year: extraYear,
+          kind,
+        });
+        if (imdbByWikiId?.poster) {
+          await tryAcceptOfficialPoster(
+            imdbByWikiId.poster,
+            imdbByWikiId.pw || 0,
+            imdbByWikiId.ph || 0,
+            'imdb'
+          );
         }
       }
+    }
+  }
+
+  // 2d. Cinemeta + Metahub (CORS-open, delivers verified 16:9 Backdrops + Official Posters)
+  if ((needsOfficialPoster || needsOfficialBackdrop) && (resolvedImdbId || expandedQueries.length > 0)) {
+    const cmRes = await queryCinemetaImagesInBrowser({
+      queries: buildCandidateSearchQueries(searchTitle, searchEng, extraEngTitle),
+      imdbId: resolvedImdbId,
+      title: searchTitle,
+      englishTitle: searchEng,
+      year: extraYear,
+      kind,
+    });
+    if (cmRes) {
+      if (cmRes.poster && (preferOfficial || posterIsLowTrust || !posterUrl || pw < 700)) {
+        await tryAcceptOfficialPoster(cmRes.poster, cmRes.pw || 0, cmRes.ph || 0, cmRes.source);
+      }
+      if (cmRes.backdrop && cmRes.bw && cmRes.bh) {
+        tryAcceptOfficialBackdrop(cmRes.backdrop, cmRes.bw, cmRes.bh, cmRes.source);
+      }
+    }
+  }
+
+  // 2e. TVmaze fallback ONLY for TV series when still missing high-res poster or backdrop
+  const primaryQuery = expandedQueries[0] || '';
+  if (primaryQuery && kind === 'series' && (!backdropUrl || pw < 800 || posterIsLowTrust)) {
+    const tvm = await queryTvmazeImagesInBrowser({
+      query: primaryQuery,
+      title: searchTitle,
+      englishTitle: searchEng,
+      year: extraYear,
+    });
+    if (tvm) {
+      if (tvm.poster) {
+        await tryAcceptOfficialPoster(tvm.poster, tvm.pw || 0, tvm.ph || 0, 'tvmaze');
+      }
+      if (tvm.backdrop) {
+        const bTest = await probeImageDimensionsInBrowser(tvm.backdrop);
+        if (bTest.ok) {
+          tryAcceptOfficialBackdrop(tvm.backdrop, bTest.width, bTest.height, 'tvmaze');
+        }
+      }
+    }
+  }
+
+  // 2f. iTunes fallback ONLY for movies when no IMDb/Cinemeta poster succeeded
+  if (primaryQuery && kind === 'movie' && (pw < 800 || posterIsLowTrust) && imageSource !== 'imdb') {
+    const itunesMatch = await queryItunesPosterInBrowser({
+      query: primaryQuery,
+      title: searchTitle,
+      englishTitle: searchEng,
+      year: extraYear,
+      kind,
+    });
+    if (itunesMatch?.url) {
+      await tryAcceptOfficialPoster(itunesMatch.url, 0, 0, 'itunes');
     }
   }
 

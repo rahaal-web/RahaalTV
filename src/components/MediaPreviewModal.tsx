@@ -212,7 +212,7 @@ export function MediaPreviewModal({
                         </span>
                       )}
                     </div>
-                    <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-white leading-tight">
+                    <h1 className="font-display text-base sm:text-lg lg:text-xl font-extrabold text-white leading-snug">
                       {item.title} بجودة عالية
                     </h1>
                     <p className="text-xs sm:text-sm text-[#b7c9ef]">

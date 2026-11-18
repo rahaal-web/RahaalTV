@@ -11,9 +11,11 @@ import {
 import {
   extractBackgroundImageUrl,
   extractCleanEnglishTitleCandidate,
+  extractImdbIdFromText,
   extractJsonLdImageUrl,
   extractJsonLdNodes,
   isJunkImageCandidate,
+  isLowTrustScrapedPosterUrl,
   parseSrcsetBestUrl,
 } from './imageMatching';
 
@@ -66,6 +68,7 @@ export interface ScrapedPayload {
   tagline: string;
   story: string;
   sourceUrl?: string;
+  imdbId?: string;
   shortUrl: string;
   trailerUrl: string;
   cast: CastMember[];
@@ -694,24 +697,30 @@ function extractBestImageFromElementBrowser(el: Element | null, baseUrl: string)
   return '';
 }
 
+const EXCLUDED_POSTER_CONTAINERS_SELECTOR =
+  'header, nav, footer, aside, .navbar, .related, .related-videos, .similar, .recommended, .suggest, .comments, .sidebar, .widget, .carousel, .owl-carousel, .swiper, .pm-ul-carousel-videos, [class*="related"], [class*="similar"], [class*="widget"], [id*="related"], [id*="sidebar"]';
+
 function pickFirstValidImageFromSelectorsBrowser(
   doc: Document,
   selectors: string,
   baseUrl: string,
-  skipChromeAndRelated = false
+  skipChromeAndRelated = true
 ): string {
   const els = doc.querySelectorAll(selectors);
+  let lowTrustFallback = '';
   for (const el of Array.from(els)) {
-    if (
-      skipChromeAndRelated &&
-      el.closest('header, nav, footer, aside, .navbar, .related, .similar, .comments, .sidebar')
-    ) {
+    if (skipChromeAndRelated && el.closest(EXCLUDED_POSTER_CONTAINERS_SELECTOR)) {
       continue;
     }
     const found = extractBestImageFromElementBrowser(el, baseUrl);
-    if (found) return found;
+    if (!found) continue;
+    if (isLowTrustScrapedPosterUrl(found)) {
+      if (!lowTrustFallback) lowTrustFallback = found;
+      continue;
+    }
+    return found;
   }
-  return '';
+  return lowTrustFallback;
 }
 
 function parseHtmlToMediaWithHintsBrowser(
@@ -729,6 +738,7 @@ function parseHtmlToMediaWithHintsBrowser(
   let jsonLdTrailer = '';
   let jsonLdImdb = 0;
   let jsonLdType = '';
+  let jsonLdImdbId = '';
   const jsonLdCast: CastMember[] = [];
 
   doc.querySelectorAll('script[type="application/ld+json"]').forEach((el) => {
@@ -737,6 +747,11 @@ function parseHtmlToMediaWithHintsBrowser(
       const typeVal = String(obj['@type'] || '');
       if (typeVal === 'Movie' || typeVal === 'TVSeries') {
         jsonLdType = typeVal;
+        if (obj.sameAs && !jsonLdImdbId) {
+          const sameAsStr = Array.isArray(obj.sameAs) ? obj.sameAs.join(' ') : String(obj.sameAs);
+          const foundId = extractImdbIdFromText(sameAsStr);
+          if (foundId) jsonLdImdbId = foundId;
+        }
         if (obj.name && !jsonLdTitle) jsonLdTitle = cleanText(String(obj.name));
         if (obj.description && !jsonLdDesc) jsonLdDesc = cleanText(String(obj.description));
         if (obj.image && !jsonLdImage) {
@@ -814,17 +829,36 @@ function parseHtmlToMediaWithHintsBrowser(
     ? ''
     : upgradeKnownImageUrlScraper(jsonLdImage);
 
-  const singlePoster =
+  const strictSinglePoster =
     pickFirstValidImageFromSelectorsBrowser(
       doc,
-      '.single-poster img, .single-right img, .poster img, .movie-poster img, .film-poster img, .entry-poster img, .pm-video-thumb img, .video-thumb img, .Thumb--GridItem img, .Poster--Block img, img[itemprop="image"], meta[itemprop="image"]',
-      sourceUrl
+      '.single-poster img, .single-right img, .movie-poster img, .film-poster img, .entry-poster img, img[itemprop="image"], meta[itemprop="image"], link[rel="image_src"]',
+      sourceUrl,
+      true
     ) ||
     pickFirstValidImageFromSelectorsBrowser(
       doc,
-      '.single-poster, .single-right, .poster, .movie-poster, .film-poster, .entry-poster, .Thumb--GridItem, .Poster--Block, [data-poster], [data-bg]',
-      sourceUrl
+      '.single-poster, .single-right, .movie-poster, .film-poster, .entry-poster, [data-poster]',
+      sourceUrl,
+      true
     );
+
+  const genericPoster =
+    strictSinglePoster ||
+    pickFirstValidImageFromSelectorsBrowser(
+      doc,
+      '.poster img, .pm-video-thumb img, .video-thumb img, .Thumb--GridItem img, .Poster--Block img',
+      sourceUrl,
+      true
+    ) ||
+    pickFirstValidImageFromSelectorsBrowser(
+      doc,
+      '.poster, .Thumb--GridItem, .Poster--Block, [data-bg]',
+      sourceUrl,
+      true
+    );
+
+  const singlePoster = strictSinglePoster || genericPoster;
 
   const fallbackBodyPoster =
     singlePoster || ogImage || safeJsonLdImage || twitterImage
@@ -840,14 +874,24 @@ function parseHtmlToMediaWithHintsBrowser(
     pickFirstValidImageFromSelectorsBrowser(
       doc,
       '.backdrop img, .hero img, .hero-bg img, .cover img, .single-cover img, .movie-backdrop img, .single-cover, .movie-backdrop',
-      sourceUrl
+      sourceUrl,
+      true
     ) ||
     upgradeKnownImageUrlScraper(
       resolveUrl(sourceUrl, doc.querySelector('video')?.getAttribute('poster') || undefined)
     );
 
-  const poster =
-    singlePoster || ogImage || safeJsonLdImage || twitterImage || fallbackBodyPoster || '';
+  const cleanCandidates = [
+    strictSinglePoster,
+    safeJsonLdImage,
+    ogImage,
+    genericPoster,
+    twitterImage,
+    fallbackBodyPoster,
+  ].filter(Boolean);
+  const preferredCleanPoster = cleanCandidates.find((u) => !isLowTrustScrapedPosterUrl(u));
+  const poster = preferredCleanPoster || cleanCandidates[0] || '';
+
   const cleanExplicitBackdrop = isJunkImageCandidate(explicitBackdrop) ? '' : explicitBackdrop;
   const backdrop =
     cleanExplicitBackdrop && cleanExplicitBackdrop !== poster
@@ -857,6 +901,8 @@ function parseHtmlToMediaWithHintsBrowser(
         : ogImage && ogImage !== poster
           ? ogImage
           : '';
+
+  const extractedImdbId = jsonLdImdbId || extractImdbIdFromText(html);
 
   // 4. Story
   const storySelector = cleanText(
@@ -1384,6 +1430,7 @@ function parseHtmlToMediaWithHintsBrowser(
       tagline: story.slice(0, 140),
       story,
       sourceUrl: sourceUrl || '',
+      imdbId: extractedImdbId || '',
       shortUrl: '',
       trailerUrl,
       cast: jsonLdCast,
@@ -1577,7 +1624,7 @@ function isChallengeOrErrorHtml(text: string): boolean {
   return false;
 }
 
-async function fetchViaBrowserOrCorsRelay(
+export async function fetchViaBrowserOrCorsRelay(
   targetUrl: string,
   timeoutMs = 11000
 ): Promise<{ ok: boolean; status: number; text: string; finalUrl?: string }> {
@@ -2282,8 +2329,10 @@ async function scrapeFullItemInBrowser(
               englishTitle: media.englishTitle,
               year: media.year,
               kind: media.kind,
+              imdbId: media.imdbId,
               currentPoster: media.poster,
               currentBackdrop: media.backdrop,
+              preferOfficial: true,
             })
           )
           .catch(() => null),
@@ -2437,6 +2486,33 @@ async function tryWordPressSinglePostBrowser(
         }
       }
     }
+    try {
+      const { resolveHighResImagesClient } = await import('./mediaImages');
+      const resolved = await resolveHighResImagesClient({
+        title: parsed.title,
+        englishTitle: parsed.englishTitle,
+        year: parsed.year,
+        kind: parsed.kind,
+        imdbId: parsed.imdbId,
+        currentPoster: parsed.poster,
+        currentBackdrop: parsed.backdrop,
+        preferOfficial: true,
+      });
+      if (resolved.poster_url) {
+        parsed.poster = resolved.poster_url;
+        parsed.poster_url = resolved.poster_url;
+      }
+      parsed.poster_width = resolved.poster_width;
+      parsed.poster_height = resolved.poster_height;
+      parsed.backdrop = resolved.backdrop_url;
+      parsed.backdrop_url = resolved.backdrop_url;
+      parsed.backdrop_width = resolved.backdrop_width;
+      parsed.backdrop_height = resolved.backdrop_height;
+      parsed.image_source = resolved.image_source;
+      parsed.image_quality_status = resolved.image_quality_status;
+    } catch {
+      // non-fatal
+    }
     return parsed;
   } catch {
     return null;
@@ -2457,13 +2533,44 @@ export async function scrapeSingleInBrowser(params: {
     const effectiveUrl = (url && url.trim()) || canonicalInHtml || '';
     const extracted = parseHtmlToMediaWithHintsBrowser(rawHtml, effectiveUrl).media;
     extracted.servers = extracted.servers.filter((s) => s.url && !isLikelyNonVideoWebsiteUrl(s.url));
-    if (!extracted.trailerUrl) {
-      extracted.trailerUrl = await findTrailerInBrowser({
-        title: extracted.title,
-        englishTitle: extracted.englishTitle,
-        year: extracted.year,
-        kind: extracted.kind,
-      });
+    const [trailer, resolvedImgs] = await Promise.all([
+      extracted.trailerUrl
+        ? Promise.resolve(extracted.trailerUrl)
+        : findTrailerInBrowser({
+            title: extracted.title,
+            englishTitle: extracted.englishTitle,
+            year: extracted.year,
+            kind: extracted.kind,
+          }),
+      import('./mediaImages')
+        .then(({ resolveHighResImagesClient }) =>
+          resolveHighResImagesClient({
+            title: extracted.title,
+            englishTitle: extracted.englishTitle,
+            year: extracted.year,
+            kind: extracted.kind,
+            imdbId: extracted.imdbId,
+            currentPoster: extracted.poster,
+            currentBackdrop: extracted.backdrop,
+            preferOfficial: true,
+          })
+        )
+        .catch(() => null),
+    ]);
+    extracted.trailerUrl = trailer || '';
+    if (resolvedImgs) {
+      if (resolvedImgs.poster_url) {
+        extracted.poster = resolvedImgs.poster_url;
+        extracted.poster_url = resolvedImgs.poster_url;
+      }
+      extracted.poster_width = resolvedImgs.poster_width;
+      extracted.poster_height = resolvedImgs.poster_height;
+      extracted.backdrop = resolvedImgs.backdrop_url;
+      extracted.backdrop_url = resolvedImgs.backdrop_url;
+      extracted.backdrop_width = resolvedImgs.backdrop_width;
+      extracted.backdrop_height = resolvedImgs.backdrop_height;
+      extracted.image_source = resolvedImgs.image_source;
+      extracted.image_quality_status = resolvedImgs.image_quality_status;
     }
     return { ok: true, extracted };
   }

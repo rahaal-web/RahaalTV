@@ -140,10 +140,43 @@ export function isJunkImageCandidate(rawUrl: string | undefined | null, hintText
     return true;
   }
 
+  // Reject auto-generated social share cards with embedded play-icon stamps (never clean movie posters)
+  if (/\/social-thumb\.php/i.test(withoutQuery)) {
+    return true;
+  }
+
   // Reject tiny `.ico` files
   if (/\.ico$/i.test(withoutQuery)) return true;
 
   return false;
+}
+
+/**
+ * Identifies low-trust site video-frame thumbnails (/uploads/thumbs/, /thumbs/, YouTube frame thumbs)
+ * that may still be shown as a last-resort scraped fallback but should always be replaced by official posters.
+ */
+export function isLowTrustScrapedPosterUrl(rawUrl: string | undefined | null): boolean {
+  const url = String(rawUrl || '').trim().toLowerCase();
+  if (!url) return true;
+  if (isJunkImageCandidate(url)) return true;
+  return (
+    /\/(?:uploads\/thumbs|thumbs|video[-_]?thumbs)\//i.test(url) ||
+    /\/social-thumb\.php/i.test(url) ||
+    /(?:i\.ytimg\.com|img\.youtube\.com)\/vi\//i.test(url)
+  );
+}
+
+/**
+ * Extracts an explicit IMDb title ID (tt1234567) from HTML links, JSON-LD sameAs, or raw metadata.
+ */
+export function extractImdbIdFromText(rawText: string | undefined | null): string {
+  const text = String(rawText || '');
+  if (!text) return '';
+  const urlMatch = text.match(/imdb\.com\/title\/(tt\d{6,10})\b/i);
+  if (urlMatch?.[1]) return urlMatch[1].toLowerCase();
+  const fieldMatch = text.match(/["']?(?:imdb[_-]?id|imdbId)["']?\s*[:=]\s*["']?(tt\d{6,10})\b/i);
+  if (fieldMatch?.[1]) return fieldMatch[1].toLowerCase();
+  return '';
 }
 
 export function extractBackgroundImageUrl(styleAttr: string | undefined | null): string {
@@ -359,27 +392,56 @@ function tokenizeNormalizedTitle(norm: string): string[] {
   return norm.split(' ').filter(Boolean);
 }
 
+const SEQUEL_WORD_TO_DIGIT: Record<string, string> = {
+  ii: '2',
+  iii: '3',
+  iv: '4',
+  v: '5',
+  vi: '6',
+  vii: '7',
+  viii: '8',
+  ix: '9',
+  x: '10',
+  two: '2',
+  three: '3',
+  four: '4',
+  five: '5',
+  six: '6',
+  seven: '7',
+  eight: '8',
+  nine: '9',
+  ten: '10',
+  second: '2',
+  third: '3',
+  fourth: '4',
+  fifth: '5',
+};
+
+const SEQUEL_CONNECTOR_WORDS = new Set(['part', 'pt', 'chapter', 'vol', 'volume', 'الجزء', 'جزء']);
+
 function extractTrailingOrStandaloneNumbers(tokens: string[]): string[] {
-  const romanMap: Record<string, string> = {
-    ii: '2',
-    iii: '3',
-    iv: '4',
-    v: '5',
-    vi: '6',
-    vii: '7',
-    viii: '8',
-    ix: '9',
-    x: '10',
-  };
   const nums: string[] = [];
   for (const t of tokens) {
     if (/^\d{1,2}$/.test(t) && t !== '1') {
       nums.push(t);
-    } else if (romanMap[t]) {
-      nums.push(romanMap[t]);
+    } else if (SEQUEL_WORD_TO_DIGIT[t]) {
+      nums.push(SEQUEL_WORD_TO_DIGIT[t]);
     }
   }
   return nums;
+}
+
+function canonicalizeComparisonTokens(tokens: string[]): string[] {
+  const result: string[] = [];
+  for (const t of tokens) {
+    if (SEQUEL_CONNECTOR_WORDS.has(t)) continue;
+    if (SEQUEL_WORD_TO_DIGIT[t]) {
+      result.push(SEQUEL_WORD_TO_DIGIT[t]);
+    } else {
+      result.push(t);
+    }
+  }
+  return result.length > 0 ? result : tokens;
 }
 
 function scorePair(
@@ -418,8 +480,11 @@ function scorePair(
     return { score: 0, reason: 'script_mismatch' };
   }
 
-  const cSet = new Set(cTokens);
-  const qSet = new Set(qTokens);
+  const qCanon = canonicalizeComparisonTokens(qTokens);
+  const cCanon = canonicalizeComparisonTokens(cTokens);
+
+  const cSet = new Set(cCanon);
+  const qSet = new Set(qCanon);
 
   let overlapCount = 0;
   for (const t of qSet) {
@@ -427,10 +492,10 @@ function scorePair(
   }
 
   // Also check meaningful (non-stopword) token overlap
-  const qMeaningful = qTokens.filter((t) => !ARABIC_STOPWORDS.has(t) && !LATIN_STOPWORDS.has(t));
-  const cMeaningful = cTokens.filter((t) => !ARABIC_STOPWORDS.has(t) && !LATIN_STOPWORDS.has(t));
-  const qMSet = new Set(qMeaningful.length ? qMeaningful : qTokens);
-  const cMSet = new Set(cMeaningful.length ? cMeaningful : cTokens);
+  const qMeaningful = qCanon.filter((t) => !ARABIC_STOPWORDS.has(t) && !LATIN_STOPWORDS.has(t));
+  const cMeaningful = cCanon.filter((t) => !ARABIC_STOPWORDS.has(t) && !LATIN_STOPWORDS.has(t));
+  const qMSet = new Set(qMeaningful.length ? qMeaningful : qCanon);
+  const cMSet = new Set(cMeaningful.length ? cMeaningful : cCanon);
 
   let mOverlap = 0;
   for (const t of qMSet) {
@@ -454,12 +519,29 @@ function scorePair(
   // Sequel number safety: e.g. "Mononoke 3" vs "Mononoke" or "John Wick 4" vs "John Wick 2"
   const qNums = extractTrailingOrStandaloneNumbers(qTokens);
   const cNums = extractTrailingOrStandaloneNumbers(cTokens);
-  if (qNums.join(',') !== cNums.join(',')) {
+  const sequelMismatch = qNums.join(',') !== cNums.join(',');
+  if (sequelMismatch) {
     score -= 0.4;
   }
 
+  // Exact contiguous subtitle phrase boost when sequel numbers match and year aligns (e.g. "The Headless Horror" -> "Detective Kien: The Headless Horror")
+  const qPhrase = qMeaningful.join(' ');
+  const cPhrase = cMeaningful.join(' ');
+  const isContiguousSubtitleMatch =
+    !sequelMismatch &&
+    qMeaningful.length >= 2 &&
+    cMeaningful.length > qMeaningful.length &&
+    cPhrase.includes(qPhrase) &&
+    expectedYearNum > 0 &&
+    candidateYearNum > 0 &&
+    Math.abs(expectedYearNum - candidateYearNum) <= 1;
+
+  if (isContiguousSubtitleMatch) {
+    score = Math.max(score, 0.78);
+  }
+
   // Reject partial matches where one side misses too many words (like "Mononoke" vs "Mononoke 3 The Curse of the Serpent")
-  if (Math.min(precision, recall) < 0.45 && Math.min(mPrecision, mRecall) < 0.5) {
+  if (!isContiguousSubtitleMatch && Math.min(precision, recall) < 0.45 && Math.min(mPrecision, mRecall) < 0.5) {
     score = Math.min(score, 0.45);
   }
 

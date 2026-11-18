@@ -503,7 +503,7 @@ export function HomeView({
                     </div>
 
                     {/* Balanced Compact Headline */}
-                    <h1 className="font-display text-2xl sm:text-3xl lg:text-[34px] font-black text-white leading-[1.2] line-clamp-2">
+                    <h1 className="font-display text-base sm:text-lg lg:text-[22px] font-extrabold text-white leading-[1.3] line-clamp-2">
                       {heroTitle}
                     </h1>
 
