@@ -35,15 +35,32 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
-    function isAdmin() {
+    function adminDocRole() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.get('role', 'owner');
+    }
+
+    function isOwnerAdmin() {
       return isSignedIn() && (
         (isVerifiedUser() && (
           request.auth.token.email == 'rahalahmed348@gmail.com' ||
           request.auth.token.email == 'mfeshmeny2@gmail.com' ||
           request.auth.token.email == 'ccicada6@gmail.com'
         )) ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        (
+          exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+          adminDocRole() == 'owner'
+        )
       );
+    }
+
+    function isModerator() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        && adminDocRole() == 'moderator';
+    }
+
+    function isStaffAdmin() {
+      return isOwnerAdmin() || isModerator();
     }
 
     // 3. Entity Validation Blueprints
@@ -141,10 +158,11 @@ service cloud.firestore {
 
     function isValidAdminRole(data) {
       return data.keys().hasAll(['uid', 'displayName', 'addedBy', 'createdAt'])
-      && data.keys().hasOnly(['uid', 'displayName', 'addedBy', 'createdAt'])
+      && data.keys().hasOnly(['uid', 'displayName', 'addedBy', 'role', 'createdAt'])
       && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
       && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
       && data.addedBy is string && data.addedBy.size() >= 1 && data.addedBy.size() <= 128
+      && (!('role' in data) || data.role in ['owner', 'moderator'])
       && data.createdAt is timestamp;
     }
 
@@ -262,26 +280,26 @@ service cloud.firestore {
     match /media/{mediaId} {
       allow get: if isValidId(mediaId);
       allow list: if true;
-      allow create: if isAdmin()
+      allow create: if isStaffAdmin()
         && isValidId(mediaId)
         && isValidMedia(incoming())
         && incoming().id == mediaId
         && incoming().updatedBy == request.auth.uid
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
-      allow update: if isAdmin()
+      allow update: if isStaffAdmin()
         && isValidId(mediaId)
         && isValidMedia(incoming())
         && incoming().id == existing().id
         && incoming().createdAt == existing().createdAt
         && incoming().updatedBy == request.auth.uid
         && incoming().updatedAt == request.time;
-      allow delete: if isAdmin() && isValidId(mediaId);
+      allow delete: if isStaffAdmin() && isValidId(mediaId);
     }
 
     match /requests/{requestId} {
-      allow get: if isValidId(requestId) && ((isSignedIn() && existing().userId == request.auth.uid) || isAdmin());
-      allow list: if (isSignedIn() && existing().userId == request.auth.uid) || isAdmin();
+      allow get: if isValidId(requestId) && ((isSignedIn() && existing().userId == request.auth.uid) || isOwnerAdmin());
+      allow list: if (isSignedIn() && existing().userId == request.auth.uid) || isOwnerAdmin();
       allow create: if isSignedIn()
         && isValidId(requestId)
         && isValidVisitorRequest(incoming())
@@ -291,7 +309,7 @@ service cloud.firestore {
         && incoming().adminNote == ''
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
-      allow update: if isAdmin()
+      allow update: if isOwnerAdmin()
         && isValidId(requestId)
         && isValidVisitorRequest(incoming())
         && incoming().id == existing().id
@@ -299,18 +317,18 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminNote', 'updatedAt']);
-      allow delete: if isValidId(requestId) && ((isSignedIn() && existing().userId == request.auth.uid) || isAdmin());
+      allow delete: if isValidId(requestId) && ((isSignedIn() && existing().userId == request.auth.uid) || isOwnerAdmin());
     }
 
     match /users/{userId} {
-      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
-      allow list: if isAdmin();
+      allow get: if isValidId(userId) && (isOwner(userId) || isOwnerAdmin());
+      allow list: if isOwnerAdmin();
       allow create: if isSignedIn()
         && isValidId(userId)
         && isOwner(userId)
         && isValidUserProfile(incoming())
         && incoming().uid == userId
-        && (incoming().role == 'member' || isAdmin())
+        && (incoming().role == 'member' || isStaffAdmin())
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
       allow update: if isSignedIn()
@@ -320,40 +338,46 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          isAdmin() ||
+          isOwnerAdmin() ||
           (isOwner(userId) && incoming().role == existing().role && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'watchlistIds', 'updatedAt']))
         );
-      allow delete: if isAdmin() && isValidId(userId);
+      allow delete: if isOwnerAdmin() && isValidId(userId);
 
       match /private/info {
-        allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+        allow get: if isValidId(userId) && (isOwner(userId) || isOwnerAdmin());
         allow list: if false;
         allow create, update: if isSignedIn()
           && isValidId(userId)
           && isOwner(userId)
           && isValidUserPrivateInfo(incoming())
           && incoming().updatedAt == request.time;
-        allow delete: if isAdmin() && isValidId(userId);
+        allow delete: if isOwnerAdmin() && isValidId(userId);
       }
     }
 
     match /admins/{adminUid} {
-      allow get: if isValidId(adminUid) && (isOwner(adminUid) || isAdmin());
-      allow list: if isAdmin();
-      allow create: if isAdmin()
+      allow get: if isValidId(adminUid) && (isOwner(adminUid) || isOwnerAdmin());
+      allow list: if isOwnerAdmin();
+      allow create: if isOwnerAdmin()
         && isValidId(adminUid)
         && isValidAdminRole(incoming())
         && incoming().uid == adminUid
         && incoming().addedBy == request.auth.uid
         && incoming().createdAt == request.time;
-      allow update: if false;
-      allow delete: if isAdmin() && isValidId(adminUid);
+      allow update: if isOwnerAdmin()
+        && isValidId(adminUid)
+        && isValidAdminRole(incoming())
+        && incoming().uid == existing().uid
+        && incoming().addedBy == existing().addedBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'displayName']);
+      allow delete: if isOwnerAdmin() && isValidId(adminUid);
     }
 
     match /settings/{settingId} {
       allow get: if isValidId(settingId);
-      allow list: if isAdmin();
-      allow create, update: if isAdmin()
+      allow list: if isOwnerAdmin();
+      allow create, update: if isOwnerAdmin()
         && isValidId(settingId)
         && isValidSiteSettings(incoming())
         && incoming().updatedBy == request.auth.uid
@@ -383,20 +407,20 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly(['stars', 'updatedAt']);
       allow delete: if isValidRatingId(ratingId)
-        && ((isSignedIn() && existing().userId == request.auth.uid) || isAdmin());
+        && ((isSignedIn() && existing().userId == request.auth.uid) || isOwnerAdmin());
     }
 
     match /admin_activity_logs/{logId} {
-      allow get: if isAdmin() && isValidId(logId);
-      allow list: if isAdmin();
-      allow create: if isAdmin()
+      allow get: if isOwnerAdmin() && isValidId(logId);
+      allow list: if isOwnerAdmin();
+      allow create: if isOwnerAdmin()
         && isValidId(logId)
         && isValidAdminActivityLog(incoming())
         && incoming().id == logId
         && incoming().adminUid == request.auth.uid
         && incoming().createdAt == request.time;
       allow update: if false;
-      allow delete: if isAdmin() && isValidId(logId);
+      allow delete: if isOwnerAdmin() && isValidId(logId);
     }
   }
 }

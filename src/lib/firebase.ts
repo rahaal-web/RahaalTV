@@ -26,12 +26,14 @@ import firebaseConfig from '../../firebase-applet-config.json';
 import fallbackBackdropImg from '../assets/images/hero_scifi_backdrop_1794813333496.jpg';
 import fallbackPosterImg from '../assets/images/poster_running_man_1794813333683.jpg';
 import {
+  AdminPrivilegeRole,
   MediaItem,
   RequestStatus,
   SiteSettings,
   StreamServer,
   VisitorRequest,
 } from '../types/media';
+import { reportClientError } from './clientLogger';
 import { isLikelyNonVideoWebsiteUrl } from './clientScraper';
 import {
   buildDedicatedMediaUrl,
@@ -102,6 +104,16 @@ export function handleFirestoreError(
     path,
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
+  reportClientError({
+    source: 'firestore.error',
+    level: 'error',
+    message: `${operationType} on ${path || 'unknown'}: ${errInfo.error}`,
+    context: {
+      operationType,
+      path: path || '',
+      hasUser: Boolean(auth.currentUser?.uid),
+    },
+  });
   throw new Error(JSON.stringify(errInfo));
 }
 
@@ -187,18 +199,25 @@ export async function signOutFirebase() {
   return signOut(auth);
 }
 
-export async function checkIsAdminUser(user: User | null): Promise<boolean> {
-  if (!user) return false;
+export async function getUserAdminRole(user: User | null): Promise<AdminPrivilegeRole | null> {
+  if (!user) return null;
   const email = user.email?.toLowerCase() || '';
   if (user.emailVerified && PRIMARY_ADMIN_EMAILS.some((e) => e.toLowerCase() === email)) {
-    return true;
+    return 'owner';
   }
   try {
     const adminDoc = await getDoc(doc(db, 'admins', user.uid));
-    return adminDoc.exists();
+    if (!adminDoc.exists()) return null;
+    const data = adminDoc.data() as { role?: unknown };
+    return data?.role === 'moderator' ? 'moderator' : 'owner';
   } catch {
-    return false;
+    return null;
   }
+}
+
+export async function checkIsAdminUser(user: User | null): Promise<boolean> {
+  const role = await getUserAdminRole(user);
+  return role !== null;
 }
 
 const FALLBACK_POSTER_URL = fallbackPosterImg;
@@ -661,15 +680,17 @@ export async function saveSiteSettingsToFirestore(
 export async function grantAdminRoleInFirestore(
   targetUid: string,
   displayName: string,
-  addedByUid: string
+  addedByUid: string,
+  role: AdminPrivilegeRole = 'moderator'
 ) {
   const cleanUid = targetUid.trim().replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 128);
   const path = `admins/${cleanUid}`;
   try {
     await setDoc(doc(db, 'admins', cleanUid), {
       uid: cleanUid,
-      displayName: displayName.trim().slice(0, 120) || 'مشرف RahaL TV',
+      displayName: displayName.trim().slice(0, 120) || (role === 'owner' ? 'مسؤول RahaL TV' : 'مشرف RahaL TV'),
       addedBy: addedByUid,
+      role,
       createdAt: serverTimestamp(),
     });
   } catch (error) {
@@ -681,20 +702,37 @@ export async function createAdminAccountInFirebase(
   identifier: string,
   password: string,
   displayName: string,
-  addedByUid: string
-): Promise<{ uid: string; email: string }> {
+  addedByUid: string,
+  role: AdminPrivilegeRole = 'moderator'
+): Promise<{ uid: string; email: string; role: AdminPrivilegeRole }> {
   const email = normalizeAuthIdentifier(identifier);
-  const cleanName = displayName.trim().slice(0, 120) || email.split('@')[0] || 'مشرف RahaL TV';
+  const cleanName =
+    displayName.trim().slice(0, 120) ||
+    email.split('@')[0] ||
+    (role === 'owner' ? 'مسؤول RahaL TV' : 'مشرف RahaL TV');
   const secondaryApp = initializeApp(firebaseConfig, `admin-creator-${Date.now()}`);
   const secondaryAuth = getAuth(secondaryApp);
   try {
     const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
     await updateProfile(cred.user, { displayName: cleanName });
-    await grantAdminRoleInFirestore(cred.user.uid, cleanName, addedByUid);
+    await grantAdminRoleInFirestore(cred.user.uid, cleanName, addedByUid, role);
     await signOut(secondaryAuth);
-    return { uid: cred.user.uid, email };
+    return { uid: cred.user.uid, email, role };
   } finally {
     await deleteApp(secondaryApp).catch(() => undefined);
+  }
+}
+
+export async function updateAdminRoleInFirestore(
+  targetUid: string,
+  role: AdminPrivilegeRole
+) {
+  const cleanUid = targetUid.trim().replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 128);
+  const path = `admins/${cleanUid}`;
+  try {
+    await updateDoc(doc(db, 'admins', cleanUid), { role });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 

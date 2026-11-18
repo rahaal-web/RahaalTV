@@ -42,7 +42,7 @@ import {
   loadStoredPlayerTheme,
   normalizePlayerTheme,
 } from '../lib/playerTheme';
-import { MediaItem, PlayerThemeConfig, VisitorRequest } from '../types/media';
+import { AdminPrivilegeRole, MediaItem, PlayerThemeConfig, VisitorRequest } from '../types/media';
 import { FooterTopic } from './Footer';
 
 /* ---------------- Watchlist Modal ---------------- */
@@ -1231,6 +1231,7 @@ interface LoginModalProps {
   onClose: () => void;
   firebaseUser: User | null;
   isAdmin: boolean;
+  adminRole?: AdminPrivilegeRole | null;
   onLogout: () => Promise<void>;
   onOpenAdmin: () => void;
   onNotify?: (msg: string) => void;
@@ -1241,6 +1242,7 @@ export function LoginModal({
   onClose,
   firebaseUser,
   isAdmin,
+  adminRole,
   onLogout,
   onOpenAdmin,
   onNotify,
@@ -1322,9 +1324,17 @@ export function LoginModal({
               </p>
               <p className="text-xs text-[#b7c9ef] mt-1">{firebaseUser.email}</p>
               {isAdmin && (
-                <span className="mt-2 inline-flex items-center gap-1 rounded-lg bg-[#f9c400]/15 border border-[#f9c400]/40 px-2.5 py-1 text-[11px] font-black text-[#f9c400]">
+                <span
+                  className={`mt-2 inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-black border ${
+                    adminRole === 'moderator'
+                      ? 'bg-sky-500/15 border-sky-400/40 text-sky-300'
+                      : 'bg-[#f9c400]/15 border-[#f9c400]/40 text-[#f9c400]'
+                  }`}
+                >
                   <ShieldCheck className="w-3.5 h-3.5" />
-                  مشرف معتمد
+                  {adminRole === 'moderator'
+                    ? 'مشرف — النشر والتعديل والجلب'
+                    : 'مسؤول — صلاحيات كاملة'}
                 </span>
               )}
             </div>

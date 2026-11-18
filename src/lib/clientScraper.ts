@@ -212,9 +212,9 @@ export async function testCloudflareWorkerConnection(rawInput: string): Promise<
   }
 }
 
-export const CLOUDFLARE_WORKER_SOURCE = `// RahaL TV — Free Cloudflare Worker CORS Proxy (v2)
+export const CLOUDFLARE_WORKER_SOURCE = `// RahaL TV — Free Cloudflare Worker CORS Proxy & Client Error Logger (v3)
 // Deploy for free at https://dash.cloudflare.com (Workers & Pages -> Create Worker)
-// Free tier: 100,000 requests/day, zero sleep/cold-start, works permanently with GitHub Pages.
+// Free tier: 100,000 requests/day, zero sleep/cold-start, works permanently with GitHub Pages & Workers Hosting.
 
 function isBlockedHost(hostname) {
   const h = (hostname || '').toLowerCase();
@@ -244,8 +244,57 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   'Access-Control-Expose-Headers':
     'X-Final-Url, X-Upstream-Status, X-Upstream-X-Frame-Options, X-Upstream-CSP, X-Proxy-Worker',
-  'X-Proxy-Worker': 'rahaltv-v2',
+  'X-Proxy-Worker': 'rahaltv-v3',
 };
+
+function sanitizeLogString(val, maxLen = 400) {
+  if (typeof val !== 'string') return '';
+  return val
+    .replace(/Bearer\\s+[A-Za-z0-9\\-._~+/]+=*/gi, 'Bearer [REDACTED]')
+    .slice(0, maxLen);
+}
+
+async function handleClientErrorLog(request) {
+  try {
+    const rawText = await request.text();
+    if (!rawText || rawText.length > 16384) {
+      return new Response(JSON.stringify({ ok: false, error: 'Payload too large or empty' }), {
+        status: 400,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json; charset=utf-8' },
+      });
+    }
+    const payload = JSON.parse(rawText);
+    const level = ['warn', 'error', 'fatal'].includes(payload.level) ? payload.level : 'error';
+    const logRecord = {
+      tag: 'RAHALTV_CLIENT_LOG',
+      level,
+      timestamp: new Date().toISOString(),
+      source: sanitizeLogString(payload.source || 'window', 80),
+      message: sanitizeLogString(payload.message || 'Unknown frontend error', 600),
+      stack: sanitizeLogString(payload.stack || '', 1500),
+      route: sanitizeLogString(payload.route || '/', 250),
+      host: sanitizeLogString(payload.host || '', 120),
+      release: sanitizeLogString(payload.release || 'web', 60),
+      online: typeof payload.online === 'boolean' ? payload.online : undefined,
+      cfRay: request.headers.get('cf-ray') || undefined,
+      colo: request.cf && request.cf.colo ? request.cf.colo : undefined,
+      country: request.cf && request.cf.country ? request.cf.country : undefined,
+    };
+    const serialized = JSON.stringify(logRecord);
+    if (level === 'warn') console.warn(serialized);
+    else console.error(serialized);
+    return new Response(JSON.stringify({ ok: true, logged: true }), {
+      status: 202,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+    });
+  } catch (err) {
+    console.error('RAHALTV_LOGGER_FAILURE:', String(err));
+    return new Response(JSON.stringify({ ok: false, error: 'Log processing failed' }), {
+      status: 400,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json; charset=utf-8' },
+    });
+  }
+}
 
 export default {
   async fetch(request, env) {
@@ -254,6 +303,10 @@ export default {
     }
 
     const reqUrl = new URL(request.url);
+    if (reqUrl.pathname === '/api/client-logs' && request.method === 'POST') {
+      return handleClientErrorLog(request);
+    }
+
     let target = (reqUrl.searchParams.get('url') || '').trim();
     const isPing = reqUrl.searchParams.has('ping');
 
@@ -280,9 +333,10 @@ export default {
         JSON.stringify({
           ok: true,
           service: 'RahaL TV Proxy Worker',
-          version: 2,
+          version: 3,
           usage: '?url=https://...',
-          note: 'هذا رابط بروكسي السحب الخاص بـ RahaL TV. الصقه في لوحة الإدارة -> الإعدادات -> رابط بروكسي السحب.',
+          logsEndpoint: '/api/client-logs',
+          note: 'هذا رابط بروكسي السحب وتسجيل الأخطاء الخاص بـ RahaL TV. الصقه في لوحة الإدارة -> الإعدادات -> رابط بروكسي السحب.',
         }),
         {
           status: 200,

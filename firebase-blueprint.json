@@ -135,12 +135,13 @@
     },
     "AdminRole": {
       "title": "AdminRole",
-      "description": "Trusted administrator RBAC registry document.",
+      "description": "Trusted administrator and moderator RBAC registry document.",
       "type": "object",
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
         "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
         "addedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "role": { "type": "string", "enum": ["owner", "moderator"] },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "displayName", "addedBy", "createdAt"]

@@ -242,21 +242,21 @@ export function Header({
               )}
             </button>
 
-            <button
-              type="button"
-              onClick={onOpenAdmin}
-              aria-label="لوحة التحكم"
-              className={`inline-flex h-10 items-center gap-1.5 rounded-xl border px-3 text-xs sm:text-sm font-bold transition-colors cursor-pointer whitespace-nowrap ${
-                currentView === 'admin'
-                  ? 'bg-[#f9c400] border-[#f9c400] text-[#0f0f0f]'
-                  : isAdmin
-                    ? 'bg-[#f9c400]/15 border-[#f9c400]/40 text-[#f9c400] hover:bg-[#f9c400] hover:text-[#0f0f0f]'
-                    : 'bg-[#181818] border-white/10 text-[#e5e5e5] hover:border-[#f9c400]/50'
-              }`}
-            >
-              <LayoutDashboard className="w-4 h-4" />
-              <span className="hidden sm:inline">الإدارة</span>
-            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={onOpenAdmin}
+                aria-label="لوحة التحكم"
+                className={`inline-flex h-10 items-center gap-1.5 rounded-xl border px-3 text-xs sm:text-sm font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                  currentView === 'admin'
+                    ? 'bg-[#f9c400] border-[#f9c400] text-[#0f0f0f]'
+                    : 'bg-[#f9c400]/15 border-[#f9c400]/40 text-[#f9c400] hover:bg-[#f9c400] hover:text-[#0f0f0f]'
+                }`}
+              >
+                <LayoutDashboard className="w-4 h-4" />
+                <span className="hidden sm:inline">الإدارة</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -424,17 +424,19 @@ export function Header({
               onAfterClick={() => setMobileMenuOpen(false)}
             />
 
-            <button
-              type="button"
-              onClick={() => {
-                onOpenAdmin();
-                setMobileMenuOpen(false);
-              }}
-              className="mt-auto flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#f9c400] text-xs font-black text-[#0f0f0f] cursor-pointer"
-            >
-              <LayoutDashboard className="w-4 h-4" />
-              <span>لوحة التحكم (تخصيص الموقع)</span>
-            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => {
+                  onOpenAdmin();
+                  setMobileMenuOpen(false);
+                }}
+                className="mt-auto flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#f9c400] text-xs font-black text-[#0f0f0f] cursor-pointer"
+              >
+                <LayoutDashboard className="w-4 h-4" />
+                <span>لوحة التحكم</span>
+              </button>
+            )}
           </div>
         </div>
       )}

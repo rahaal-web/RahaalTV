@@ -1,4 +1,5 @@
 import { Component, ErrorInfo, ReactNode } from 'react';
+import { reportClientError } from '../lib/clientLogger';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -24,6 +25,15 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('RahaL TV ErrorBoundary caught an error:', error, info);
+    reportClientError({
+      source: 'react.ErrorBoundary',
+      level: 'fatal',
+      message: error?.message || 'React ErrorBoundary crash',
+      error,
+      context: {
+        componentStack: (info?.componentStack || '').slice(0, 240),
+      },
+    });
   }
 
   render() {

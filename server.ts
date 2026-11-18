@@ -2488,6 +2488,32 @@ async function startServer() {
     }
   });
 
+  app.post('/api/client-logs', (req, res) => {
+    try {
+      const body = (req.body || {}) as Record<string, unknown>;
+      const level = body.level === 'warn' || body.level === 'fatal' ? body.level : 'error';
+      const record = {
+        tag: 'RAHALTV_CLIENT_LOG',
+        level,
+        timestamp: new Date().toISOString(),
+        source: String(body.source || 'window').slice(0, 80),
+        message: String(body.message || 'Unknown frontend error').slice(0, 600),
+        stack: String(body.stack || '').slice(0, 1500),
+        route: String(body.route || '/').slice(0, 250),
+        host: String(body.host || '').slice(0, 120),
+        release: String(body.release || 'web').slice(0, 60),
+      };
+      if (level === 'warn') {
+        console.warn(JSON.stringify(record));
+      } else {
+        console.error(JSON.stringify(record));
+      }
+      return res.status(202).json({ ok: true, logged: true });
+    } catch {
+      return res.status(400).json({ ok: false });
+    }
+  });
+
   const httpServer = http.createServer(app);
 
   if (process.env.NODE_ENV !== 'production') {

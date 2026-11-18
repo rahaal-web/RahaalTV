@@ -60,6 +60,7 @@ import {
   seedCatalogToFirestore,
   signInWithEmailPassword,
   signOutFirebase,
+  updateAdminRoleInFirestore,
   updateVisitorRequestInFirestore,
 } from '../lib/firebase';
 import {
@@ -96,6 +97,7 @@ import {
   saveStoredHomeConfig,
 } from '../lib/homeConfig';
 import {
+  AdminPrivilegeRole,
   AdminRoleRecord,
   CastMember,
   DownloadMirror,
@@ -123,9 +125,12 @@ export type AdminTab =
   | 'users'
   | 'settings';
 
+const MODERATOR_ALLOWED_TABS: AdminTab[] = ['catalog', 'scraper', 'site_scraper'];
+
 interface AdminDashboardViewProps {
   user: User | null;
   isAdmin: boolean;
+  adminRole?: AdminPrivilegeRole | null;
   authLoading: boolean;
   catalog: MediaItem[];
   isFirestoreSeeded: boolean;
@@ -360,6 +365,7 @@ function scrapedToMediaItem(scraped: ScrapedPayload, indexOffset = 0): MediaItem
 export function AdminDashboardView({
   user,
   isAdmin,
+  adminRole,
   authLoading,
   catalog,
   isFirestoreSeeded,
@@ -376,12 +382,35 @@ export function AdminDashboardView({
   onRestoreStarterItems,
   onNotify,
 }: AdminDashboardViewProps) {
-  const [activeTab, setActiveTab] = useState<AdminTab>(requestedTab?.tab || 'overview');
+  const effectiveRole: AdminPrivilegeRole | null =
+    adminRole !== undefined ? adminRole : isAdmin ? 'owner' : null;
+  const isOwner = effectiveRole === 'owner';
+  const isModerator = effectiveRole === 'moderator';
+
+  const [activeTab, setActiveTab] = useState<AdminTab>(() => {
+    const initial = requestedTab?.tab || (isModerator ? 'catalog' : 'overview');
+    if (isModerator && !MODERATOR_ALLOWED_TABS.includes(initial)) {
+      return 'catalog';
+    }
+    return initial;
+  });
+
   useEffect(() => {
     if (requestedTab?.tab) {
-      setActiveTab(requestedTab.tab);
+      const target = requestedTab.tab;
+      if (isModerator && !MODERATOR_ALLOWED_TABS.includes(target)) {
+        setActiveTab('catalog');
+      } else {
+        setActiveTab(target);
+      }
     }
-  }, [requestedTab?.nonce, requestedTab?.tab]);
+  }, [requestedTab?.nonce, requestedTab?.tab, isModerator]);
+
+  useEffect(() => {
+    if (isModerator && !MODERATOR_ALLOWED_TABS.includes(activeTab)) {
+      setActiveTab('catalog');
+    }
+  }, [isModerator, activeTab]);
   const [busyAction, setBusyAction] = useState(false);
   const [adminSigningIn, setAdminSigningIn] = useState(false);
   const [adminAuthError, setAdminAuthError] = useState<string | null>(null);
@@ -442,9 +471,11 @@ export function AdminDashboardView({
   // Admins tab states
   const [newAdminUid, setNewAdminUid] = useState('');
   const [newAdminName, setNewAdminName] = useState('');
+  const [newAdminRole, setNewAdminRole] = useState<AdminPrivilegeRole>('moderator');
   const [createAdminName, setCreateAdminName] = useState('');
   const [createAdminEmail, setCreateAdminEmail] = useState('');
   const [createAdminPassword, setCreateAdminPassword] = useState('');
+  const [createAdminRole, setCreateAdminRole] = useState<AdminPrivilegeRole>('moderator');
   const [createAdminError, setCreateAdminError] = useState<string | null>(null);
   const [creatingAdmin, setCreatingAdmin] = useState(false);
 
@@ -1268,6 +1299,11 @@ export function AdminDashboardView({
 
   const handleConfirmBulkDelete = async () => {
     if (!confirmBulkDeleteMode) return;
+    if (confirmBulkDeleteMode === 'all' && !isOwner) {
+      setConfirmBulkDeleteMode(null);
+      onNotify('حذف كل المحتوى دفعة واحدة متاح للمسؤول فقط');
+      return;
+    }
     const targetIds =
       confirmBulkDeleteMode === 'all'
         ? catalog.map((item) => item.id)
@@ -1333,15 +1369,19 @@ export function AdminDashboardView({
 
   const handleGrantAdmin = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user || !newAdminUid.trim()) return;
+    if (!user || !isOwner || !newAdminUid.trim()) return;
     setBusyAction(true);
     try {
-      await grantAdminRoleInFirestore(newAdminUid, newAdminName, user.uid);
+      await grantAdminRoleInFirestore(newAdminUid, newAdminName, user.uid, newAdminRole);
       setNewAdminUid('');
       setNewAdminName('');
-      onNotify('تمت إضافة المشرف الجديد بصلاحية كاملة');
+      onNotify(
+        newAdminRole === 'owner'
+          ? 'تمت إضافة المسؤول الجديد بكامل الصلاحيات'
+          : 'تمت إضافة المشرف الجديد (صلاحية النشر والتعديل والحذف والجلب)'
+      );
     } catch {
-      onNotify('تعذر إضافة المشرف — تأكد من صحة معرف UID');
+      onNotify('تعذر إضافة العضو — تأكد من صحة معرف UID');
     } finally {
       setBusyAction(false);
     }
@@ -1349,7 +1389,7 @@ export function AdminDashboardView({
 
   const handleCreateAdminAccount = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user || !createAdminEmail.trim() || createAdminPassword.length < 6) {
+    if (!user || !isOwner || !createAdminEmail.trim() || createAdminPassword.length < 6) {
       setCreateAdminError('يرجى إدخال البريد/اسم المستخدم وكلمة مرور لا تقل عن 6 أحرف.');
       return;
     }
@@ -1360,16 +1400,40 @@ export function AdminDashboardView({
         createAdminEmail,
         createAdminPassword,
         createAdminName,
-        user.uid
+        user.uid,
+        createAdminRole
       );
       setCreateAdminName('');
       setCreateAdminEmail('');
       setCreateAdminPassword('');
-      onNotify(`تم إنشاء حساب المشرف (${created.email}) ومنحه الصلاحية بنجاح!`);
+      onNotify(
+        created.role === 'owner'
+          ? `تم إنشاء حساب المسؤول (${created.email}) بكامل الصلاحيات!`
+          : `تم إنشاء حساب المشرف (${created.email}) بصلاحيات النشر والجلب والتعديل!`
+      );
     } catch (err: unknown) {
       setCreateAdminError(getFirebaseAuthErrorMessage(err));
     } finally {
       setCreatingAdmin(false);
+    }
+  };
+
+  const handleToggleExistingAdminRole = async (adm: AdminRoleRecord) => {
+    if (!isOwner || adm.uid === user?.uid) return;
+    const currentRole: AdminPrivilegeRole = adm.role === 'moderator' ? 'moderator' : 'owner';
+    const nextRole: AdminPrivilegeRole = currentRole === 'owner' ? 'moderator' : 'owner';
+    setBusyAction(true);
+    try {
+      await updateAdminRoleInFirestore(adm.uid, nextRole);
+      onNotify(
+        nextRole === 'owner'
+          ? `تمت ترقية "${adm.displayName}" إلى مسؤول بكامل الصلاحيات`
+          : `تم تعيين "${adm.displayName}" كمشرف (النشر والتعديل والحذف والجلب فقط)`
+      );
+    } catch {
+      onNotify('تعذر تحديث صلاحية العضو');
+    } finally {
+      setBusyAction(false);
     }
   };
 
@@ -2024,26 +2088,40 @@ export function AdminDashboardView({
                 <span className="font-latin rounded-lg bg-[#f9c400]/15 border border-[#f9c400]/30 px-2 py-0.5 text-[10px] font-black text-[#f9c400]">
                   /admin
                 </span>
+                <span
+                  className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-0.5 text-[11px] font-extrabold border ${
+                    isOwner
+                      ? 'bg-[#f9c400]/15 border-[#f9c400]/35 text-[#f9c400]'
+                      : 'bg-sky-500/15 border-sky-400/35 text-sky-300'
+                  }`}
+                >
+                  <ShieldCheck className="w-3 h-3" />
+                  {isOwner ? 'مسؤول — كل الصلاحيات' : 'مشرف — النشر والجلب والتعديل'}
+                </span>
                 <span className="inline-flex items-center gap-1 rounded-lg bg-[#4CAF50]/15 border border-[#4CAF50]/35 px-2.5 py-0.5 text-[11px] font-extrabold text-[#4CAF50]">
                   <Database className="w-3 h-3" />
                   متصل بـ Firestore
                 </span>
               </div>
               <p className="text-[11px] text-[#b7c9ef] hidden sm:block">
-                لوحة إدارة مستقلة — نشر الأفلام والمسلسلات، السيرفرات، الحلقات، وجلب المحتوى الخارجي
+                {isOwner
+                  ? 'لوحة إدارة مستقلة — تحكم كامل بالمحتوى، الإعدادات، الصلاحيات، والصفحة الرئيسية'
+                  : 'صلاحيات المشرف — نشر وتعديل وحذف الأفلام والمسلسلات واستخدام أدوات الجلب'}
               </p>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setActiveTab('ai_editor')}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-[#f9c400]/20 border border-[#f9c400]/45 px-3.5 py-2 text-xs font-extrabold text-[#f9c400] cursor-pointer"
-            >
-              <Sparkles className="w-4 h-4" />
-              <span className="hidden md:inline">المساعد الذكي المحلي</span>
-            </button>
+            {isOwner && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('ai_editor')}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-[#f9c400]/20 border border-[#f9c400]/45 px-3.5 py-2 text-xs font-extrabold text-[#f9c400] cursor-pointer"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span className="hidden md:inline">المساعد الذكي المحلي</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -2092,7 +2170,7 @@ export function AdminDashboardView({
               )}
               <div className="text-right leading-tight">
                 <p className="text-[11px] font-extrabold text-white truncate max-w-[120px]">
-                  {user.displayName || 'مشرف'}
+                  {user.displayName || (isOwner ? 'مسؤول' : 'مشرف')}
                 </p>
                 <p className="font-latin text-[10px] text-[#b7c9ef] truncate max-w-[140px]">
                   {user.email}
@@ -2148,7 +2226,9 @@ export function AdminDashboardView({
                 { id: 'users', label: `الأعضاء والمشرفين (${usersList.length})`, icon: Users },
                 { id: 'settings', label: 'إعدادات المنصة', icon: Settings },
               ] as const
-            ).map((tab) => {
+            )
+              .filter((tab) => isOwner || MODERATOR_ALLOWED_TABS.includes(tab.id))
+              .map((tab) => {
               const Icon = tab.icon;
               const active = activeTab === tab.id;
               return (
@@ -2191,8 +2271,8 @@ export function AdminDashboardView({
 
           {/* Active Tab Workspace */}
           <div className="lg:col-span-9 space-y-6">
-            {/* TAB 1: OVERVIEW */}
-            {activeTab === 'overview' && (
+            {/* TAB 1: OVERVIEW (OWNER ONLY) */}
+            {isOwner && activeTab === 'overview' && (
               <div className="space-y-6">
                 {!isFirestoreSeeded && (
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-3xl bg-gradient-to-l from-[#D92321]/20 via-[#1a242e] to-[#0c1821] border border-[#D92321]/40 p-5">
@@ -2349,8 +2429,8 @@ export function AdminDashboardView({
               </div>
             )}
 
-            {/* TAB 1B: FULL HOME PAGE BUILDER */}
-            {activeTab === 'home_builder' && (
+            {/* TAB 1B: FULL HOME PAGE BUILDER (OWNER ONLY) */}
+            {isOwner && activeTab === 'home_builder' && (
               <HomeBuilderPanel
                 catalog={catalog}
                 homeConfig={activeHomeConfig}
@@ -2368,8 +2448,8 @@ export function AdminDashboardView({
               />
             )}
 
-            {/* TAB 1C: AI BULK CONTENT EDITOR */}
-            {activeTab === 'ai_editor' && (
+            {/* TAB 1C: AI BULK CONTENT EDITOR (OWNER ONLY) */}
+            {isOwner && activeTab === 'ai_editor' && (
               <AdminAiBulkEditor
                 user={user}
                 catalog={catalog}
@@ -2444,7 +2524,7 @@ export function AdminDashboardView({
                       <span>إضافة فيلم / مسلسل</span>
                     </button>
 
-                    {!isFirestoreSeeded && catalog.length > 0 && (
+                    {isOwner && !isFirestoreSeeded && catalog.length > 0 && (
                       <button
                         type="button"
                         disabled={busyAction}
@@ -2504,15 +2584,17 @@ export function AdminDashboardView({
                         <Trash2 className="w-3.5 h-3.5" />
                         <span>حذف المحدد ({selectedMediaIds.length})</span>
                       </button>
-                      <button
-                        type="button"
-                        disabled={busyAction || catalog.length === 0}
-                        onClick={() => setConfirmBulkDeleteMode('all')}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321]/15 hover:bg-[#D92321] border border-[#D92321]/50 disabled:opacity-40 px-3.5 py-1.5 text-xs font-extrabold text-[#ff8a88] hover:text-white transition-colors cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>حذف كل المحتوى ({catalog.length})</span>
-                      </button>
+                      {isOwner && (
+                        <button
+                          type="button"
+                          disabled={busyAction || catalog.length === 0}
+                          onClick={() => setConfirmBulkDeleteMode('all')}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321]/15 hover:bg-[#D92321] border border-[#D92321]/50 disabled:opacity-40 px-3.5 py-1.5 text-xs font-extrabold text-[#ff8a88] hover:text-white transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>حذف كل المحتوى ({catalog.length})</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 ) : (
@@ -2531,7 +2613,7 @@ export function AdminDashboardView({
                         <Globe className="w-3.5 h-3.5" />
                         <span>جلب محتوى من موقع بالكامل</span>
                       </button>
-                      {!isFirestoreSeeded && hasDismissedStarters && (
+                      {isOwner && !isFirestoreSeeded && hasDismissedStarters && (
                         <button
                           type="button"
                           onClick={() => {
@@ -3699,8 +3781,8 @@ export function AdminDashboardView({
               </div>
             )}
 
-            {/* TAB 4: VISITOR REQUESTS */}
-            {activeTab === 'requests' && (
+            {/* TAB 4: VISITOR REQUESTS (OWNER ONLY) */}
+            {isOwner && activeTab === 'requests' && (
               <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 space-y-5">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="font-display text-lg font-extrabold text-white">
@@ -3830,17 +3912,39 @@ export function AdminDashboardView({
               </div>
             )}
 
-            {/* TAB 5: USERS & ADMINS RBAC */}
-            {activeTab === 'users' && (
+            {/* TAB 5: USERS & ADMINS RBAC (OWNER ONLY) */}
+            {isOwner && activeTab === 'users' && (
               <div className="space-y-6">
-                {/* Create New Admin Directly with Email/Username & Password */}
+                {/* Role Definitions Guide */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="rounded-2xl bg-[#0c1821] border border-[#f9c400]/30 p-4">
+                    <p className="text-xs font-black text-[#f9c400] flex items-center gap-1.5">
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>مسؤول (Owner / صلاحيات كاملة)</span>
+                    </p>
+                    <p className="text-[11px] text-[#b7c9ef] mt-1 leading-relaxed">
+                      يمتلك كل الصلاحيات: إدارة الإعدادات، تعديل الصفحة الرئيسية، المساعد الذكي المحلي، طلبات الزوار، إدارة الصلاحيات، والنشر والتعديل والحذف والجلب.
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-[#0c1821] border border-sky-400/30 p-4">
+                    <p className="text-xs font-black text-sky-300 flex items-center gap-1.5">
+                      <Edit3 className="w-4 h-4" />
+                      <span>مشرف (Moderator / نشر وجلب فقط)</span>
+                    </p>
+                    <p className="text-[11px] text-[#b7c9ef] mt-1 leading-relaxed">
+                      صلاحياته محددة فقط في نشر الأفلام والمسلسلات وتعديلها وحذفها واستخدام أدوات الجلب (عمل واحد أو موقع كامل)، دون الوصول للإعدادات أو الصلاحيات.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Create New Admin/Moderator Directly with Email/Username & Password */}
                 <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 space-y-4">
                   <div>
                     <h2 className="font-display text-base font-extrabold text-white">
-                      إنشاء حساب مشرف جديد (باسم وباسورد مباشرة)
+                      إنشاء حساب مسؤول أو مشرف جديد (باسم وباسورد مباشرة)
                     </h2>
                     <p className="text-xs text-[#b7c9ef] mt-1">
-                      يتم إنشاء الحساب في Firebase Auth ومنحه صلاحية الإدارة فورًا بدون تسجيل خروجك.
+                      يتم إنشاء الحساب في Firebase Auth ومنحه الرتبة المحددة فورًا بدون تسجيل خروجك.
                     </p>
                   </div>
 
@@ -3850,7 +3954,7 @@ export function AdminDashboardView({
                       required
                       value={createAdminName}
                       onChange={(e) => setCreateAdminName(e.target.value)}
-                      placeholder="اسم المشرف (مثال: أحمد)"
+                      placeholder="الاسم (مثال: أحمد)"
                       className="sm:col-span-3 rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:border-[#D92321] focus:outline-none"
                     />
                     <input
@@ -3860,7 +3964,7 @@ export function AdminDashboardView({
                       value={createAdminEmail}
                       onChange={(e) => setCreateAdminEmail(e.target.value)}
                       placeholder="البريد أو اسم المستخدم (mod@rahaltv.com)"
-                      className="sm:col-span-4 rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:border-[#D92321] focus:outline-none"
+                      className="sm:col-span-3 rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:border-[#D92321] focus:outline-none"
                     />
                     <input
                       type="password"
@@ -3870,15 +3974,24 @@ export function AdminDashboardView({
                       value={createAdminPassword}
                       onChange={(e) => setCreateAdminPassword(e.target.value)}
                       placeholder="كلمة المرور (6 أحرف+)"
-                      className="sm:col-span-3 rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:border-[#D92321] focus:outline-none"
+                      className="sm:col-span-2 rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:border-[#D92321] focus:outline-none"
                     />
+                    <select
+                      value={createAdminRole}
+                      onChange={(e) => setCreateAdminRole(e.target.value as AdminPrivilegeRole)}
+                      aria-label="نوع الصلاحية"
+                      className="sm:col-span-2 rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2.5 text-xs font-bold text-white focus:border-[#D92321] focus:outline-none"
+                    >
+                      <option value="moderator">مشرف (نشر وتعديل وجلب)</option>
+                      <option value="owner">مسؤول (صلاحيات كاملة)</option>
+                    </select>
                     <button
                       type="submit"
                       disabled={creatingAdmin}
                       className="sm:col-span-2 inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#4CAF50] hover:bg-[#43a047] disabled:opacity-60 py-2.5 px-4 text-xs font-extrabold text-white cursor-pointer"
                     >
                       {creatingAdmin ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                      <span>إضافة مشرف</span>
+                      <span>إضافة الحساب</span>
                     </button>
                   </form>
 
@@ -3891,7 +4004,7 @@ export function AdminDashboardView({
 
                 <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 space-y-4">
                   <h2 className="font-display text-base font-extrabold text-white">
-                    أو إضافة مشرف موجود عبر معرف المستخدم (UID)
+                    أو منح صلاحية لمستخدم موجود عبر معرف المستخدم (UID)
                   </h2>
                   <form onSubmit={handleGrantAdmin} className="grid grid-cols-1 sm:grid-cols-12 gap-3">
                     <input
@@ -3900,53 +4013,90 @@ export function AdminDashboardView({
                       value={newAdminUid}
                       onChange={(e) => setNewAdminUid(e.target.value)}
                       placeholder="معرّف المستخدم (Firebase UID)"
-                      className="sm:col-span-5 rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:border-[#D92321] focus:outline-none"
+                      className="sm:col-span-4 rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:border-[#D92321] focus:outline-none"
                     />
                     <input
                       type="text"
                       required
                       value={newAdminName}
                       onChange={(e) => setNewAdminName(e.target.value)}
-                      placeholder="اسم المشرف"
-                      className="sm:col-span-4 rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:border-[#D92321] focus:outline-none"
+                      placeholder="الاسم المعروض"
+                      className="sm:col-span-3 rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:border-[#D92321] focus:outline-none"
                     />
+                    <select
+                      value={newAdminRole}
+                      onChange={(e) => setNewAdminRole(e.target.value as AdminPrivilegeRole)}
+                      aria-label="اختيار الرتبة"
+                      className="sm:col-span-3 rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2.5 text-xs font-bold text-white focus:border-[#D92321] focus:outline-none"
+                    >
+                      <option value="moderator">مشرف (نشر وتعديل وجلب)</option>
+                      <option value="owner">مسؤول (صلاحيات كاملة)</option>
+                    </select>
                     <button
                       type="submit"
                       disabled={busyAction}
-                      className="sm:col-span-3 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] py-2.5 px-4 text-xs font-extrabold text-white cursor-pointer"
+                      className="sm:col-span-2 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] py-2.5 px-4 text-xs font-extrabold text-white cursor-pointer"
                     >
-                      منح صلاحية مشرف
+                      منح الصلاحية
                     </button>
                   </form>
 
                   {adminsList.length > 0 && (
                     <div className="pt-3 border-t border-white/10 space-y-2">
-                      <p className="text-xs font-bold text-[#b7c9ef]">المشرفون المضافون ({adminsList.length}):</p>
-                      {adminsList.map((adm) => (
-                        <div
-                          key={adm.uid}
-                          className="flex items-center justify-between rounded-xl bg-[#1a242e] px-3.5 py-2.5 text-xs"
-                        >
-                          <div>
-                            <span className="font-extrabold text-white">{adm.displayName}</span>
-                            {adm.uid === user.uid && (
-                              <span className="mr-2 rounded bg-[#f9c400]/20 px-1.5 py-0.5 text-[10px] font-black text-[#f9c400]">
-                                حسابك الحالي
+                      <p className="text-xs font-bold text-[#b7c9ef]">
+                        فريق الإدارة المضاف ({adminsList.length}):
+                      </p>
+                      {adminsList.map((adm) => {
+                        const roleVal: AdminPrivilegeRole =
+                          adm.role === 'moderator' ? 'moderator' : 'owner';
+                        return (
+                          <div
+                            key={adm.uid}
+                            className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-[#1a242e] px-3.5 py-2.5 text-xs"
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-extrabold text-white">{adm.displayName}</span>
+                              <span
+                                className={`rounded-md px-2 py-0.5 text-[10px] font-black border ${
+                                  roleVal === 'owner'
+                                    ? 'bg-[#f9c400]/15 border-[#f9c400]/40 text-[#f9c400]'
+                                    : 'bg-sky-500/15 border-sky-400/40 text-sky-300'
+                                }`}
+                              >
+                                {roleVal === 'owner' ? 'مسؤول (كامل)' : 'مشرف (نشر وجلب)'}
                               </span>
+                              {adm.uid === user.uid && (
+                                <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-black text-white">
+                                  حسابك الحالي
+                                </span>
+                              )}
+                              <span className="text-[#b7c9ef] font-latin" dir="ltr">
+                                ({adm.uid})
+                              </span>
+                            </div>
+                            {adm.uid !== user.uid && (
+                              <div className="flex items-center gap-3">
+                                <button
+                                  type="button"
+                                  disabled={busyAction}
+                                  onClick={() => void handleToggleExistingAdminRole(adm)}
+                                  className="text-xs font-bold text-sky-300 hover:underline cursor-pointer"
+                                >
+                                  {roleVal === 'owner' ? 'تحويل لمشرف' : 'ترقية لمسؤول'}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={busyAction}
+                                  onClick={() => void revokeAdminRoleFromFirestore(adm.uid)}
+                                  className="text-xs font-bold text-[#D92321] hover:underline cursor-pointer"
+                                >
+                                  سحب الصلاحية
+                                </button>
+                              </div>
                             )}
-                            <span className="text-[#b7c9ef] mr-2 font-latin" dir="ltr">({adm.uid})</span>
                           </div>
-                          {adm.uid !== user.uid && (
-                            <button
-                              type="button"
-                              onClick={() => void revokeAdminRoleFromFirestore(adm.uid)}
-                              className="text-xs font-bold text-[#D92321] hover:underline cursor-pointer"
-                            >
-                              سحب الصلاحية
-                            </button>
-                          )}
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -3997,8 +4147,8 @@ export function AdminDashboardView({
               </div>
             )}
 
-            {/* TAB 6: SITE SETTINGS */}
-            {activeTab === 'settings' && (
+            {/* TAB 6: SITE SETTINGS (OWNER ONLY) */}
+            {isOwner && activeTab === 'settings' && (
               <form
                 onSubmit={handleSaveSettings}
                 className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 space-y-5"

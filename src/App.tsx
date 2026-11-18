@@ -29,8 +29,8 @@ import {
 } from './lib/permalink';
 import {
   auth,
-  checkIsAdminUser,
   db,
+  getUserAdminRole,
   handleFirestoreError,
   OperationType,
   sanitizeRatingMediaId,
@@ -40,6 +40,7 @@ import {
   syncUserProfileToFirestore,
 } from './lib/firebase';
 import {
+  AdminPrivilegeRole,
   AdminRoleRecord,
   CatalogFilterState,
   MediaItem,
@@ -115,7 +116,9 @@ export default function App() {
   // Firebase Auth & RBAC State
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminRole, setAdminRole] = useState<AdminPrivilegeRole | null>(null);
+  const canAccessAdmin = adminRole !== null;
+  const isOwnerAdmin = adminRole === 'owner';
 
   // Live Firestore Data State
   const [firestoreCatalog, setFirestoreCatalog] = useState<MediaItem[]>([]);
@@ -382,16 +385,24 @@ export default function App() {
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
       if (user) {
-        const adminFlag = await checkIsAdminUser(user);
-        setIsAdmin(adminFlag);
+        const resolvedRole = await getUserAdminRole(user);
+        setAdminRole(resolvedRole);
+        if (resolvedRole !== 'owner') {
+          setUsersList([]);
+          setAdminsList([]);
+        }
         try {
-          const cloudWatchlist = await syncUserProfileToFirestore(user, watchlistIds, adminFlag);
+          const cloudWatchlist = await syncUserProfileToFirestore(
+            user,
+            watchlistIds,
+            resolvedRole !== null
+          );
           setWatchlistIds(cloudWatchlist);
         } catch {
           // Handled cleanly inside firebase helper
         }
       } else {
-        setIsAdmin(false);
+        setAdminRole(null);
         setVisitorRequests([]);
         setUsersList([]);
         setAdminsList([]);
@@ -402,12 +413,12 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 3. Authenticated Listeners (/requests, plus /users & /admins for Admins only)
+  // 3. Authenticated Listeners (/requests, plus /users & /admins for Owner Admins only)
   useEffect(() => {
     if (authLoading || !firebaseUser) return;
 
     const reqPath = 'requests';
-    const reqQuery = isAdmin
+    const reqQuery = isOwnerAdmin
       ? query(collection(db, reqPath), orderBy('createdAt', 'desc'))
       : query(collection(db, reqPath), where('userId', '==', firebaseUser.uid));
 
@@ -451,7 +462,7 @@ export default function App() {
     let unsubUsers = () => {};
     let unsubAdmins = () => {};
 
-    if (isAdmin) {
+    if (isOwnerAdmin) {
       unsubUsers = onSnapshot(
         collection(db, 'users'),
         (snapshot) => {
@@ -478,7 +489,7 @@ export default function App() {
       unsubUsers();
       unsubAdmins();
     };
-  }, [authLoading, firebaseUser, isAdmin]);
+  }, [authLoading, firebaseUser, isOwnerAdmin]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -516,8 +527,14 @@ export default function App() {
     }
   };
 
-  const openAdminPage = (tab: AdminTab = 'overview') => {
-    setAdminRequestedTab((prev) => ({ tab, nonce: prev.nonce + 1 }));
+  const openAdminPage = (tab?: AdminTab) => {
+    const resolvedTab: AdminTab =
+      adminRole === 'moderator'
+        ? tab && (tab === 'catalog' || tab === 'scraper' || tab === 'site_scraper')
+          ? tab
+          : 'catalog'
+        : tab || 'overview';
+    setAdminRequestedTab((prev) => ({ tab: resolvedTab, nonce: prev.nonce + 1 }));
     pushPathIfNeeded('/admin');
     setView('admin');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -611,7 +628,8 @@ export default function App() {
       <>
         <AdminDashboardView
           user={firebaseUser}
-          isAdmin={isAdmin}
+          isAdmin={canAccessAdmin}
+          adminRole={adminRole}
           authLoading={authLoading}
           catalog={activeCatalog}
           isFirestoreSeeded={isFirestoreSeeded}
@@ -642,8 +660,8 @@ export default function App() {
     );
   }
 
-  /* ---------------- Maintenance Mode Gate (Regular Visitors Blocked; Admins Bypass) ---------------- */
-  if (siteSettings.maintenanceMode && !isAdmin) {
+  /* ---------------- Maintenance Mode Gate (Regular Visitors Blocked; Admins & Moderators Bypass) ---------------- */
+  if (siteSettings.maintenanceMode && !canAccessAdmin) {
     if (authLoading) {
       return (
         <div className="min-h-screen bg-[#0f0f0f] flex items-center justify-center text-white">
@@ -663,7 +681,8 @@ export default function App() {
           isOpen={loginOpen}
           onClose={() => setLoginOpen(false)}
           firebaseUser={firebaseUser}
-          isAdmin={isAdmin}
+          isAdmin={canAccessAdmin}
+          adminRole={adminRole}
           onLogout={handleLogout}
           onOpenAdmin={() => openAdminPage()}
           onNotify={showToast}
@@ -674,19 +693,25 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-[#0f0f0f] text-white">
-      {siteSettings.maintenanceMode && isAdmin && (
+      {siteSettings.maintenanceMode && canAccessAdmin && (
         <div className="bg-[#f9c400] text-[#0f0f0f] px-4 py-2 text-xs font-black flex flex-wrap items-center justify-center gap-3 z-50">
           <span className="inline-flex items-center gap-1.5">
             <Wrench className="w-3.5 h-3.5" />
-            <span>وضع الصيانة مُفعّل حاليًا للزوار — الموقع متاح لك بصلاحية الأدمن</span>
+            <span>
+              {isOwnerAdmin
+                ? 'وضع الصيانة مُفعّل حاليًا للزوار — الموقع متاح لك بصلاحية المسؤول'
+                : 'وضع الصيانة مُفعّل حاليًا للزوار — الموقع متاح لك بصلاحية المشرف'}
+            </span>
           </span>
-          <button
-            type="button"
-            onClick={() => openAdminPage('settings')}
-            className="rounded-lg bg-[#0f0f0f] text-white px-3 py-1 text-[11px] font-extrabold hover:bg-[#E50914] transition-colors cursor-pointer"
-          >
-            إدارة الإعدادات
-          </button>
+          {isOwnerAdmin && (
+            <button
+              type="button"
+              onClick={() => openAdminPage('settings')}
+              className="rounded-lg bg-[#0f0f0f] text-white px-3 py-1 text-[11px] font-extrabold hover:bg-[#E50914] transition-colors cursor-pointer"
+            >
+              إدارة الإعدادات
+            </button>
+          )}
         </div>
       )}
       <Header
@@ -702,7 +727,7 @@ export default function App() {
         watchlistCount={watchlistItems.length}
         username={firebaseUser?.displayName || null}
         userPhoto={firebaseUser?.photoURL || null}
-        isAdmin={isAdmin}
+        isAdmin={canAccessAdmin}
         activeCategory={filters.category}
         currentView={view}
       />
@@ -712,7 +737,7 @@ export default function App() {
           <HomeView
             catalog={activeCatalog}
             siteSettings={siteSettings}
-            isAdmin={isAdmin}
+            isAdmin={isOwnerAdmin}
             loading={!initialMediaLoaded && activeCatalog.length === 0}
             onSelectMedia={handleSelectMedia}
             onApplyFilter={handleApplyFilter}
@@ -803,7 +828,8 @@ export default function App() {
         isOpen={loginOpen}
         onClose={() => setLoginOpen(false)}
         firebaseUser={firebaseUser}
-        isAdmin={isAdmin}
+        isAdmin={canAccessAdmin}
+        adminRole={adminRole}
         onLogout={handleLogout}
         onOpenAdmin={() => openAdminPage()}
         onNotify={showToast}

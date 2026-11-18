@@ -205,10 +205,13 @@ export interface UserProfileRecord {
   role: 'member' | 'admin';
 }
 
+export type AdminPrivilegeRole = 'owner' | 'moderator';
+
 export interface AdminRoleRecord {
   uid: string;
   displayName: string;
   addedBy: string;
+  role?: AdminPrivilegeRole;
 }
 
 export interface MediaRatingRecord {
