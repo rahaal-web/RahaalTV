@@ -54,6 +54,7 @@ import { AdminImageManagerPanel } from './AdminImageManagerPanel';
 import { HomeBuilderPanel } from './HomeBuilderPanel';
 import { MediaPreviewModal } from './MediaPreviewModal';
 import { PopupShieldPanel } from './PopupShieldPanel';
+import { ScraperAdapterBuilderPanel } from './ScraperAdapterBuilderPanel';
 import { TypographyPanel } from './TypographyPanel';
 import {
   evaluateImageQuality,
@@ -133,6 +134,14 @@ import {
   saveStoredPopupShieldConfig,
 } from '../lib/popupShield';
 import {
+  matchAdapterForUrl,
+} from '../lib/scraperAdapterUtils';
+import {
+  loadLocalScraperAdapters,
+  subscribeScraperAdapters,
+  syncAdaptersToBackendRegistry,
+} from '../lib/scraperAdaptersDb';
+import {
   AdminPrivilegeRole,
   AdminRoleRecord,
   CastMember,
@@ -146,6 +155,7 @@ import {
   PlayerThemeConfig,
   PopupShieldConfig,
   RequestStatus,
+  ScraperAdapter,
   SeasonItem,
   SiteSettings,
   StreamServer,
@@ -164,11 +174,18 @@ export type AdminTab =
   | 'ai_editor'
   | 'scraper'
   | 'site_scraper'
+  | 'scraper_adapters'
   | 'requests'
   | 'users'
   | 'settings';
 
-const MODERATOR_ALLOWED_TABS: AdminTab[] = ['catalog', 'images', 'scraper', 'site_scraper'];
+const MODERATOR_ALLOWED_TABS: AdminTab[] = [
+  'catalog',
+  'images',
+  'scraper',
+  'site_scraper',
+  'scraper_adapters',
+];
 
 interface AdminDashboardViewProps {
   user: User | null;
@@ -249,10 +266,19 @@ function resolveWatchServerUrl(srv?: { mode?: 'url' | 'embed'; url?: string; emb
 }
 
 function renumberServers(servers: StreamServer[]): StreamServer[] {
-  return servers.map((srv, idx) => ({
-    ...srv,
-    name: `سيرفر ${idx + 1}`,
-  }));
+  return servers.map((srv, idx) => {
+    const existing = (srv.name || '').trim();
+    const isGeneric =
+      !existing ||
+      /^سيرفر\s*\d*$/i.test(existing) ||
+      /^server\s*\d*$/i.test(existing) ||
+      existing === 'مستورد' ||
+      existing.toLowerCase() === 'embed';
+    return {
+      ...srv,
+      name: isGeneric ? `سيرفر ${idx + 1}` : existing,
+    };
+  });
 }
 
 function createEmptyMedia(): MediaItem {
@@ -557,6 +583,52 @@ export function AdminDashboardView({
     (ScrapedPayload & { tempKey: string; selected: boolean })[]
   >([]);
   const [siteKindFilter, setSiteKindFilter] = useState<'all' | MediaKind>('all');
+
+  // Smart Scraper Adapters state (Firestore + local fallback + backend registry sync)
+  const [scraperAdapters, setScraperAdapters] = useState<ScraperAdapter[]>(() =>
+    loadLocalScraperAdapters()
+  );
+  const [adaptersCloudSynced, setAdaptersCloudSynced] = useState(false);
+  const [scrapedAdapterUsed, setScrapedAdapterUsed] = useState<{
+    id: string;
+    name: string;
+    version: number;
+  } | null>(null);
+  const [siteCrawlAdapterUsed, setSiteCrawlAdapterUsed] = useState<{
+    id: string;
+    name: string;
+    version: number;
+  } | null>(null);
+
+  useEffect(() => {
+    const unsub = subscribeScraperAdapters((list, fromCloud) => {
+      setScraperAdapters(list);
+      setAdaptersCloudSynced(fromCloud);
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    if (!shouldSkipBackendApiCalls()) {
+      void syncAdaptersToBackendRegistry(scraperAdapters, user);
+    }
+  }, [scraperAdapters, user]);
+
+  const matchedSingleAdapter = useMemo(
+    () =>
+      scrapeMode === 'url' && scrapeUrl.trim()
+        ? matchAdapterForUrl(scrapeUrl, scraperAdapters)
+        : null,
+    [scrapeMode, scrapeUrl, scraperAdapters]
+  );
+
+  const matchedSiteAdapter = useMemo(
+    () =>
+      siteScrapeMode === 'url' && siteCrawlUrl.trim()
+        ? matchAdapterForUrl(siteCrawlUrl, scraperAdapters)
+        : null,
+    [siteScrapeMode, siteCrawlUrl, scraperAdapters]
+  );
 
   // Requests tab states
   const [reqStatusFilter, setReqStatusFilter] = useState<string>('all');
@@ -932,7 +1004,7 @@ export function AdminDashboardView({
       (editingItem.servers || [])
         .map((srv, idx) => ({
           id: srv.id || `srv-${Date.now()}-${idx}`,
-          name: `سيرفر ${idx + 1}`,
+          name: (srv.name || '').trim() || `سيرفر ${idx + 1}`,
           mode: srv.mode || (srv.embedCode ? 'embed' : 'url'),
           url: (srv.url || '').trim(),
           embedCode: (srv.embedCode || '').trim(),
@@ -950,7 +1022,7 @@ export function AdminDashboardView({
           (ep.servers || [])
             .map((srv, idx) => ({
               id: srv.id || `epsrv-${Date.now()}-${ep.number}-${idx}`,
-              name: `سيرفر ${idx + 1}`,
+              name: (srv.name || '').trim() || `سيرفر ${idx + 1}`,
               mode: srv.mode || (srv.embedCode ? 'embed' : 'url'),
               url: (srv.url || '').trim(),
               embedCode: (srv.embedCode || '').trim(),
@@ -1108,6 +1180,7 @@ export function AdminDashboardView({
     e.preventDefault();
     setScrapeError(null);
     setScrapedResult(null);
+    setScrapedAdapterUsed(null);
 
     if (scrapeMode === 'url' && !scrapeUrl.trim()) {
       setScrapeError('يرجى إدخال رابط الصفحة المستهدفة أولاً.');
@@ -1122,10 +1195,24 @@ export function AdminDashboardView({
     try {
       const payload =
         scrapeMode === 'url'
-          ? { url: scrapeUrl.trim() }
-          : { rawHtml: scrapeRawHtml, url: scrapeUrl.trim() || undefined };
+          ? {
+              url: scrapeUrl.trim(),
+              ...(matchedSingleAdapter ? { adapter: matchedSingleAdapter } : {}),
+            }
+          : {
+              rawHtml: scrapeRawHtml,
+              url: scrapeUrl.trim() || undefined,
+              ...(scrapeUrl.trim() && matchAdapterForUrl(scrapeUrl, scraperAdapters)
+                ? { adapter: matchAdapterForUrl(scrapeUrl, scraperAdapters) }
+                : {}),
+            };
 
-      let data: { ok?: boolean; error?: string; extracted?: ScrapedPayload } | null = null;
+      let data: {
+        ok?: boolean;
+        error?: string;
+        extracted?: ScrapedPayload;
+        adapterUsed?: { id: string; name: string; version: number };
+      } | null = null;
       let usedBackend = false;
 
       if (!shouldSkipBackendApiCalls()) {
@@ -1142,6 +1229,7 @@ export function AdminDashboardView({
               error?: string;
               service?: string;
               extracted?: ScrapedPayload;
+              adapterUsed?: { id: string; name: string; version: number };
             };
             const isRealScrapeApi =
               Boolean(json && typeof json === 'object') &&
@@ -1172,6 +1260,7 @@ export function AdminDashboardView({
         return;
       }
 
+      setScrapedAdapterUsed(data.adapterUsed || null);
       setScrapedResult({
         ...data.extracted,
         shortUrl: '',
@@ -1195,7 +1284,11 @@ export function AdminDashboardView({
       if (extractedUrls.length > 0) {
         void checkServerUrls(extractedUrls, true);
       }
-      onNotify(`تم استخراج "${data.extracted.title}" بنجاح!`);
+      onNotify(
+        data.adapterUsed
+          ? `تم استخراج "${data.extracted.title}" باستخدام Adapter (${data.adapterUsed.name} v${data.adapterUsed.version})!`
+          : `تم استخراج "${data.extracted.title}" بنجاح!`
+      );
     } catch {
       setScrapeError('تعذر تحليل الصفحة المستهدفة. جرّب استخدام وضع لصق كود HTML.');
     } finally {
@@ -1254,6 +1347,7 @@ export function AdminDashboardView({
     e.preventDefault();
     setSiteCrawlError(null);
     setSiteCrawlMeta(null);
+    setSiteCrawlAdapterUsed(null);
     setSiteScrapedItems([]);
 
     if (siteScrapeMode === 'url' && !siteCrawlUrl.trim()) {
@@ -1267,12 +1361,17 @@ export function AdminDashboardView({
 
     setSiteCrawling(true);
     try {
+      const resolvedSiteAdapter =
+        matchedSiteAdapter ||
+        (siteCrawlUrl.trim() ? matchAdapterForUrl(siteCrawlUrl, scraperAdapters) : null);
+
       const payload = {
         siteUrl: siteCrawlUrl.trim() || undefined,
         rawHtml: siteScrapeMode === 'html' ? siteCrawlHtml : undefined,
         maxItems: siteMaxItems,
         maxPages: siteMaxPages,
         deepScrape: siteDeepScrape,
+        ...(resolvedSiteAdapter ? { adapter: resolvedSiteAdapter } : {}),
       };
 
       let data: {
@@ -1282,6 +1381,7 @@ export function AdminDashboardView({
         siteTitle?: string;
         totalDiscovered?: number;
         items?: ScrapedPayload[];
+        adapterUsed?: { id: string; name: string; version: number };
       } | null = null;
       let usedBackend = false;
 
@@ -1302,6 +1402,7 @@ export function AdminDashboardView({
               siteTitle?: string;
               totalDiscovered?: number;
               items?: ScrapedPayload[];
+              adapterUsed?: { id: string; name: string; version: number };
             };
             const isRealSiteApi =
               Boolean(json && typeof json === 'object') &&
@@ -1332,6 +1433,7 @@ export function AdminDashboardView({
         return;
       }
 
+      setSiteCrawlAdapterUsed(data.adapterUsed || null);
       setSiteCrawlMeta({
         strategy: data.strategy || 'HTML Crawler',
         siteTitle: data.siteTitle || siteCrawlUrl,
@@ -1881,7 +1983,12 @@ export function AdminDashboardView({
   const updateServerRow = (idx: number, patch: Partial<StreamServer>) => {
     if (!editingItem) return;
     const next = [...(editingItem.servers || [])];
-    next[idx] = { ...next[idx], ...patch, name: `سيرفر ${idx + 1}` };
+    const existingName = (next[idx]?.name || '').trim();
+    next[idx] = {
+      ...next[idx],
+      ...patch,
+      name: patch.name !== undefined ? patch.name : existingName || `سيرفر ${idx + 1}`,
+    };
     setEditingItem({ ...editingItem, servers: next });
   };
 
@@ -1931,7 +2038,12 @@ export function AdminDashboardView({
   const updateScrapedServerRow = (idx: number, patch: Partial<StreamServer>) => {
     if (!scrapedResult) return;
     const next = [...(scrapedResult.servers || [])];
-    next[idx] = { ...next[idx], ...patch, name: `سيرفر ${idx + 1}` };
+    const existingName = (next[idx]?.name || '').trim();
+    next[idx] = {
+      ...next[idx],
+      ...patch,
+      name: patch.name !== undefined ? patch.name : existingName || `سيرفر ${idx + 1}`,
+    };
     setScrapedResult({ ...scrapedResult, servers: next });
   };
 
@@ -2316,7 +2428,12 @@ export function AdminDashboardView({
     const ep = editingItem.seasons?.[seasonIdx]?.episodes[epIdx];
     if (!ep) return;
     const current = [...(ep.servers || [])];
-    current[srvIdx] = { ...current[srvIdx], ...patch, name: `سيرفر ${srvIdx + 1}` };
+    const existingName = (current[srvIdx]?.name || '').trim();
+    current[srvIdx] = {
+      ...current[srvIdx],
+      ...patch,
+      name: patch.name !== undefined ? patch.name : existingName || `سيرفر ${srvIdx + 1}`,
+    };
     updateEpisode(seasonIdx, epIdx, { servers: current });
   };
 
@@ -2671,7 +2788,12 @@ export function AdminDashboardView({
                   id: 'site_scraper',
                   label: 'جلب موقع بالكامل (Crawler)',
                   icon: Globe,
-                  badge: 'جديد',
+                },
+                {
+                  id: 'scraper_adapters',
+                  label: 'تطوير مصادر الجلب',
+                  icon: Wrench,
+                  badge: scraperAdapters.length > 0 ? String(scraperAdapters.length) : 'ذكي',
                 },
                 {
                   id: 'requests',
@@ -3404,7 +3526,7 @@ export function AdminDashboardView({
                       </div>
                     )}
 
-                    <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
                       <button
                         type="submit"
                         disabled={scraping}
@@ -3417,6 +3539,31 @@ export function AdminDashboardView({
                         )}
                         <span>{scraping ? 'جاري تحليل واستخراج البيانات...' : 'استخراج البيانات الآن'}</span>
                       </button>
+
+                      {matchedSingleAdapter ? (
+                        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#4CAF50]/35 bg-[#4CAF50]/10 px-3 py-1.5 text-[11px] text-[#4CAF50]">
+                          <Wrench className="w-3.5 h-3.5 shrink-0" />
+                          <span>
+                            سيعمل بـ Adapter مفعّل: <strong className="font-latin text-white">{matchedSingleAdapter.name}</strong> (v{matchedSingleAdapter.version})
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('scraper_adapters')}
+                            className="underline font-bold text-[#f9c400] cursor-pointer"
+                          >
+                            تعديل في مطوّر المصادر
+                          </button>
+                        </div>
+                      ) : scrapeMode === 'url' && scrapeUrl.trim() ? (
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('scraper_adapters')}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-[#1a242e] hover:border-[#f9c400]/40 px-3 py-1.5 text-[11px] font-bold text-[#b7c9ef] hover:text-white cursor-pointer"
+                        >
+                          <Wrench className="w-3.5 h-3.5 text-[#f9c400]" />
+                          <span>إنشاء Adapter مخصص لهذا الموقع</span>
+                        </button>
+                      ) : null}
                     </div>
                   </form>
 
@@ -3477,6 +3624,14 @@ export function AdminDashboardView({
                           <span className="rounded-lg bg-[#1a242e] px-2.5 py-1 text-[11px] font-bold text-[#b7c9ef]">
                             {scrapedResult.duration}
                           </span>
+                          {scrapedAdapterUsed && (
+                            <span className="inline-flex items-center gap-1 rounded-lg bg-[#4CAF50]/15 border border-[#4CAF50]/35 px-2.5 py-1 text-[11px] font-bold text-[#4CAF50]">
+                              <Wrench className="w-3 h-3" />
+                              <span className="font-latin">
+                                Adapter: {scrapedAdapterUsed.name} v{scrapedAdapterUsed.version}
+                              </span>
+                            </span>
+                          )}
                         </div>
 
                         <h3 className="font-display text-xl font-extrabold text-white">
@@ -3666,7 +3821,7 @@ export function AdminDashboardView({
                                   <div className="flex flex-wrap items-center justify-between gap-2">
                                     <div className="flex flex-wrap items-center gap-2 min-w-0">
                                       <span className="inline-flex items-center gap-1 rounded-lg bg-[#D92321] px-2.5 py-0.5 text-[11px] font-black text-white tabular-nums">
-                                        سيرفر {idx + 1}
+                                        {s.name || `سيرفر ${idx + 1}`}
                                       </span>
                                       <span className="font-latin rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-[#f9c400]">
                                         {s.quality || 'HD'}
@@ -3826,28 +3981,43 @@ export function AdminDashboardView({
                             <Layers className="w-4 h-4 text-[#f9c400]" />
                             <span>الحلقات وطاقم العمل</span>
                           </p>
-                          <p className="text-[11px] text-[#b7c9ef]">
+                          <p className="text-[11px] text-[#b7c9ef] tabular-nums">
+                            المواسم:{' '}
+                            <strong className="text-white">{scrapedResult.seasons?.length || 0}</strong>
+                            {' • '}
                             حلقات مستخرجة:{' '}
                             <strong className="text-white">
-                              {scrapedResult.seasons?.[0]?.episodes.length || 0}
+                              {(scrapedResult.seasons || []).reduce(
+                                (sum, s) => sum + (s.episodes?.length || 0),
+                                0
+                              )}
                             </strong>
                             {' • '}
                             ممثلون:{' '}
                             <strong className="text-white">{scrapedResult.cast.length}</strong>
                           </p>
-                          {(scrapedResult.seasons?.[0]?.episodes.length || 0) > 0 && (
-                            <div className="max-h-32 overflow-y-auto space-y-1 pt-1 border-t border-white/10">
-                              {scrapedResult.seasons![0].episodes.map((ep) => (
-                                <div
-                                  key={ep.number}
-                                  className="flex items-center justify-between text-[10px] text-[#b7c9ef] bg-[#0c1821]/70 rounded-lg px-2 py-1"
-                                >
-                                  <span className="truncate font-bold text-white">
-                                    {ep.title || `الحلقة ${ep.number}`}
-                                  </span>
-                                  <span className="shrink-0 font-bold text-[#4CAF50]">
-                                    {ep.servers?.length || (ep.watchUrl ? 1 : 0)} سيرفر
-                                  </span>
+                          {(scrapedResult.seasons || []).some((s) => (s.episodes?.length || 0) > 0) && (
+                            <div className="max-h-40 overflow-y-auto space-y-1.5 pt-1 border-t border-white/10">
+                              {(scrapedResult.seasons || []).map((season) => (
+                                <div key={season.seasonNumber} className="space-y-1">
+                                  {(scrapedResult.seasons?.length || 0) > 1 && (
+                                    <p className="text-[10px] font-extrabold text-[#f9c400] px-1">
+                                      {season.label} ({season.episodes.length} حلقة)
+                                    </p>
+                                  )}
+                                  {season.episodes.map((ep) => (
+                                    <div
+                                      key={`${season.seasonNumber}-${ep.number}`}
+                                      className="flex items-center justify-between text-[10px] text-[#b7c9ef] bg-[#0c1821]/70 rounded-lg px-2 py-1"
+                                    >
+                                      <span className="truncate font-bold text-white">
+                                        {ep.title || `الحلقة ${ep.number}`}
+                                      </span>
+                                      <span className="shrink-0 font-bold text-[#4CAF50] tabular-nums">
+                                        {ep.servers?.length || (ep.watchUrl ? 1 : 0)} سيرفر
+                                      </span>
+                                    </div>
+                                  ))}
                                 </div>
                               ))}
                             </div>
@@ -4034,22 +4204,40 @@ export function AdminDashboardView({
                       </div>
                     </div>
 
-                    <button
-                      type="submit"
-                      disabled={siteCrawling}
-                      className="inline-flex items-center gap-2 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] disabled:opacity-60 px-6 py-3 text-xs font-black text-[#06131c] shadow-lg cursor-pointer"
-                    >
-                      {siteCrawling ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Globe className="w-4 h-4" />
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <button
+                        type="submit"
+                        disabled={siteCrawling}
+                        className="inline-flex items-center gap-2 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] disabled:opacity-60 px-6 py-3 text-xs font-black text-[#06131c] shadow-lg cursor-pointer"
+                      >
+                        {siteCrawling ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Globe className="w-4 h-4" />
+                        )}
+                        <span>
+                          {siteCrawling
+                            ? 'جاري فحص الموقع وجلب جميع المحتويات...'
+                            : 'بدء جلب جميع محتوى الموقع الآن'}
+                        </span>
+                      </button>
+
+                      {matchedSiteAdapter && (
+                        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#4CAF50]/35 bg-[#4CAF50]/10 px-3 py-1.5 text-[11px] text-[#4CAF50]">
+                          <Wrench className="w-3.5 h-3.5 shrink-0" />
+                          <span>
+                            سيُستخدم Adapter مفعّل: <strong className="font-latin text-white">{matchedSiteAdapter.name}</strong> (v{matchedSiteAdapter.version})
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('scraper_adapters')}
+                            className="underline font-bold text-[#f9c400] cursor-pointer"
+                          >
+                            إدارة الـ Adapter
+                          </button>
+                        </div>
                       )}
-                      <span>
-                        {siteCrawling
-                          ? 'جاري فحص الموقع وجلب جميع المحتويات...'
-                          : 'بدء جلب جميع محتوى الموقع الآن'}
-                      </span>
-                    </button>
+                    </div>
                   </form>
 
                   {siteCrawlError && (
@@ -4092,6 +4280,14 @@ export function AdminDashboardView({
                           <span className="font-latin rounded-md bg-[#4CAF50]/15 border border-[#4CAF50]/35 px-2 py-0.5 text-[11px] font-bold text-[#4CAF50]">
                             {siteCrawlMeta.strategy}
                           </span>
+                          {siteCrawlAdapterUsed && (
+                            <span className="inline-flex items-center gap-1 rounded-md bg-sky-500/15 border border-sky-400/35 px-2 py-0.5 text-[11px] font-bold text-sky-300">
+                              <Wrench className="w-3 h-3" />
+                              <span className="font-latin">
+                                {siteCrawlAdapterUsed.name} v{siteCrawlAdapterUsed.version}
+                              </span>
+                            </span>
+                          )}
                         </div>
                         <p className="text-xs text-[#b7c9ef] mt-1">
                           حدد الأعمال المطلوبة أو عدّل أي عمل قبل النشر الجماعي في قاعدة البيانات.
@@ -4290,6 +4486,27 @@ export function AdminDashboardView({
                   </div>
                 )}
               </div>
+            )}
+
+            {/* TAB 3C: SMART SCRAPER ADAPTER BUILDER */}
+            {activeTab === 'scraper_adapters' && user && (
+              <ScraperAdapterBuilderPanel
+                user={user}
+                adapters={scraperAdapters}
+                cloudSynced={adaptersCloudSynced}
+                onAdaptersChanged={(next) => {
+                  setScraperAdapters(next);
+                  if (!shouldSkipBackendApiCalls()) {
+                    void syncAdaptersToBackendRegistry(next, user);
+                  }
+                }}
+                onOpenInSingleScraper={(targetUrl) => {
+                  setScrapeMode('url');
+                  setScrapeUrl(targetUrl);
+                  setActiveTab('scraper');
+                }}
+                onNotify={onNotify}
+              />
             )}
 
             {/* TAB 4: VISITOR REQUESTS (OWNER ONLY) */}

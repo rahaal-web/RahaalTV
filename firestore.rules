@@ -353,6 +353,203 @@ service cloud.firestore {
       && data.createdAt is timestamp;
     }
 
+    function isValidAdapterPageDetection(pd) {
+      return pd is map
+        && pd.keys().hasAll([
+          'seriesUrlPattern', 'movieUrlPattern', 'episodeUrlPattern',
+          'watchSubpageSelector', 'watchSubpageUrlPattern', 'downloadSubpageSelector'
+        ])
+        && pd.keys().hasOnly([
+          'seriesUrlPattern', 'movieUrlPattern', 'episodeUrlPattern',
+          'watchSubpageSelector', 'watchSubpageUrlPattern', 'downloadSubpageSelector'
+        ])
+        && pd.seriesUrlPattern is string && pd.seriesUrlPattern.size() <= 240
+        && pd.movieUrlPattern is string && pd.movieUrlPattern.size() <= 240
+        && pd.episodeUrlPattern is string && pd.episodeUrlPattern.size() <= 240
+        && pd.watchSubpageSelector is string && pd.watchSubpageSelector.size() <= 240
+        && pd.watchSubpageUrlPattern is string && pd.watchSubpageUrlPattern.size() <= 240
+        && pd.downloadSubpageSelector is string && pd.downloadSubpageSelector.size() <= 240;
+    }
+
+    function isValidAdapterEpisodeRules(er) {
+      return er is map
+        && er.keys().hasAll([
+          'containerSelector', 'linkSelector', 'seasonTabSelector', 'seasonPanelSelector',
+          'selectSeasonSelector', 'selectEpisodeOptionSelector', 'episodeNumberRegex',
+          'episodeIdParam', 'preserveMultiSeason', 'maxEpisodes'
+        ])
+        && er.keys().hasOnly([
+          'containerSelector', 'linkSelector', 'seasonTabSelector', 'seasonPanelSelector',
+          'selectSeasonSelector', 'selectEpisodeOptionSelector', 'episodeNumberRegex',
+          'episodeIdParam', 'preserveMultiSeason', 'maxEpisodes'
+        ])
+        && er.containerSelector is string && er.containerSelector.size() <= 240
+        && er.linkSelector is string && er.linkSelector.size() <= 240
+        && er.seasonTabSelector is string && er.seasonTabSelector.size() <= 240
+        && er.seasonPanelSelector is string && er.seasonPanelSelector.size() <= 240
+        && er.selectSeasonSelector is string && er.selectSeasonSelector.size() <= 240
+        && er.selectEpisodeOptionSelector is string && er.selectEpisodeOptionSelector.size() <= 240
+        && er.episodeNumberRegex is string && er.episodeNumberRegex.size() <= 240
+        && er.episodeIdParam is string && er.episodeIdParam.size() <= 60
+        && er.preserveMultiSeason is bool
+        && (er.maxEpisodes is int || er.maxEpisodes is float) && er.maxEpisodes >= 1 && er.maxEpisodes <= 250;
+    }
+
+    function isValidAdapterServerRules(sr) {
+      return sr is map
+        && sr.keys().hasAll([
+          'itemSelector', 'urlAttributes', 'nameSelector', 'preserveServerNames',
+          'onclickUrlRegex', 'scriptUrlRegex', 'ajaxEndpointPattern', 'ajaxMethod',
+          'ajaxIdAttribute', 'maxServersPerEpisode'
+        ])
+        && sr.keys().hasOnly([
+          'itemSelector', 'urlAttributes', 'nameSelector', 'preserveServerNames',
+          'onclickUrlRegex', 'scriptUrlRegex', 'ajaxEndpointPattern', 'ajaxMethod',
+          'ajaxIdAttribute', 'maxServersPerEpisode'
+        ])
+        && sr.itemSelector is string && sr.itemSelector.size() <= 240
+        && sr.urlAttributes is list && sr.urlAttributes.size() <= 20 && (sr.urlAttributes.size() == 0 || sr.urlAttributes[0] is string)
+        && sr.nameSelector is string && sr.nameSelector.size() <= 240
+        && sr.preserveServerNames is bool
+        && sr.onclickUrlRegex is string && sr.onclickUrlRegex.size() <= 240
+        && sr.scriptUrlRegex is string && sr.scriptUrlRegex.size() <= 240
+        && sr.ajaxEndpointPattern is string && sr.ajaxEndpointPattern.size() <= 240
+        && sr.ajaxMethod in ['GET', 'POST']
+        && sr.ajaxIdAttribute is string && sr.ajaxIdAttribute.size() <= 80
+        && (sr.maxServersPerEpisode is int || sr.maxServersPerEpisode is float) && sr.maxServersPerEpisode >= 1 && sr.maxServersPerEpisode <= 30;
+    }
+
+    function isValidAdapterNavigationRules(nr) {
+      return nr is map
+        && nr.keys().hasAll([
+          'paginationSelector', 'loadMoreSelector', 'followPagination', 'maxPaginationPages',
+          'followWatchSubpage', 'followDownloadSubpage', 'listingCardSelector', 'listingLinkSelector'
+        ])
+        && nr.keys().hasOnly([
+          'paginationSelector', 'loadMoreSelector', 'followPagination', 'maxPaginationPages',
+          'followWatchSubpage', 'followDownloadSubpage', 'listingCardSelector', 'listingLinkSelector'
+        ])
+        && nr.paginationSelector is string && nr.paginationSelector.size() <= 240
+        && nr.loadMoreSelector is string && nr.loadMoreSelector.size() <= 240
+        && nr.followPagination is bool
+        && (nr.maxPaginationPages is int || nr.maxPaginationPages is float) && nr.maxPaginationPages >= 1 && nr.maxPaginationPages <= 25
+        && nr.followWatchSubpage is bool
+        && nr.followDownloadSubpage is bool
+        && nr.listingCardSelector is string && nr.listingCardSelector.size() <= 240
+        && nr.listingLinkSelector is string && nr.listingLinkSelector.size() <= 240;
+    }
+
+    function isValidAdapterSiteSettings(ss) {
+      return ss is map
+        && ss.keys().hasAll(['requestDelayMs', 'verifyMode', 'refererMode', 'cmsFingerprint', 'notes'])
+        && ss.keys().hasOnly(['requestDelayMs', 'verifyMode', 'refererMode', 'cmsFingerprint', 'notes'])
+        && (ss.requestDelayMs is int || ss.requestDelayMs is float) && ss.requestDelayMs >= 0 && ss.requestDelayMs <= 10000
+        && ss.verifyMode in ['strict', 'relaxed_headers', 'none']
+        && ss.refererMode in ['source_url', 'origin', 'none']
+        && ss.cmsFingerprint is string && ss.cmsFingerprint.size() <= 120
+        && ss.notes is string && ss.notes.size() <= 600;
+    }
+
+    function isValidAdapterTestSummary(ts) {
+      return ts is map
+        && ts.keys().hasAll([
+          'testedUrl', 'contentTypeTested', 'episodesDiscovered', 'totalServersExtracted',
+          'avgServersPerEpisode', 'minServersPerEpisode', 'maxServersPerEpisode',
+          'missingEpisodesCount', 'failedServersCount', 'visibleEpisodesHint',
+          'visibleServersHint', 'recommendedStatus', 'summaryText', 'testedAt'
+        ])
+        && ts.keys().hasOnly([
+          'testedUrl', 'contentTypeTested', 'episodesDiscovered', 'totalServersExtracted',
+          'avgServersPerEpisode', 'minServersPerEpisode', 'maxServersPerEpisode',
+          'missingEpisodesCount', 'failedServersCount', 'visibleEpisodesHint',
+          'visibleServersHint', 'recommendedStatus', 'summaryText', 'testedAt'
+        ])
+        && ts.testedUrl is string && ts.testedUrl.size() <= 500
+        && ts.contentTypeTested in ['series', 'movie', 'episode', 'auto']
+        && (ts.episodesDiscovered is int || ts.episodesDiscovered is float) && ts.episodesDiscovered >= 0
+        && (ts.totalServersExtracted is int || ts.totalServersExtracted is float) && ts.totalServersExtracted >= 0
+        && (ts.avgServersPerEpisode is int || ts.avgServersPerEpisode is float) && ts.avgServersPerEpisode >= 0
+        && (ts.minServersPerEpisode is int || ts.minServersPerEpisode is float) && ts.minServersPerEpisode >= 0
+        && (ts.maxServersPerEpisode is int || ts.maxServersPerEpisode is float) && ts.maxServersPerEpisode >= 0
+        && (ts.missingEpisodesCount is int || ts.missingEpisodesCount is float) && ts.missingEpisodesCount >= 0
+        && (ts.failedServersCount is int || ts.failedServersCount is float) && ts.failedServersCount >= 0
+        && (ts.visibleEpisodesHint is int || ts.visibleEpisodesHint is float) && ts.visibleEpisodesHint >= 0
+        && (ts.visibleServersHint is int || ts.visibleServersHint is float) && ts.visibleServersHint >= 0
+        && ts.recommendedStatus in ['supported', 'needs_fix', 'failed']
+        && ts.summaryText is string && ts.summaryText.size() <= 500
+        && ts.testedAt is string && ts.testedAt.size() <= 60;
+    }
+
+    function isValidScraperAdapterFields(data) {
+      return data is map
+        && isValidId(data.id)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.domain is string && data.domain.size() >= 3 && data.domain.size() <= 160
+        && data.domainAliases is list && data.domainAliases.size() <= 20 && (data.domainAliases.size() == 0 || data.domainAliases[0] is string)
+        && data.enabled is bool
+        && data.status in ['supported', 'needs_fix', 'failed']
+        && data.contentTypeHint in ['series', 'movie', 'episode', 'auto']
+        && data.sampleUrl is string && data.sampleUrl.size() <= 500
+        && (data.version is int || data.version is float) && data.version >= 1 && data.version <= 10000
+        && isValidAdapterPageDetection(data.pageDetection)
+        && isValidAdapterEpisodeRules(data.episodeRules)
+        && isValidAdapterServerRules(data.serverRules)
+        && isValidAdapterNavigationRules(data.navigationRules)
+        && isValidAdapterSiteSettings(data.siteSettings)
+        && (!('lastTestSummary' in data) || isValidAdapterTestSummary(data.lastTestSummary));
+    }
+
+    function isValidScraperAdapter(data) {
+      return data.keys().hasAll([
+        'id', 'name', 'domain', 'domainAliases', 'enabled', 'status', 'contentTypeHint',
+        'sampleUrl', 'version', 'pageDetection', 'episodeRules', 'serverRules',
+        'navigationRules', 'siteSettings', 'updatedBy', 'createdAt', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'id', 'name', 'domain', 'domainAliases', 'enabled', 'status', 'contentTypeHint',
+        'sampleUrl', 'version', 'pageDetection', 'episodeRules', 'serverRules',
+        'navigationRules', 'siteSettings', 'lastTestSummary', 'updatedBy', 'createdAt', 'updatedAt'
+      ])
+      && isValidScraperAdapterFields(data)
+      && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidScraperAdapterSnapshot(snap) {
+      return snap is map
+        && snap.keys().hasAll([
+          'id', 'name', 'domain', 'domainAliases', 'enabled', 'status', 'contentTypeHint',
+          'sampleUrl', 'version', 'pageDetection', 'episodeRules', 'serverRules',
+          'navigationRules', 'siteSettings'
+        ])
+        && snap.keys().hasOnly([
+          'id', 'name', 'domain', 'domainAliases', 'enabled', 'status', 'contentTypeHint',
+          'sampleUrl', 'version', 'pageDetection', 'episodeRules', 'serverRules',
+          'navigationRules', 'siteSettings', 'lastTestSummary', 'updatedBy', 'createdAtMs', 'updatedAtMs'
+        ])
+        && isValidScraperAdapterFields(snap)
+        && (!('updatedBy' in snap) || (snap.updatedBy is string && snap.updatedBy.size() <= 128))
+        && (!('createdAtMs' in snap) || (snap.createdAtMs is int || snap.createdAtMs is float))
+        && (!('updatedAtMs' in snap) || (snap.updatedAtMs is int || snap.updatedAtMs is float));
+    }
+
+    function isValidScraperAdapterVersion(data) {
+      return data.keys().hasAll([
+        'versionId', 'adapterId', 'version', 'changeNote', 'snapshot', 'savedBy', 'createdAt'
+      ])
+      && data.keys().hasOnly([
+        'versionId', 'adapterId', 'version', 'changeNote', 'snapshot', 'savedBy', 'createdAt'
+      ])
+      && isValidId(data.versionId)
+      && isValidId(data.adapterId)
+      && (data.version is int || data.version is float) && data.version >= 1 && data.version <= 10000
+      && data.changeNote is string && data.changeNote.size() <= 400
+      && isValidScraperAdapterSnapshot(data.snapshot)
+      && data.savedBy is string && data.savedBy.size() >= 1 && data.savedBy.size() <= 128
+      && data.createdAt is timestamp;
+    }
+
     // 4. Collection Rules
     match /media/{mediaId} {
       allow get: if isValidId(mediaId);
@@ -510,6 +707,41 @@ service cloud.firestore {
         && incoming().updatedBy == request.auth.uid
         && incoming().updatedAt == request.time;
       allow delete: if isOwnerAdmin() && fontId in ['arabic', 'english'];
+    }
+
+    match /scraper_adapters/{adapterId} {
+      allow get: if isStaffAdmin() && isValidId(adapterId);
+      allow list: if isStaffAdmin();
+      allow create: if isStaffAdmin()
+        && isValidId(adapterId)
+        && isValidScraperAdapter(incoming())
+        && incoming().id == adapterId
+        && incoming().updatedBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isStaffAdmin()
+        && isValidId(adapterId)
+        && isValidScraperAdapter(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+      allow delete: if isStaffAdmin() && isValidId(adapterId);
+
+      match /versions/{versionId} {
+        allow get: if isStaffAdmin() && isValidId(adapterId) && isValidId(versionId);
+        allow list: if isStaffAdmin() && isValidId(adapterId);
+        allow create: if isStaffAdmin()
+          && isValidId(adapterId)
+          && isValidId(versionId)
+          && isValidScraperAdapterVersion(incoming())
+          && incoming().versionId == versionId
+          && incoming().adapterId == adapterId
+          && incoming().savedBy == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isStaffAdmin() && isValidId(adapterId) && isValidId(versionId);
+      }
     }
   }
 }

@@ -615,7 +615,12 @@ export default function App() {
   const openAdminPage = (tab?: AdminTab) => {
     const resolvedTab: AdminTab =
       adminRole === 'moderator'
-        ? tab && (tab === 'catalog' || tab === 'scraper' || tab === 'site_scraper')
+        ? tab &&
+          (tab === 'catalog' ||
+            tab === 'images' ||
+            tab === 'scraper' ||
+            tab === 'site_scraper' ||
+            tab === 'scraper_adapters')
           ? tab
           : 'catalog'
         : tab || 'overview';

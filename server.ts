@@ -17,6 +17,19 @@ import {
   parseSrcsetBestUrl,
   scoreExternalTitleMatch,
 } from './src/lib/imageMatching.ts';
+import {
+  analyzeSiteStructure,
+  BaselineScrapedMedia,
+  executeAdapterScrape,
+  getCachedAdapters,
+  isBlockedHostEnhanced,
+  loadCachedAdaptersFromDisk,
+  resolveActiveAdapterForUrl,
+  syncCachedAdapters,
+  testAdapterCandidate,
+} from './server/scraperAdapterEngine.ts';
+import { normalizeScraperAdapter } from './src/lib/scraperAdapterUtils.ts';
+import type { AdapterContentTypeHint, ScraperAdapter } from './src/types/scraperAdapter.ts';
 
 const PORT = 3000;
 
@@ -2931,7 +2944,130 @@ async function trySitemapDiscovery(origin: string, maxItems: number): Promise<st
   return discovered.slice(0, maxItems);
 }
 
+async function enrichScrapedMediaFromAdapter(
+  baseMedia: BaselineScrapedMedia
+): Promise<ScrapedMediaItem> {
+  const full: ScrapedMediaItem = {
+    ...baseMedia,
+    poster_url: baseMedia.poster_url || baseMedia.poster || '',
+    backdrop_url: baseMedia.backdrop_url || baseMedia.backdrop || '',
+    votes: '10,500',
+    poster_width: 0,
+    poster_height: 0,
+    backdrop_width: 0,
+    backdrop_height: 0,
+    image_source: baseMedia.poster ? 'scraped' : 'none',
+    image_quality_status: (baseMedia.backdrop ? 'unknown' : 'missing_backdrop') as ServerImageQualityStatus,
+    tagline: baseMedia.story?.slice(0, 140) || '',
+    shortUrl: '',
+    imdbId: baseMedia.imdbId || '',
+  };
+
+  const [fallbackTrailer, resolvedImages] = await Promise.all([
+    full.trailerUrl
+      ? Promise.resolve(full.trailerUrl)
+      : findYoutubeTrailerFallback(full.title, full.englishTitle, full.year, full.kind),
+    resolveHighResImagesServer({
+      title: full.title,
+      englishTitle: full.englishTitle,
+      year: full.year,
+      kind: full.kind,
+      imdbId: full.imdbId,
+      currentPoster: full.poster,
+      currentBackdrop: full.backdrop,
+      preferOfficial: true,
+    }),
+  ]);
+
+  full.trailerUrl = fallbackTrailer || '';
+  if (resolvedImages) {
+    if (resolvedImages.poster_url) {
+      full.poster = resolvedImages.poster_url;
+      full.poster_url = resolvedImages.poster_url;
+    }
+    full.poster_width = resolvedImages.poster_width;
+    full.poster_height = resolvedImages.poster_height;
+    full.backdrop = resolvedImages.backdrop_url;
+    full.backdrop_url = resolvedImages.backdrop_url;
+    full.backdrop_width = resolvedImages.backdrop_width;
+    full.backdrop_height = resolvedImages.backdrop_height;
+    full.image_source = resolvedImages.image_source;
+    full.image_quality_status = resolvedImages.image_quality_status;
+  }
+  return full;
+}
+
+function extractListingWithOptionalAdapter(
+  html: string,
+  pageUrl: string,
+  adapter: ScraperAdapter | null
+) {
+  const generic = extractListingLinksAndPagination(html, pageUrl);
+  if (!adapter || !adapter.enabled) return generic;
+
+  const cardSel = (adapter.navigationRules.listingCardSelector || '').trim();
+  const linkSel = (adapter.navigationRules.listingLinkSelector || 'a[href]').trim();
+  const pagSel = (adapter.navigationRules.paginationSelector || '').trim();
+  if (!cardSel && !pagSel) return generic;
+
+  try {
+    const $ = cheerio.load(html);
+    const baseOrigin = new URL(pageUrl).origin;
+    const customCards = new Map<string, { url: string; title: string; poster: string }>();
+
+    if (cardSel) {
+      const targetSel = `${cardSel} ${linkSel}, ${cardSel} a[href]`;
+      $(targetSel).each((_, el) => {
+        if ($(el).closest('header, nav, footer, .navbar').length > 0) return;
+        const href = resolveUrl(pageUrl, $(el).attr('href'));
+        if (!href || !isLikelyContentUrl(href, [baseOrigin])) return;
+        const cleanHref = href.split('#')[0];
+        if (customCards.has(cleanHref)) return;
+        const cardParent = $(el).closest(cardSel);
+        let poster = '';
+        cardParent
+          .find('img')
+          .add($(el).find('img'))
+          .each((_, imgNode) => {
+            if (poster) return;
+            const candidate = extractBestImageFromElementServer($, $(imgNode), pageUrl);
+            if (candidate) poster = candidate;
+          });
+        const cardTitle =
+          cleanText($(el).attr('title')) ||
+          cleanText(cardParent.find('h2, h3, h4, .title, .ellipsis').first().text()) ||
+          cleanText($(el).text()) ||
+          'عمل مستورد';
+        customCards.set(cleanHref, {
+          url: cleanHref,
+          title: cardTitle.slice(0, 180),
+          poster,
+        });
+      });
+    }
+
+    const customNextUrls: string[] = [];
+    if (pagSel) {
+      $(pagSel).each((_, el) => {
+        const nextHref = resolveUrl(pageUrl, $(el).attr('href'));
+        if (nextHref && nextHref.startsWith(baseOrigin) && nextHref !== pageUrl && !customNextUrls.includes(nextHref)) {
+          customNextUrls.push(nextHref);
+        }
+      });
+    }
+
+    return {
+      siteTitle: generic.siteTitle,
+      cards: customCards.size > 0 ? Array.from(customCards.values()) : generic.cards,
+      nextUrls: customNextUrls.length > 0 ? customNextUrls : generic.nextUrls,
+    };
+  } catch {
+    return generic;
+  }
+}
+
 async function startServer() {
+  loadCachedAdaptersFromDisk();
   const app = express();
   app.use(express.json({ limit: '6mb' }));
   app.use('/api', (_req, res, next) => {
@@ -2944,10 +3080,144 @@ async function startServer() {
     return next();
   });
 
+  // Smart Scraper Adapter Builder Endpoints
+  app.get('/api/adapters', (_req, res) => {
+    return res.json({ ok: true, adapters: getCachedAdapters() });
+  });
+
+  app.post('/api/adapters/sync', (req, res) => {
+    try {
+      const { adapters } = (req.body || {}) as { adapters?: unknown };
+      if (!Array.isArray(adapters)) {
+        return res.status(400).json({ ok: false, error: 'يجب إرسال مصفوفة adapters.' });
+      }
+      const synced = syncCachedAdapters(adapters as Partial<ScraperAdapter>[]);
+      return res.json({ ok: true, count: synced.length });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'خطأ غير متوقع';
+      return res.status(500).json({ ok: false, error: msg });
+    }
+  });
+
+  app.post('/api/adapters/analyze', async (req, res) => {
+    try {
+      const {
+        url,
+        rawHtml,
+        contentTypeHint = 'auto',
+        existingAdapters,
+      } = (req.body || {}) as {
+        url?: string;
+        rawHtml?: string;
+        contentTypeHint?: AdapterContentTypeHint;
+        existingAdapters?: Partial<ScraperAdapter>[];
+      };
+
+      const cleanUrl = typeof url === 'string' ? url.trim() : '';
+      const hasRawHtml = typeof rawHtml === 'string' && rawHtml.trim().length > 30;
+
+      if (!cleanUrl && !hasRawHtml) {
+        return res.status(400).json({ ok: false, error: 'يرجى إدخال رابط الموقع أو لصق كود HTML.' });
+      }
+
+      if (cleanUrl) {
+        let parsed: URL;
+        try {
+          parsed = new URL(cleanUrl);
+        } catch {
+          return res.status(400).json({ ok: false, error: 'صيغة الرابط غير صالحة. يجب أن يبدأ بـ http:// أو https://' });
+        }
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+          return res.status(400).json({ ok: false, error: 'البروتوكول المسموح HTTP أو HTTPS فقط.' });
+        }
+        if (isBlockedHostEnhanced(parsed.hostname)) {
+          return res.status(403).json({ ok: false, error: 'لا يُسمح بفحص النطاقات الداخلية أو المحلية (SSRF guard).' });
+        }
+      }
+
+      const pool = Array.isArray(existingAdapters)
+        ? existingAdapters.map((a) => normalizeScraperAdapter(a))
+        : getCachedAdapters();
+
+      const report = await analyzeSiteStructure({
+        url: cleanUrl,
+        rawHtml: hasRawHtml ? rawHtml : undefined,
+        contentTypeHint,
+        existingAdapters: pool,
+        baselineParseFn: parseHtmlToMediaWithHints,
+      });
+
+      return res.status(report.ok ? 200 : 502).json(report);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'خطأ غير متوقع أثناء التحليل';
+      return res.status(500).json({ ok: false, error: msg });
+    }
+  });
+
+  app.post('/api/adapters/test', async (req, res) => {
+    try {
+      const {
+        url,
+        rawHtml,
+        adapter,
+        previousAdapter,
+        contentTypeHint,
+      } = (req.body || {}) as {
+        url?: string;
+        rawHtml?: string;
+        adapter?: Partial<ScraperAdapter>;
+        previousAdapter?: Partial<ScraperAdapter> | null;
+        contentTypeHint?: AdapterContentTypeHint;
+      };
+
+      const cleanUrl = typeof url === 'string' ? url.trim() : '';
+      const hasRawHtml = typeof rawHtml === 'string' && rawHtml.trim().length > 30;
+      if (!cleanUrl && !hasRawHtml) {
+        return res.status(400).json({ ok: false, error: 'يرجى إدخال رابط الاختبار أو لصق كود HTML.' });
+      }
+      if (!adapter || typeof adapter !== 'object') {
+        return res.status(400).json({ ok: false, error: 'بيانات الـ Adapter المرشح غير موجودة.' });
+      }
+      if (cleanUrl) {
+        let parsed: URL;
+        try {
+          parsed = new URL(cleanUrl);
+        } catch {
+          return res.status(400).json({ ok: false, error: 'صيغة رابط الاختبار غير صحيحة.' });
+        }
+        if (!['http:', 'https:'].includes(parsed.protocol) || isBlockedHostEnhanced(parsed.hostname)) {
+          return res.status(403).json({ ok: false, error: 'الرابط محظور لأسباب أمنية.' });
+        }
+      }
+
+      const normalizedCandidate = normalizeScraperAdapter(adapter);
+      const normalizedPrevious = previousAdapter ? normalizeScraperAdapter(previousAdapter) : null;
+
+      const testResult = await testAdapterCandidate({
+        url: cleanUrl || normalizedCandidate.sampleUrl || 'https://example.com',
+        rawHtml: hasRawHtml ? rawHtml : undefined,
+        adapter: normalizedCandidate,
+        previousAdapter: normalizedPrevious,
+        contentTypeHint: contentTypeHint || normalizedCandidate.contentTypeHint,
+        baselineParseFn: parseHtmlToMediaWithHints,
+        ajaxEmbedResolverFn: resolveAjaxEmbedsFromOrigins,
+      });
+
+      return res.json(testResult);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'خطأ غير متوقع أثناء الاختبار';
+      return res.status(500).json({ ok: false, error: msg });
+    }
+  });
+
   // Single Item Content Scraper Endpoint (URL or Raw HTML)
   app.post('/api/scrape', async (req, res) => {
     try {
-      const { url, rawHtml } = req.body as { url?: string; rawHtml?: string };
+      const { url, rawHtml, adapter } = req.body as {
+        url?: string;
+        rawHtml?: string;
+        adapter?: Partial<ScraperAdapter>;
+      };
 
       if (rawHtml && typeof rawHtml === 'string' && rawHtml.trim().length > 20) {
         const canonicalInHtml =
@@ -2955,6 +3225,30 @@ async function startServer() {
           rawHtml.match(/<meta[^>]+property=["']og:url["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
           '';
         const effectiveUrl = (url && url.trim()) || canonicalInHtml || '';
+        const matchedAdapter = effectiveUrl ? resolveActiveAdapterForUrl(effectiveUrl, adapter) : null;
+        if (matchedAdapter) {
+          const adpRes = await executeAdapterScrape({
+            url: effectiveUrl || matchedAdapter.sampleUrl || 'https://example.com',
+            rawHtml,
+            adapter: matchedAdapter,
+            baselineParseFn: parseHtmlToMediaWithHints,
+            ajaxEmbedResolverFn: resolveAjaxEmbedsFromOrigins,
+            deepEpisodeCrawl: Boolean(effectiveUrl),
+          });
+          if (adpRes.ok) {
+            const enriched = await enrichScrapedMediaFromAdapter(adpRes.media);
+            return res.json({
+              ok: true,
+              source: 'html',
+              extracted: enriched,
+              adapterUsed: {
+                id: matchedAdapter.id,
+                name: matchedAdapter.name,
+                version: matchedAdapter.version,
+              },
+            });
+          }
+        }
         const extracted = await scrapeFullItemWithSubpages(effectiveUrl, rawHtml);
         return res.json({ ok: true, source: 'html', extracted });
       }
@@ -2974,8 +3268,32 @@ async function startServer() {
         return res.status(400).json({ ok: false, error: 'البروتوكول المسموح هو HTTP أو HTTPS فقط.' });
       }
 
-      if (isBlockedHost(parsedUrl.hostname)) {
+      if (isBlockedHost(parsedUrl.hostname) || isBlockedHostEnhanced(parsedUrl.hostname)) {
         return res.status(403).json({ ok: false, error: 'لا يُسمح بجلب الروابط الداخلية أو المحلية.' });
+      }
+
+      const matchedAdapter = resolveActiveAdapterForUrl(parsedUrl.toString(), adapter);
+      if (matchedAdapter) {
+        const adpRes = await executeAdapterScrape({
+          url: parsedUrl.toString(),
+          adapter: matchedAdapter,
+          baselineParseFn: parseHtmlToMediaWithHints,
+          ajaxEmbedResolverFn: resolveAjaxEmbedsFromOrigins,
+          deepEpisodeCrawl: true,
+        });
+        if (adpRes.ok) {
+          const enriched = await enrichScrapedMediaFromAdapter(adpRes.media);
+          return res.json({
+            ok: true,
+            source: 'url',
+            extracted: enriched,
+            adapterUsed: {
+              id: matchedAdapter.id,
+              name: matchedAdapter.name,
+              version: matchedAdapter.version,
+            },
+          });
+        }
       }
 
       const fetched = await fetchRemoteText(parsedUrl.toString(), 12000);
@@ -3014,12 +3332,14 @@ async function startServer() {
         maxItems = 30,
         maxPages = 3,
         deepScrape = true,
+        adapter: explicitSiteAdapter,
       } = req.body as {
         siteUrl?: string;
         rawHtml?: string;
         maxItems?: number;
         maxPages?: number;
         deepScrape?: boolean;
+        adapter?: Partial<ScraperAdapter>;
       };
 
       const itemLimit = Math.min(80, Math.max(1, Number(maxItems) || 30));
@@ -3035,7 +3355,7 @@ async function startServer() {
         if (!['http:', 'https:'].includes(parsedSiteUrl.protocol)) {
           return res.status(400).json({ ok: false, error: 'البروتوكول المسموح هو HTTP أو HTTPS فقط.' });
         }
-        if (isBlockedHost(parsedSiteUrl.hostname)) {
+        if (isBlockedHost(parsedSiteUrl.hostname) || isBlockedHostEnhanced(parsedSiteUrl.hostname)) {
           return res.status(403).json({ ok: false, error: 'لا يُسمح بجلب الروابط الداخلية أو المحلية.' });
         }
       }
@@ -3047,8 +3367,14 @@ async function startServer() {
         });
       }
 
-      // If URL mode (no rawHtml override): try Blogger JSON Feed first (Blogger embeds live in feed)
-      if (parsedSiteUrl && (!rawHtml || rawHtml.trim().length < 50)) {
+      const matchedSiteAdapter = parsedSiteUrl
+        ? resolveActiveAdapterForUrl(parsedSiteUrl.toString(), explicitSiteAdapter)
+        : explicitSiteAdapter
+          ? normalizeScraperAdapter(explicitSiteAdapter)
+          : null;
+
+      // If URL mode (no rawHtml override) and no custom adapter overriding Blogger: try Blogger JSON Feed first
+      if (parsedSiteUrl && (!rawHtml || rawHtml.trim().length < 50) && !matchedSiteAdapter) {
         const origin = parsedSiteUrl.origin;
 
         const bloggerRes = await tryBloggerFeedScrape(origin, itemLimit);
@@ -3063,14 +3389,18 @@ async function startServer() {
         }
       }
 
-      // General HTML Crawler (with multi-page pagination or rawHtml) — preserves section paths like /movies/ and enables full //watch subpage scraping
+      // General HTML Crawler (with Adapter selectors when available, multi-page pagination, or rawHtml)
       const discoveredMap = new Map<string, { url: string; title: string; poster: string }>();
       let siteTitle = parsedSiteUrl ? parsedSiteUrl.hostname : 'موقع مستورد';
-      let strategy = rawHtml ? 'HTML Source Crawler' : 'HTML Multi-Page Crawler';
+      let strategy = matchedSiteAdapter
+        ? `Adapter: ${matchedSiteAdapter.name} (v${matchedSiteAdapter.version})`
+        : rawHtml
+          ? 'HTML Source Crawler'
+          : 'HTML Multi-Page Crawler';
 
       if (rawHtml && rawHtml.trim().length >= 50) {
         const baseForHtml = parsedSiteUrl ? parsedSiteUrl.toString() : 'https://example.com';
-        const resHtml = extractListingLinksAndPagination(rawHtml, baseForHtml);
+        const resHtml = extractListingWithOptionalAdapter(rawHtml, baseForHtml, matchedSiteAdapter);
         siteTitle = resHtml.siteTitle;
         for (const c of resHtml.cards) {
           if (discoveredMap.size < itemLimit) discoveredMap.set(c.url, c);
@@ -3147,7 +3477,11 @@ async function startServer() {
             continue;
           }
 
-          const extractedPage = extractListingLinksAndPagination(pageRes.text, currentUrl);
+          const extractedPage = extractListingWithOptionalAdapter(
+            pageRes.text,
+            currentUrl,
+            matchedSiteAdapter
+          );
           if (visitedPages.size === 1) siteTitle = extractedPage.siteTitle;
 
           for (const card of extractedPage.cards) {
@@ -3195,12 +3529,36 @@ async function startServer() {
 
       const finalItems: ScrapedMediaItem[] = [];
       if (deepScrape) {
-        const CONCURRENCY = 4;
+        const CONCURRENCY = matchedSiteAdapter ? 2 : 4;
         for (let i = 0; i < candidates.length; i += CONCURRENCY) {
           const chunk = candidates.slice(i, i + CONCURRENCY);
           const results = await Promise.all(
             chunk.map(async (card) => {
               try {
+                if (matchedSiteAdapter) {
+                  const adpRes = await executeAdapterScrape({
+                    url: card.url,
+                    adapter: matchedSiteAdapter,
+                    baselineParseFn: parseHtmlToMediaWithHints,
+                    ajaxEmbedResolverFn: resolveAjaxEmbedsFromOrigins,
+                    deepEpisodeCrawl: true,
+                    maxEpisodesForCrawl: 30,
+                  });
+                  if (adpRes.ok) {
+                    const parsed = await enrichScrapedMediaFromAdapter(adpRes.media);
+                    if (!parsed.poster && card.poster) {
+                      parsed.poster = upgradeKnownImageUrlServer(card.poster);
+                      parsed.poster_url = parsed.poster;
+                      if (!parsed.backdrop_url) {
+                        parsed.image_quality_status = 'missing_backdrop';
+                      }
+                    }
+                    if ((!parsed.title || parsed.title === 'عمل مستورد جديد') && card.title) {
+                      parsed.title = card.title;
+                    }
+                    return parsed;
+                  }
+                }
                 const detailRes = await fetchRemoteText(card.url, 9000);
                 if (detailRes.ok && detailRes.text.length > 150) {
                   const parsed = await scrapeFullItemWithSubpages(card.url, detailRes.text);
@@ -3308,6 +3666,15 @@ async function startServer() {
         siteTitle,
         totalDiscovered: finalItems.length,
         items: finalItems,
+        ...(matchedSiteAdapter
+          ? {
+              adapterUsed: {
+                id: matchedSiteAdapter.id,
+                name: matchedSiteAdapter.name,
+                version: matchedSiteAdapter.version,
+              },
+            }
+          : {}),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'خطأ غير متوقع';

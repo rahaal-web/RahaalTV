@@ -239,6 +239,52 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "family", "fileName", "format", "sourceUrl", "updatedBy", "updatedAt"]
+    },
+    "ScraperAdapter": {
+      "title": "ScraperAdapter",
+      "description": "Per-site declarative scraping adapter configuration, status, and latest test summary.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "domain": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "domainAliases": { "type": "array", "description": "Optional mirror hostnames (up to 20)" },
+        "enabled": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["supported", "needs_fix", "failed"] },
+        "contentTypeHint": { "type": "string", "enum": ["series", "movie", "episode", "auto"] },
+        "sampleUrl": { "type": "string", "maxLength": 500 },
+        "version": { "type": "number" },
+        "pageDetection": { "type": "object" },
+        "episodeRules": { "type": "object" },
+        "serverRules": { "type": "object" },
+        "navigationRules": { "type": "object" },
+        "siteSettings": { "type": "object" },
+        "lastTestSummary": { "type": "object" },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "name", "domain", "domainAliases", "enabled", "status",
+        "contentTypeHint", "sampleUrl", "version", "pageDetection",
+        "episodeRules", "serverRules", "navigationRules", "siteSettings",
+        "updatedBy", "createdAt", "updatedAt"
+      ]
+    },
+    "ScraperAdapterVersion": {
+      "title": "ScraperAdapterVersion",
+      "description": "Immutable historical version snapshot for a ScraperAdapter supporting rollback.",
+      "type": "object",
+      "properties": {
+        "versionId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "adapterId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "version": { "type": "number" },
+        "changeNote": { "type": "string", "maxLength": 400 },
+        "snapshot": { "type": "object" },
+        "savedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["versionId", "adapterId", "version", "changeNote", "snapshot", "savedBy", "createdAt"]
     }
   },
   "firestore": {
@@ -277,6 +323,15 @@
     "/fonts/{fontId}": {
       "schema": { "$ref": "#/entities/CustomFont" },
       "description": "Publicly readable custom Arabic and English webfont assets uploaded by owner admins."
+    },
+    "/scraper_adapters/{adapterId}": {
+      "schema": { "$ref": "#/entities/ScraperAdapter" },
+      "description": "Site-specific scraping adapters built and tested via Smart Scraper Adapter Builder."
+    },
+    "/scraper_adapters/{adapterId}/versions/{versionId}": {
+      "schema": { "$ref": "#/entities/ScraperAdapterVersion" },
+      "description": "Immutable version history snapshots for rollback of ScraperAdapters."
     }
   }
 }
+

@@ -2991,12 +2991,20 @@ export async function verifyAndFilterItemServers(item: MediaItem): Promise<{
     return true;
   };
 
+  const resolveCleanedServerName = (rawName: string | undefined, idx: number): string => {
+    const trimmed = String(rawName || '').trim();
+    if (!trimmed || /^سيرفر\s*\d*$/i.test(trimmed) || /^(?:مستورد|embed|server\s*\d*)$/i.test(trimmed)) {
+      return `سيرفر ${idx + 1}`;
+    }
+    return trimmed;
+  };
+
   let cleanedRootServers = (item.servers || [])
     .filter((s) => isHealthyServer(s))
     .map((s, idx) => ({
       ...s,
       id: s.id || `srv-${Date.now()}-${idx + 1}`,
-      name: `سيرفر ${idx + 1}`,
+      name: resolveCleanedServerName(s.name, idx),
     }));
 
   const cleanedSeasons = (item.seasons || []).map((season) => ({
@@ -3007,7 +3015,7 @@ export async function verifyAndFilterItemServers(item: MediaItem): Promise<{
         .map((s, idx) => ({
           ...s,
           id: s.id || `ep-${ep.number}-srv-${idx + 1}`,
-          name: `سيرفر ${idx + 1}`,
+          name: resolveCleanedServerName(s.name, idx),
         }));
 
       let validWatchUrl = ep.watchUrl || '';
@@ -3040,7 +3048,7 @@ export async function verifyAndFilterItemServers(item: MediaItem): Promise<{
       cleanedRootServers = firstValidEp.servers.map((s, idx) => ({
         ...s,
         id: `srv-${Date.now()}-${idx + 1}`,
-        name: `سيرفر ${idx + 1}`,
+        name: resolveCleanedServerName(s.name, idx),
       }));
     }
   }

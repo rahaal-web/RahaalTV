@@ -332,3 +332,6 @@ export interface MediaRatingRecord {
   createdAtMs?: number;
   updatedAtMs?: number;
 }
+
+export * from './scraperAdapter';
+

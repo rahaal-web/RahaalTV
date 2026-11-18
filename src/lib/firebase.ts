@@ -356,10 +356,15 @@ function sanitizeServerList(
         rawEmbed || (mode === 'embed' && cleanUrl ? `<iframe src="${cleanUrl}" frameborder="0" allowfullscreen></iframe>` : '');
       const rawSpeed = String(srv.speed || '').trim();
       const rawTag = String(srv.tag || '').trim();
+      const rawName = String(srv.name || '').trim();
+      const safeName =
+        rawName && !/^(مستورد|embed|server)$/i.test(rawName)
+          ? rawName.slice(0, 60)
+          : `سيرفر ${idx + 1}`;
       const cleanQuality = String(srv.quality || fallbackQuality || '1080p').trim().slice(0, 40) || '1080p';
       return {
         id: String(srv.id || `${idPrefix}-${Date.now()}-${idx + 1}`).slice(0, 80),
-        name: `سيرفر ${idx + 1}`,
+        name: safeName,
         mode,
         url: cleanUrl,
         embedCode,
@@ -503,7 +508,7 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
       normalizedServers = ep1Servers.map((s, idx) => ({
         ...s,
         id: `srv-${Date.now()}-${idx + 1}`,
-        name: `سيرفر ${idx + 1}`,
+        name: s.name || `سيرفر ${idx + 1}`,
       }));
     }
   }
