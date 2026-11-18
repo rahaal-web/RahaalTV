@@ -46,6 +46,8 @@ import {
   X,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
+import firebaseConfig from '../../firebase-applet-config.json';
+import firestoreRulesSource from '../../firestore.rules?raw';
 import { ASSETS, CATALOG_ITEMS } from '../data/catalog';
 import { AdminAiBulkEditor } from './AdminAiBulkEditor';
 import { AdminImageManagerPanel } from './AdminImageManagerPanel';
@@ -4880,6 +4882,56 @@ export function AdminDashboardView({
                       {proxyTestResult.message}
                     </div>
                   )}
+                </div>
+
+                {/* Firestore Security Rules Publisher Helper */}
+                <div className="rounded-2xl bg-[#1a242e]/65 border border-[#f9c400]/25 p-5 space-y-3.5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="space-y-1 flex-1 min-w-[240px]">
+                      <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
+                        <ShieldCheck className="w-4 h-4 text-[#f9c400]" />
+                        <span>قواعد أمان Firestore المطلوبة (لتفعيل التقييمات والخطوط والسلايدر)</span>
+                      </h3>
+                      <p className="text-[11px] leading-relaxed text-[#b7c9ef]">
+                        لتشغيل تقييمات النجوم (<span className="font-latin text-white">ratings</span>)، ورفع الخطوط (<span className="font-latin text-white">fonts</span>)، ومزامنة السلايدر وأحجام النصوص في قاعدة البيانات{' '}
+                        <span className="font-latin text-[#f9c400]">{firebaseConfig.firestoreDatabaseId}</span>، انسخ القواعد الجاهزة وانشرها في Firebase Console.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (navigator.clipboard?.writeText) {
+                            void navigator.clipboard
+                              .writeText(firestoreRulesSource)
+                              .then(() => onNotify('تم نسخ قواعد firestore.rules الكاملة إلى الحافظة!'))
+                              .catch(() => onNotify('تعذر النسخ التلقائي — انسخ القواعد من ملف firestore.rules'));
+                          } else {
+                            onNotify('انسخ محتوى ملف firestore.rules من المستودع.');
+                          }
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] px-3.5 py-2 text-[11px] font-black text-[#06131c] cursor-pointer"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>نسخ قواعد firestore.rules</span>
+                      </button>
+                      <a
+                        href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/${firebaseConfig.firestoreDatabaseId}/rules`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 px-3.5 py-2 text-[11px] font-extrabold text-white"
+                      >
+                        <span>فتح محرر Rules في Firebase</span>
+                        <ExternalLink className="w-3.5 h-3.5 text-[#f9c400]" />
+                      </a>
+                    </div>
+                  </div>
+
+                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-[#b7c9ef] bg-[#0c1821]/70 border border-white/5 rounded-xl p-3">
+                    <li>اضغط على <span className="text-white font-bold">نسخ قواعد firestore.rules</span> أعلاه.</li>
+                    <li>افتح <span className="text-white font-bold">محرر Rules في Firebase</span> وتأكد من اختيار قاعدة <span className="font-latin text-[#f9c400]">{firebaseConfig.firestoreDatabaseId}</span>.</li>
+                    <li>استبدل القواعد القديمة بالكامل بالقواعد المنسوخة ثم اضغط <span className="font-latin text-white">Publish</span>.</li>
+                  </ol>
                 </div>
 
                 {/* Internal Video Player Theme Customizer */}

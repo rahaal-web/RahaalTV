@@ -250,7 +250,9 @@ export function SingleDetailView({
       const msg = err instanceof Error ? err.message.toLowerCase() : '';
       if (msg.includes('permission')) {
         setRatingsPermissionError(true);
-        onNotify('تعذر حفظ التقييم: تأكد من نشر قواعد Firestore لمجموعة ratings في مشروعك.');
+        onNotify(
+          'تعذر حفظ التقييم: يلزم نشر قواعد firestore.rules لمجموعة ratings في Firebase Console (يمكنك نسخها من لوحة التحكم → إعدادات المنصة).'
+        );
       } else {
         onNotify('تعذر حفظ التقييم حالياً، يرجى المحاولة لاحقاً');
       }
