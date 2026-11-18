@@ -64,9 +64,17 @@ export function MovieCard({
             </span>
           </div>
 
-          <div className="absolute top-3 right-3 z-10 flex items-center gap-1 rounded-md bg-black/75 px-2 py-1 text-xs font-bold backdrop-blur-sm border border-white/10">
-            <Star className="w-3.5 h-3.5 text-[#f9c400] fill-[#f9c400]" />
-            <span className="font-latin text-white">{safeImdb}</span>
+          <div className="absolute top-3 right-3 z-10 flex flex-col items-end gap-1">
+            <div className="flex items-center gap-1 rounded-md bg-black/75 px-2 py-1 text-xs font-bold backdrop-blur-sm border border-white/10">
+              <Star className="w-3.5 h-3.5 text-[#f9c400] fill-[#f9c400]" />
+              <span className="font-latin text-white">{safeImdb}</span>
+            </div>
+            {item.communityRating && item.communityRating.count > 0 && (
+              <div className="flex items-center gap-1 rounded-md bg-[#4CAF50]/85 px-2 py-0.5 text-[10px] font-extrabold text-white backdrop-blur-sm border border-white/15">
+                <Star className="w-3 h-3 text-[#f9c400] fill-[#f9c400]" />
+                <span className="font-latin">{item.communityRating.average.toFixed(1)}/5</span>
+              </div>
+            )}
           </div>
 
           <div className="absolute inset-x-0 bottom-0 p-3.5 text-right">
@@ -199,10 +207,20 @@ export function MovieCard({
         {/* Measured Contrast Scrim */}
         <div className="absolute inset-0 bg-gradient-to-t from-[#181818] via-transparent to-black/45 opacity-90" />
 
-        {/* Subtle Top-Right IMDb Rating */}
-        <div className="absolute top-2.5 right-2.5 z-10 inline-flex items-center gap-1 rounded-lg bg-black/70 backdrop-blur-md px-2 py-0.5 text-[11px] font-bold text-white border border-white/10">
-          <Star className="w-3 h-3 text-[#f9c400] fill-[#f9c400]" />
-          <span className="font-latin tabular-nums">{safeImdb}</span>
+        {/* Subtle Top-Right IMDb & Community Rating */}
+        <div className="absolute top-2.5 right-2.5 z-10 flex flex-col items-end gap-1">
+          <div className="inline-flex items-center gap-1 rounded-lg bg-black/70 backdrop-blur-md px-2 py-0.5 text-[11px] font-bold text-white border border-white/10">
+            <Star className="w-3 h-3 text-[#f9c400] fill-[#f9c400]" />
+            <span className="font-latin tabular-nums">{safeImdb}</span>
+          </div>
+          {item.communityRating && item.communityRating.count > 0 && (
+            <div className="inline-flex items-center gap-1 rounded-lg bg-[#0c1821]/85 backdrop-blur-md px-2 py-0.5 text-[10px] font-extrabold text-[#4CAF50] border border-[#4CAF50]/40">
+              <Star className="w-2.5 h-2.5 text-[#f9c400] fill-[#f9c400]" />
+              <span className="font-latin tabular-nums">
+                {item.communityRating.average.toFixed(1)}/5
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Top-Left Watchlist Quick Action */}

@@ -76,6 +76,10 @@ export interface MediaItem {
   franchiseIds?: string[];
   servers: StreamServer[];
   downloads: DownloadMirror[];
+  communityRating?: {
+    average: number;
+    count: number;
+  };
   createdAtMs?: number;
   updatedAtMs?: number;
 }

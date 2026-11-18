@@ -93,6 +93,7 @@ export function SingleDetailView({
   // Firestore Star Rating State
   const [ratingsList, setRatingsList] = useState<MediaRatingRecord[]>([]);
   const [ratingsLoading, setRatingsLoading] = useState(true);
+  const [ratingsPermissionError, setRatingsPermissionError] = useState(false);
   const [hoverStar, setHoverStar] = useState<number | null>(null);
   const [savingRating, setSavingRating] = useState(false);
 
@@ -114,6 +115,7 @@ export function SingleDetailView({
   // Real-time Firestore listener for media star ratings
   useEffect(() => {
     setRatingsLoading(true);
+    setRatingsPermissionError(false);
     const ratingsPath = 'ratings';
     const q = query(collection(db, ratingsPath), where('mediaId', '==', cleanMediaId));
 
@@ -147,6 +149,10 @@ export function SingleDetailView({
       },
       (error) => {
         setRatingsLoading(false);
+        const msg = error instanceof Error ? error.message.toLowerCase() : '';
+        if (msg.includes('permission')) {
+          setRatingsPermissionError(true);
+        }
         try {
           handleFirestoreError(error, OperationType.LIST, ratingsPath);
         } catch {
@@ -158,9 +164,14 @@ export function SingleDetailView({
     return () => unsubscribe();
   }, [cleanMediaId]);
 
-  const ratingCount = ratingsList.length;
+  const ratingCount =
+    ratingsList.length > 0 ? ratingsList.length : ratingsLoading ? item.communityRating?.count || 0 : 0;
   const averageStars =
-    ratingCount > 0 ? ratingsList.reduce((sum, r) => sum + r.stars, 0) / ratingCount : 0;
+    ratingsList.length > 0
+      ? ratingsList.reduce((sum, r) => sum + r.stars, 0) / ratingsList.length
+      : ratingsLoading
+      ? item.communityRating?.average || 0
+      : 0;
   const userRatingRecord = currentUser
     ? ratingsList.find((r) => r.userId === currentUser.uid)
     : undefined;
@@ -227,9 +238,16 @@ export function SingleDetailView({
     setSavingRating(true);
     try {
       const saved = await submitMediaRatingToFirestore(item.id, currentUser.uid, stars);
-      onNotify(`تم حفظ تقييمك (${saved} من 5 نجوم) بنجاح`);
-    } catch {
-      onNotify('تعذر حفظ التقييم حالياً، يرجى المحاولة لاحقاً');
+      setRatingsPermissionError(false);
+      onNotify(`تم حفظ تقييمك (${saved} من 5 نجوم) وتحديث متوسط تقييم العرض`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message.toLowerCase() : '';
+      if (msg.includes('permission')) {
+        setRatingsPermissionError(true);
+        onNotify('تعذر حفظ التقييم: تأكد من نشر قواعد Firestore لمجموعة ratings في مشروعك.');
+      } else {
+        onNotify('تعذر حفظ التقييم حالياً، يرجى المحاولة لاحقاً');
+      }
     } finally {
       setSavingRating(false);
     }
@@ -240,9 +258,14 @@ export function SingleDetailView({
     setSavingRating(true);
     try {
       await deleteMediaRatingFromFirestore(item.id, currentUser.uid);
-      onNotify('تم إزالة تقييمك لهذا العرض');
-    } catch {
-      onNotify('تعذر إزالة التقييم حالياً');
+      onNotify('تم إزالة تقييمك وتحديث متوسط التقييم');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message.toLowerCase() : '';
+      if (msg.includes('permission')) {
+        onNotify('تعذر حذف التقييم: صلاحيات Firestore لمجموعة ratings غير منشورة بعد.');
+      } else {
+        onNotify('تعذر إزالة التقييم حالياً');
+      }
     } finally {
       setSavingRating(false);
     }
@@ -309,8 +332,35 @@ export function SingleDetailView({
               )}
             </div>
 
-            {/* IMDb + Community Rating Badges */}
+            {/* IMDb + Live Community Rating Badges */}
             <div className="flex flex-wrap items-center gap-3 self-start md:self-center shrink-0">
+              <button
+                type="button"
+                onClick={() =>
+                  document
+                    .getElementById('member-star-rating-card')
+                    ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                }
+                className="inline-flex items-center gap-3 rounded-2xl bg-[#1a242e]/95 border border-[#4CAF50]/35 hover:border-[#f9c400]/60 px-4 py-3 shadow-xl backdrop-blur-md transition-colors text-right cursor-pointer"
+              >
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#4CAF50]/20 border border-[#4CAF50]/40 text-[#f9c400]">
+                  <Star className="w-6 h-6 fill-current" />
+                </div>
+                <div>
+                  <div className="flex items-baseline gap-1">
+                    <span className="font-latin text-2xl font-black text-white">
+                      {ratingCount > 0 ? averageStars.toFixed(1) : '—'}
+                    </span>
+                    <span className="font-latin text-xs font-bold text-[#b7c9ef]">/ 5</span>
+                  </div>
+                  <p className="text-[11px] font-bold text-[#b7c9ef]">
+                    {ratingCount > 0
+                      ? `${ratingCount} ${ratingCount === 1 ? 'تقييم الأعضاء' : 'تقييمات الأعضاء'}`
+                      : 'تقييم المشاهدين'}
+                  </p>
+                </div>
+              </button>
+
               <div className="inline-flex items-center gap-3.5 rounded-2xl bg-[#1a242e]/95 border border-[#f9c400]/35 px-4 py-3 shadow-xl backdrop-blur-md">
                 <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#f9c400] text-[#06131c]">
                   <Star className="w-6 h-6 fill-current" />
@@ -776,6 +826,8 @@ export function SingleDetailView({
                     <span>
                       {ratingsLoading
                         ? 'جارٍ تحميل التقييمات...'
+                        : ratingsPermissionError
+                        ? 'يلزم نشر قواعد مجموعة ratings في Firestore'
                         : ratingCount > 0
                         ? `مبني على ${ratingCount} ${ratingCount === 1 ? 'تقييم' : 'تقييمات'}`
                         : 'كن أول من يقيّم هذا العرض'}

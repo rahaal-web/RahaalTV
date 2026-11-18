@@ -439,6 +439,15 @@ export function HomeView({
                       <Star className="w-3.5 h-3.5 fill-current" />
                       {Number(activeHero.imdb || 7.5).toFixed(1)} IMDb
                     </span>
+                    {activeHero.communityRating && activeHero.communityRating.count > 0 && (
+                      <>
+                        <span aria-hidden="true" className="text-white/30">·</span>
+                        <span className="inline-flex items-center gap-1 text-[#4CAF50] font-extrabold font-latin">
+                          <Star className="w-3.5 h-3.5 text-[#f9c400] fill-[#f9c400]" />
+                          {activeHero.communityRating.average.toFixed(1)}/5 ({activeHero.communityRating.count})
+                        </span>
+                      </>
+                    )}
                     <span aria-hidden="true" className="text-white/30">·</span>
                     <span className="font-latin">{activeHero.year}</span>
                     <span aria-hidden="true" className="text-white/30">·</span>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Wrench } from 'lucide-react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, doc, onSnapshot, orderBy, query, where } from 'firebase/firestore';
@@ -33,6 +33,7 @@ import {
   db,
   handleFirestoreError,
   OperationType,
+  sanitizeRatingMediaId,
   saveWatchlistToFirestore,
   signOutFirebase,
   submitVisitorRequestToFirestore,
@@ -118,6 +119,9 @@ export default function App() {
 
   // Live Firestore Data State
   const [firestoreCatalog, setFirestoreCatalog] = useState<MediaItem[]>([]);
+  const [ratingsByMediaId, setRatingsByMediaId] = useState<
+    Record<string, { average: number; count: number }>
+  >({});
   const [initialMediaLoaded, setInitialMediaLoaded] = useState(false);
   const [siteSettings, setSiteSettings] = useState<SiteSettings>(DEFAULT_SETTINGS);
   const [visitorRequests, setVisitorRequests] = useState<VisitorRequest[]>([]);
@@ -157,7 +161,15 @@ export default function App() {
   const visibleStarterItems = starterCleared
     ? []
     : CATALOG_ITEMS.filter((item) => !dismissedStarterIds.includes(item.id));
-  const activeCatalog = isFirestoreSeeded ? firestoreCatalog : visibleStarterItems;
+  const rawActiveCatalog = isFirestoreSeeded ? firestoreCatalog : visibleStarterItems;
+  const activeCatalog = useMemo(
+    () =>
+      rawActiveCatalog.map((item) => {
+        const agg = ratingsByMediaId[sanitizeRatingMediaId(item.id)];
+        return agg ? { ...item, communityRating: agg } : item;
+      }),
+    [rawActiveCatalog, ratingsByMediaId]
+  );
   const selectedMedia =
     activeCatalog.find((item) => item.id === selectedMediaId) || activeCatalog[0] || null;
   const hasDismissedStarters = starterCleared || dismissedStarterIds.length > 0;
@@ -323,9 +335,45 @@ export default function App() {
       }
     );
 
+    const ratingsPath = 'ratings';
+    const unsubRatings = onSnapshot(
+      collection(db, ratingsPath),
+      (snapshot) => {
+        const sums: Record<string, { total: number; count: number }> = {};
+        snapshot.docs.forEach((d) => {
+          const data = d.data() as { mediaId?: unknown; stars?: unknown };
+          const mediaKey = sanitizeRatingMediaId(String(data.mediaId || ''));
+          const stars = Math.round(Number(data.stars) || 0);
+          if (!mediaKey || stars < 1 || stars > 5) return;
+          if (!sums[mediaKey]) {
+            sums[mediaKey] = { total: 0, count: 0 };
+          }
+          sums[mediaKey].total += stars;
+          sums[mediaKey].count += 1;
+        });
+
+        const nextAgg: Record<string, { average: number; count: number }> = {};
+        Object.entries(sums).forEach(([key, val]) => {
+          nextAgg[key] = {
+            average: val.total / val.count,
+            count: val.count,
+          };
+        });
+        setRatingsByMediaId(nextAgg);
+      },
+      (error) => {
+        try {
+          handleFirestoreError(error, OperationType.LIST, ratingsPath);
+        } catch {
+          // Keep app functional if ratings rules are not deployed yet
+        }
+      }
+    );
+
     return () => {
       unsubMedia();
       unsubSettings();
+      unsubRatings();
     };
   }, []);
 

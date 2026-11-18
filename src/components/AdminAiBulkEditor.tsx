@@ -282,60 +282,87 @@ export function AdminAiBulkEditor({
         comingSoon: Boolean(item.comingSoon),
       }));
 
-      const CLIENT_BATCH_SIZE = 20;
+      const CLIENT_BATCH_SIZE = 9;
       const chunks: typeof compactItems[] = [];
       for (let i = 0; i < compactItems.length; i += CLIENT_BATCH_SIZE) {
         chunks.push(compactItems.slice(i, i + CLIENT_BATCH_SIZE));
       }
 
       const callAiEndpoint = async (batchItems: typeof compactItems) => {
-        const customUrl = resolveApiEndpoint('/api/ai-bulk-edit');
-        const endpoints = customUrl && customUrl !== '/api/ai-bulk-edit'
-          ? ['/api/ai-bulk-edit', customUrl]
-          : ['/api/ai-bulk-edit'];
+        const trySingleEndpoint = async (endpoint: string) => {
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              instruction: instruction.trim(),
+              items: batchItems,
+            }),
+          });
+          const ct = response.headers.get('content-type') || '';
+          if (!ct.includes('application/json')) {
+            return { kind: 'non-json' as const };
+          }
 
-        let lastError = 'تعذر الاتصال بخدمة الذكاء الاصطناعي على الخادم.';
-        for (const endpoint of endpoints) {
-          try {
-            const response = await fetch(endpoint, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                instruction: instruction.trim(),
-                items: batchItems,
-              }),
-            });
-            const ct = response.headers.get('content-type') || '';
-            if (!ct.includes('application/json')) continue;
+          const json = (await response.json()) as {
+            ok?: boolean;
+            error?: string;
+            service?: string;
+            summary?: string;
+            processedCount?: number;
+            updates?: AiPatchProposal[];
+          };
 
-            const json = (await response.json()) as {
-              ok?: boolean;
-              error?: string;
-              service?: string;
-              summary?: string;
-              processedCount?: number;
-              updates?: AiPatchProposal[];
+          if (json.service === 'RahaL TV Proxy Worker') {
+            return { kind: 'proxy-worker' as const };
+          }
+
+          if (!response.ok || !json.ok || !Array.isArray(json.updates)) {
+            return {
+              kind: 'api-error' as const,
+              error: json.error || 'تعذر تنفيذ المعالجة بالذكاء الاصطناعي.',
             };
+          }
 
-            // Ignore CORS proxy worker fallback responses that do not implement AI endpoints
-            if (json.service === 'RahaL TV Proxy Worker') {
-              lastError = 'رابط الـ API المخصص يشير إلى بروكسي خارجي لا يدعم الذكاء الاصطناعي.';
-              continue;
-            }
+          return { kind: 'ok' as const, data: json };
+        };
 
-            if (!response.ok || !json.ok || !Array.isArray(json.updates)) {
-              lastError = json.error || 'تعذر تنفيذ المعالجة بالذكاء الاصطناعي.';
-              throw new Error(lastError);
-            }
-
-            return json;
-          } catch (err) {
-            if (err instanceof Error && err.message) {
-              lastError = err.message;
-            }
+        // 1. Always try same-origin Express endpoint first
+        try {
+          const primary = await trySingleEndpoint('/api/ai-bulk-edit');
+          if (primary.kind === 'ok') return primary.data;
+          if (primary.kind === 'api-error') {
+            // Real backend error: surface it directly without falling back to proxy worker
+            throw new Error(primary.error);
+          }
+        } catch (err) {
+          // Re-throw explicit backend API errors; only fall back on non-JSON / network miss on static hosting
+          if (
+            err instanceof Error &&
+            err.message &&
+            !/failed to fetch|networkerror|load failed/i.test(err.message)
+          ) {
+            throw err;
           }
         }
-        throw new Error(lastError);
+
+        // 2. Fallback to custom API base URL (only if it is an Express/Node backend, NOT the Cloudflare CORS proxy worker)
+        const customUrl = resolveApiEndpoint('/api/ai-bulk-edit');
+        if (customUrl && customUrl !== '/api/ai-bulk-edit') {
+          const secondary = await trySingleEndpoint(customUrl);
+          if (secondary.kind === 'ok') return secondary.data;
+          if (secondary.kind === 'api-error') {
+            throw new Error(secondary.error);
+          }
+          if (secondary.kind === 'proxy-worker') {
+            throw new Error(
+              'خدمة الذكاء الاصطناعي تتطلب خادم التطبيق (/api/ai-bulk-edit)، بينما الرابط المخصص المحفوظ هو بروكسي السحب (Cloudflare Proxy Worker) فقط. افتح لوحة الإدارة من خادم التطبيق الكامل أو ضع رابط خادم Node/Express في إعدادات الـ API.'
+            );
+          }
+        }
+
+        throw new Error(
+          'تعذر العثور على نقطة الذكاء الاصطناعي (/api/ai-bulk-edit) على هذا الاستضافة. افتح لوحة الإدارة من خادم التطبيق الرئيسي لتشغيل التعديل بالذكاء الاصطناعي.'
+        );
       };
 
       const allUpdates: AiPatchProposal[] = [];
