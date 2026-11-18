@@ -1,7 +1,7 @@
 import { MediaItem } from '../types/media';
 
 export function getAppBasePrefix(): string {
-  const base = import.meta.env.BASE_URL || '/';
+  const base = (typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL) || '/';
   return base === '/' ? '' : base.replace(/\/+$/, '');
 }
 

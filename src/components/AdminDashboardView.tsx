@@ -2029,7 +2029,7 @@ export function AdminDashboardView({
               className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-[#f9c400]/20 border border-[#f9c400]/45 px-3.5 py-2 text-xs font-extrabold text-[#f9c400] cursor-pointer"
             >
               <Sparkles className="w-4 h-4" />
-              <span className="hidden md:inline">تعديل شامل AI</span>
+              <span className="hidden md:inline">المساعد الذكي المحلي</span>
             </button>
 
             <button
@@ -2115,9 +2115,9 @@ export function AdminDashboardView({
                 { id: 'catalog', label: `الأفلام والمسلسلات (${catalog.length})`, icon: Film },
                 {
                   id: 'ai_editor',
-                  label: 'تعديل شامل بالذكاء الاصطناعي',
+                  label: 'المساعد الذكي المحلي',
                   icon: Sparkles,
-                  badge: 'AI',
+                  badge: 'محلي',
                 },
                 { id: 'scraper', label: 'جلب عمل واحد (رابط)', icon: Wand2 },
                 {
@@ -2363,7 +2363,6 @@ export function AdminDashboardView({
                 isFirestoreSeeded={isFirestoreSeeded}
                 onNotify={onNotify}
                 onPreviewMedia={onPreviewMedia}
-                onSavedToCatalog={() => setActiveTab('catalog')}
               />
             )}
 
