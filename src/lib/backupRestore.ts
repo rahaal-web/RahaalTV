@@ -1,7 +1,7 @@
 // Full-Site Backup Export, Schema Validation, Checksum Verification, and Diff Preview.
 
 import { MediaItem, SiteSettings, VisitorRequest } from '../types/media';
-import { ScraperAdapter } from './scraperAdaptersDb';
+import type { ScraperAdapter } from '../types/scraperAdapter';
 import { DisplayDevicePrefs, loadDisplayDevicePrefs } from './browserCompat';
 
 export interface SiteBackupPayload {

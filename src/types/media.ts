@@ -12,6 +12,8 @@ export interface EpisodeItem {
   duration: string;
   quality: string;
   watchUrl?: string;
+  sourceUrl?: string;
+  watchSubpageUrl?: string;
   embedCode?: string;
   servers?: StreamServer[];
 }

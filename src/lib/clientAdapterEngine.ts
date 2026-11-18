@@ -174,7 +174,42 @@ function parseSeasonNumberFromLabel(label: string, fallbackIdx: number): number 
   if (/الثالث|Third/i.test(norm)) return 3;
   if (/الرابع|Fourth/i.test(norm)) return 4;
   if (/الخامس|Fifth/i.test(norm)) return 5;
+  if (/السادس|Sixth/i.test(norm)) return 6;
+  if (/السابع|Seventh/i.test(norm)) return 7;
+  if (/الثامن|Eighth/i.test(norm)) return 8;
+  if (/التاسع|Ninth/i.test(norm)) return 9;
+  if (/العاشر|Tenth/i.test(norm)) return 10;
   return fallbackIdx;
+}
+
+function extractEpisodeIdFromUrlBrowser(rawUrl: string, preferredParam = 'vid'): string {
+  if (!rawUrl) return '';
+  try {
+    const u = new URL(rawUrl.trim());
+    const paramsToCheck = Array.from(
+      new Set([preferredParam, 'vid', 'ep', 'episode', 'id', 'e'].filter(Boolean))
+    );
+    for (const p of paramsToCheck) {
+      const val = u.searchParams.get(p);
+      if (val && val.trim()) return val.trim();
+    }
+    const pathMatch = u.pathname.match(/(?:\/watch|\/play|\/player|\/episode|\/ep)[\/\-_](\d+|[A-Za-z0-9]{4,24})(?:[./]|$)/i);
+    if (pathMatch?.[1]) return pathMatch[1];
+  } catch {
+    // ignore
+  }
+  return '';
+}
+
+function extractServerQualityFromLabelBrowser(rawLabel: string, fallbackQuality: string): string {
+  const qMatch = cleanTextBrowser(rawLabel).match(/\b(4K\s*UHD|4K|2160p|1440p|1080p|720p|480p|360p|FHD|Full\s*HD|HD|SD)\b/i);
+  if (qMatch?.[1]) {
+    const token = qMatch[1].replace(/\s+/g, ' ').trim();
+    if (/^fhd$/i.test(token) || /^full\s*hd$/i.test(token)) return '1080p';
+    if (/^4k/i.test(token)) return '4K';
+    return token.toUpperCase() === 'HD' ? 'HD' : token;
+  }
+  return fallbackQuality || '1080p';
 }
 
 function cleanExtractedServerName(
@@ -187,7 +222,7 @@ function cleanExtractedServerName(
   const cleaned = cleanTextBrowser(rawLabel)
     .replace(/^[•\-–|»›\s]+|[•\-–|«‹\s]+$/g, '')
     .replace(/^(?:سيرفر|مشاهدة|سيرفر\s*رقم)\s*\d*\s*[:\-–]?\s*/i, '')
-    .replace(/\s*(?:HD|FHD|1080p|720p|480p|360p|WEB-DL|BluRay)\s*$/i, '')
+    .replace(/\s*(?:4K\s*UHD|4K|2160p|1440p|FHD|Full\s*HD|HD|1080p|720p|480p|360p|WEB-DL|BluRay)\s*$/i, '')
     .trim();
 
   if (!cleaned || cleaned.length > 42 || /^(play|watch|server|embed|\d+)$/i.test(cleaned)) {
@@ -245,16 +280,18 @@ function extractServersWithAdapterBrowser(
     seenUrls.add(resolved);
     const idx = servers.length;
     if (idx >= (adapter.serverRules.maxServersPerEpisode || 20)) return;
+    const isDirectStream = /\.(mp4|m3u8|webm|ogg)(\?|$)/i.test(resolved);
+    const serverQuality = extractServerQualityFromLabelBrowser(preferredLabel || '', defaultQuality || '1080p');
     const name = cleanExtractedServerName(preferredLabel || '', resolved, idx, preserveNames);
     servers.push({
       id: `srv-adp-${idx + 1}`,
       name,
-      mode: 'url',
+      mode: isDirectStream ? 'url' : 'embed',
       url: resolved,
-      embedCode: '',
-      quality: defaultQuality || '1080p',
+      embedCode: isDirectStream ? '' : `<iframe src="${resolved}" frameborder="0" allowfullscreen></iframe>`,
+      quality: serverQuality,
       speed: idx === 0 ? 'فائق السرعة' : 'سريع',
-      tag: idx === 0 ? 'رئيسي' : 'بديل',
+      tag: isDirectStream ? 'MP4' : serverQuality || (idx === 0 ? 'رئيسي' : 'بديل'),
     });
   };
 
@@ -414,12 +451,13 @@ function extractSeasonsAndEpisodesWithAdapterBrowser(
   sourceUrl: string,
   adapter: ScraperAdapter,
   defaultYear = '2026',
-  defaultQuality = '1080p'
+  defaultQuality = '1080p',
+  options?: { forcedSeasonNumber?: number }
 ) {
-  const maxEp = adapter.episodeRules.maxEpisodes || 150;
+  const maxEp = Math.max(1, Math.min(300, adapter.episodeRules.maxEpisodes || 200));
   const customEpRegex = adapter.episodeRules.episodeNumberRegex.trim();
 
-  type EpEntry = { number: number; title: string; watchUrl: string };
+  type EpEntry = { number: number; title: string; watchUrl: string; sourceUrl: string };
   const seasonMap = new Map<number, { label: string; episodes: Map<number, EpEntry> }>();
 
   const ensureSeason = (seasonNum: number, label?: string) => {
@@ -438,11 +476,11 @@ function extractSeasonsAndEpisodesWithAdapterBrowser(
     rawLabel: string,
     rawHref: string
   ) => {
-    if (totalProcessedEps >= maxEp) return;
+    if (totalProcessedEps >= maxEp) return false;
     const href = resolveUrlBrowser(sourceUrl, rawHref);
-    if (!href) return;
+    if (!href) return false;
     const epNum = parseEpisodeNumberFromLabel(rawLabel, href, customEpRegex);
-    if (!epNum) return;
+    if (!epNum) return false;
 
     const targetSeason = adapter.episodeRules.preserveMultiSeason ? seasonNum : 1;
     const targetLabel = adapter.episodeRules.preserveMultiSeason ? seasonLabel : 'الموسم 01';
@@ -455,16 +493,44 @@ function extractSeasonsAndEpisodesWithAdapterBrowser(
           ? `الحلقة ${epNum}`
           : cleanEpTitle.slice(0, 120),
         watchUrl: href,
+        sourceUrl: href,
       });
       totalProcessedEps += 1;
+      return true;
+    }
+    return false;
+  };
+
+  // Discover distributed Season page links
+  const seasonPageLinksMap = new Map<string, { seasonNumber: number; label: string; url: string }>();
+  const registerSeasonPageLink = (label: string, rawHref: string | undefined | null, fallbackSeasonIdx: number) => {
+    const resolved = resolveUrlBrowser(sourceUrl, rawHref);
+    if (!resolved) return;
+    if (canonicalizeCompareUrl(resolved) === canonicalizeCompareUrl(sourceUrl)) return;
+    const cleanLbl = cleanTextBrowser(label);
+    if (!cleanLbl) return;
+    if (/(?:الحلقة|حلقة|Episode|Ep\.?)\s*#?\d+/i.test(normalizeArabicDigitsBrowser(cleanLbl))) return;
+    if (!/(?:الموسم|موسم|Season|S\d{1,2})/i.test(cleanLbl)) return;
+    const sNum = parseSeasonNumberFromLabel(cleanLbl, fallbackSeasonIdx);
+    const canon = canonicalizeCompareUrl(resolved);
+    if (!seasonPageLinksMap.has(canon)) {
+      seasonPageLinksMap.set(canon, {
+        seasonNumber: sNum,
+        label: `الموسم ${String(sNum).padStart(2, '0')}`,
+        url: resolved,
+      });
     }
   };
 
   // Strategy 1: Multi-season Tab + Panel pairs
   const tabLabelsByPanelId = new Map<string, string>();
-  const seasonTabSel = adapter.episodeRules.seasonTabSelector.trim() || '.tablinks, .seasons-sec > li, [data-season]';
+  const tabLabelsByIndex: string[] = [];
+  const seasonTabSel =
+    adapter.episodeRules.seasonTabSelector.trim() ||
+    '.tablinks, .seasons-sec > li, .seasons-sec a, .SeasonsList a, .series-seasons a, .season-list a, [data-season]';
   safeQueryAll(doc, seasonTabSel).forEach((el, idx) => {
-    const label = cleanTextBrowser(el.textContent);
+    const label = cleanTextBrowser(el.textContent) || cleanTextBrowser(el.getAttribute('title'));
+    if (label) tabLabelsByIndex.push(label);
     const onclick = el.getAttribute('onclick') || '';
     const onclickPanelMatch = onclick.match(/openCity\([^,]+,\s*['"]([^'"]+)['"]/i);
     const dataSeason =
@@ -473,38 +539,68 @@ function extractSeasonsAndEpisodesWithAdapterBrowser(
       el.getAttribute('href')?.replace(/^#/, '');
     const key = onclickPanelMatch?.[1] || dataSeason || String(idx + 1);
     if (label) tabLabelsByPanelId.set(key, label);
+
+    const hrefAttr = el.tagName.toLowerCase() === 'a' ? el.getAttribute('href') : el.querySelector('a[href]')?.getAttribute('href');
+    if (hrefAttr && !hrefAttr.startsWith('#')) {
+      registerSeasonPageLink(label, hrefAttr, idx + 1);
+    }
   });
+
+  safeQueryAll(doc, '.SeasonsList a[href], .seasons-list a[href], .series-seasons a[href], .seasons-sec a[href], a[href*="season"]').forEach(
+    (el, idx) => {
+      if (el.closest(IGNORED_PAGE_CONTAINER_SELECTOR)) return;
+      registerSeasonPageLink(
+        cleanTextBrowser(el.textContent) || cleanTextBrowser(el.getAttribute('title')),
+        el.getAttribute('href'),
+        idx + 1
+      );
+    }
+  );
 
   const panelSel = adapter.episodeRules.seasonPanelSelector.trim() || '.tabcontent, .SeasonsEpisodes';
   let foundMultiSeasonPanels = false;
   const panels = safeQueryAll(doc, panelSel);
   if (panels.length > 0) {
+    let panelsAddedEps = 0;
     panels.forEach((panelEl, pIdx) => {
       const panelId = panelEl.getAttribute('id') || panelEl.getAttribute('data-season') || '';
-      const matchedTabLabel = (panelId && tabLabelsByPanelId.get(panelId)) || panelId || `الموسم ${pIdx + 1}`;
-      const seasonNum = parseSeasonNumberFromLabel(matchedTabLabel, pIdx + 1);
+      const matchedTabLabel =
+        (panelId && tabLabelsByPanelId.get(panelId)) ||
+        panelId ||
+        tabLabelsByIndex[pIdx] ||
+        `الموسم ${pIdx + 1}`;
+      const seasonNum = parseSeasonNumberFromLabel(matchedTabLabel, options?.forcedSeasonNumber || pIdx + 1);
       const linkSel = adapter.episodeRules.linkSelector.trim() || 'a[href]';
       const links = safeQueryAll(panelEl, linkSel);
-      if (links.length > 0) foundMultiSeasonPanels = true;
       links.forEach((aEl) => {
-        addEpisodeToSeason(
-          seasonNum,
-          `الموسم ${String(seasonNum).padStart(2, '0')}`,
-          cleanTextBrowser(aEl.textContent) || cleanTextBrowser(aEl.getAttribute('title')),
-          aEl.getAttribute('href') || ''
-        );
+        if (
+          addEpisodeToSeason(
+            seasonNum,
+            `الموسم ${String(seasonNum).padStart(2, '0')}`,
+            cleanTextBrowser(aEl.textContent) || cleanTextBrowser(aEl.getAttribute('title')),
+            aEl.getAttribute('href') || ''
+          )
+        ) {
+          panelsAddedEps += 1;
+        }
       });
     });
+    if (panelsAddedEps > 0) foundMultiSeasonPanels = true;
   }
 
   // Strategy 2: Paired Season + Episode <select> dropdowns
   if (!foundMultiSeasonPanels) {
     const seasonOptLabels = new Map<string, string>();
     const selectSeasonSel = adapter.episodeRules.selectSeasonSelector.trim() || 'select#mobileselect, .TabS select';
-    safeQueryAll(doc, `${selectSeasonSel} option`).forEach((optEl) => {
+    safeQueryAll(doc, `${selectSeasonSel} option`).forEach((optEl, optIdx) => {
       const val = (optEl.getAttribute('value') || '').trim();
       const lbl = cleanTextBrowser(optEl.textContent);
-      if (val && lbl) seasonOptLabels.set(val, lbl);
+      if (val && lbl) {
+        seasonOptLabels.set(val, lbl);
+        if (/^https?:\/\//i.test(val) || val.startsWith('/')) {
+          registerSeasonPageLink(lbl, val, optIdx + 1);
+        }
+      }
     });
 
     const selectEpSel = adapter.episodeRules.selectEpisodeOptionSelector.trim() || 'select.episodeoption option, .TabE select option';
@@ -518,8 +614,10 @@ function extractSeasonsAndEpisodesWithAdapterBrowser(
         const sLabel =
           (seasonKey && seasonOptLabels.get(`Seas${seasonKey}`)) ||
           (seasonKey && seasonOptLabels.get(seasonKey)) ||
-          (seasonKey ? `الموسم ${seasonKey}` : 'الموسم 01');
-        const sNum = parseSeasonNumberFromLabel(sLabel, Number(seasonKey) || 1);
+          (parentId && seasonOptLabels.get(parentId)) ||
+          (seasonKey ? `الموسم ${seasonKey}` : '') ||
+          (options?.forcedSeasonNumber ? `الموسم ${options.forcedSeasonNumber}` : 'الموسم 01');
+        const sNum = parseSeasonNumberFromLabel(sLabel, options?.forcedSeasonNumber || (Number(seasonKey) || 1));
         addEpisodeToSeason(sNum, `الموسم ${String(sNum).padStart(2, '0')}`, cleanTextBrowser(optEl.textContent), val);
       });
     }
@@ -529,6 +627,7 @@ function extractSeasonsAndEpisodesWithAdapterBrowser(
   if (totalProcessedEps === 0) {
     const containerSel = adapter.episodeRules.containerSelector.trim();
     const linkSel = adapter.episodeRules.linkSelector.trim() || 'a[href]';
+    const defaultSeason = options?.forcedSeasonNumber || 1;
     let scannedContainer = false;
 
     if (containerSel) {
@@ -537,10 +636,14 @@ function extractSeasonsAndEpisodesWithAdapterBrowser(
         scannedContainer = true;
         containers.forEach((cEl, cIdx) => {
           const headingText =
-            cleanTextBrowser(safeQueryAll(cEl, 'h2, h3, .season-title, .title')[0]?.textContent) ||
+            cEl.getAttribute('data-season') ||
             cEl.getAttribute('id') ||
+            cleanTextBrowser(safeQueryAll(cEl, 'h2, h3, .season-title, .title')[0]?.textContent) ||
             '';
-          const sNum = parseSeasonNumberFromLabel(headingText, cIdx + 1);
+          const sNum = parseSeasonNumberFromLabel(
+            headingText,
+            containers.length > 1 ? cIdx + 1 : defaultSeason
+          );
           safeQueryAll(cEl, linkSel).forEach((aEl) => {
             addEpisodeToSeason(
               sNum,
@@ -556,11 +659,24 @@ function extractSeasonsAndEpisodesWithAdapterBrowser(
     if (!scannedContainer || totalProcessedEps === 0) {
       doc.querySelectorAll('a[href]').forEach((aEl) => {
         if (aEl.closest(IGNORED_PAGE_CONTAINER_SELECTOR)) return;
+        const href = aEl.getAttribute('href') || '';
+        const text = cleanTextBrowser(aEl.textContent) || cleanTextBrowser(aEl.getAttribute('title'));
+        const seasonParent = aEl.closest('[data-season], [id*="Season"], [id*="season"], .season-box, .season-block');
+        const seasonParentHint =
+          seasonParent?.getAttribute('data-season') ||
+          seasonParent?.getAttribute('id') ||
+          cleanTextBrowser(seasonParent?.querySelector('h2, h3, .season-title')?.textContent) ||
+          '';
+        const sNum = seasonParentHint
+          ? parseSeasonNumberFromLabel(seasonParentHint, defaultSeason)
+          : /season|الموسم|موسم|\bS\d{1,2}E\d+/i.test(`${text} ${href}`)
+            ? parseSeasonNumberFromLabel(`${text} ${href}`, defaultSeason)
+            : defaultSeason;
         addEpisodeToSeason(
-          1,
-          'الموسم 01',
-          cleanTextBrowser(aEl.textContent) || cleanTextBrowser(aEl.getAttribute('title')),
-          aEl.getAttribute('href') || ''
+          sNum,
+          `الموسم ${String(sNum).padStart(2, '0')}`,
+          text,
+          href
         );
       });
     }
@@ -570,7 +686,7 @@ function extractSeasonsAndEpisodesWithAdapterBrowser(
   const pageHeading = normalizeArabicDigitsBrowser(
     `${cleanTextBrowser(doc.querySelector('h1')?.textContent)} ${cleanTextBrowser(doc.querySelector('title')?.textContent)}`
   );
-  const currSeasonNum = parseSeasonNumberFromLabel(pageHeading, 1);
+  const currSeasonNum = parseSeasonNumberFromLabel(pageHeading, options?.forcedSeasonNumber || 1);
   const currEpMatch = pageHeading.match(/(?:الحلقة|حلقة|Episode|Ep\.?)\s*#?(\d{1,3})/i);
   if (currEpMatch?.[1] && sourceUrl && seasonMap.size > 0) {
     const currEpNum = Number(currEpMatch[1]);
@@ -581,6 +697,7 @@ function extractSeasonsAndEpisodesWithAdapterBrowser(
         number: currEpNum,
         title: `الحلقة ${currEpNum}`,
         watchUrl: sourceUrl,
+        sourceUrl,
       });
     }
   }
@@ -605,6 +722,7 @@ function extractSeasonsAndEpisodesWithAdapterBrowser(
           duration: '45 دقيقة',
           quality: defaultQuality,
           watchUrl: ep.watchUrl,
+          sourceUrl: ep.sourceUrl,
           servers: [] as ScrapedPayload['servers'],
         })),
     }))
@@ -628,8 +746,12 @@ function extractSeasonsAndEpisodesWithAdapterBrowser(
     seasons,
     visibleEpisodesHint,
     paginationLinks: pagLinks.slice(0, 20),
+    seasonPageLinks: Array.from(seasonPageLinksMap.values()).slice(0, 25),
   };
 }
+
+const IGNORED_WATCH_SUBPAGE_PARENT_SELECTOR =
+  `${IGNORED_PAGE_CONTAINER_SELECTOR}, .tabcontent, .SeasonsEpisodes, .SeasonsList, .seasons-sec, .episodes-list, .episode-list, .all-episodes, .TabE, .TabS, .related, .related-posts, .sidebar, aside, [id^="Season"]`;
 
 function findBestWatchSubpageUrlBrowser(
   doc: Document,
@@ -643,40 +765,56 @@ function findBestWatchSubpageUrlBrowser(
     return '';
   }
 
-  let currentVid = '';
-  try {
-    currentVid = new URL(sourceUrl).searchParams.get(adapter.episodeRules.episodeIdParam || 'vid') || '';
-  } catch {
-    // ignore
-  }
+  const idParam = adapter.episodeRules.episodeIdParam || 'vid';
+  const sourceIdVal = extractEpisodeIdFromUrlBrowser(sourceUrl, idParam);
 
-  const sel =
-    adapter.pageDetection.watchSubpageSelector.trim() ||
-    'a.xtgo, a.btnplay, a[href*="play.php"], a[href*="/watch/"]';
+  const customSel = adapter.pageDetection.watchSubpageSelector.trim();
+  const sel = customSel
+    ? `${customSel}, a[href]`
+    : 'a.xtgo, a.btnplay, a[href*="play.php"], a[href*="/watch/"], a[href]';
 
   const candidates: { href: string; score: number }[] = [];
   safeQueryAll(doc, sel).forEach((el) => {
     if (el.closest(IGNORED_PAGE_CONTAINER_SELECTOR)) return;
     if (el.classList.contains('btnDowns')) return;
+
+    const cls = el.getAttribute('class') || '';
+    const text = cleanTextBrowser(el.textContent);
+    const isExplicitWatchBtn = Boolean(
+      (customSel && el.matches(customSel)) || /\bxtgo\b|\bbtnplay\b|\bplay-btn\b/i.test(cls)
+    );
+    if (!isExplicitWatchBtn && el.closest(IGNORED_WATCH_SUBPAGE_PARENT_SELECTOR)) return;
+
     const href = resolveUrlBrowser(sourceUrl, el.getAttribute('href'));
-    if (!href || href === sourceUrl) return;
+    if (!href || canonicalizeCompareUrl(href) === canonicalizeCompareUrl(sourceUrl)) return;
+    if (/download\.php|\/download/i.test(href) && !/play\.php|\/watch\/|\/player\//i.test(href)) return;
     try {
       if (new URL(href).origin !== sourceOrigin) return;
     } catch {
       return;
     }
 
-    let score = 0;
-    const cls = el.getAttribute('class') || '';
-    const text = cleanTextBrowser(el.textContent);
-    if (/\bxtgo\b|btnplay|play-btn/i.test(cls)) score += 30;
-    if (/play\.php/i.test(href)) score += 25;
-    if (/\/watch\/|\/player\//i.test(href)) score += 18;
-    if (currentVid && href.includes(currentVid)) score += 50;
-    if (/مشاهدة|watch|play/i.test(text)) score += 10;
-    if (/download|تحميل|70C19e669/i.test(href + ' ' + cls)) score -= 40;
+    const candIdVal = extractEpisodeIdFromUrlBrowser(href, idParam);
+    if (sourceIdVal && candIdVal && candIdVal !== sourceIdVal) {
+      return;
+    }
 
-    if (score > 0) candidates.push({ href, score });
+    let score = 0;
+    if (sourceIdVal && candIdVal && candIdVal === sourceIdVal) score += 120;
+    else if (sourceIdVal && href.includes(sourceIdVal)) score += 80;
+    if (adapter.pageDetection.watchSubpageUrlPattern) {
+      try {
+        if (new RegExp(adapter.pageDetection.watchSubpageUrlPattern, 'i').test(href)) score += 40;
+      } catch {
+        // ignore
+      }
+    }
+    if (/\bxtgo\b|\bbtnplay\b|\bplay-btn\b/i.test(cls)) score += 35;
+    if (/play\.php|\/watch\/|\/player\//i.test(href)) score += 25;
+    if (/مشاهدة|watch|play/i.test(text)) score += 10;
+
+    const minThreshold = sourceIdVal && !candIdVal && !isExplicitWatchBtn ? 60 : 25;
+    if (score >= minThreshold) candidates.push({ href, score });
   });
 
   candidates.sort((a, b) => b.score - a.score);
@@ -1360,6 +1498,103 @@ export async function analyzeSiteStructureInBrowser(params: {
   };
 }
 
+interface BrowserEpisodeBindingValidationEntry {
+  valid: boolean;
+  note?: string;
+  sourceUrl: string;
+  watchSubpageUrl?: string;
+}
+
+function validateSeriesEpisodeServerBindingsBrowser(
+  seasons: ScrapedPayload['seasons'],
+  provenanceMap: Map<string, { expectedSourceUrl: string; fetchedUrls: string[]; watchSubpageUrl?: string; clonedFromRoot?: boolean; invalidReason?: string }>,
+  sourceOrigin: string
+) {
+  const perEpisode = new Map<string, BrowserEpisodeBindingValidationEntry>();
+  const serverSignatureOwners = new Map<string, { epKey: string; sourceUrl: string }[]>();
+  let validEpisodes = 0;
+  let invalidEpisodes = 0;
+  let crossEpisodeContaminationDetected = false;
+  const notes: string[] = [];
+
+  for (const season of seasons) {
+    for (const ep of season.episodes) {
+      const epKey = `${season.seasonNumber}:${ep.number}`;
+      const prov = provenanceMap.get(epKey);
+      const srvs = ep.servers || [];
+      const srcUrl = ep.sourceUrl || prov?.expectedSourceUrl || '';
+      let valid = true;
+      let note = '';
+
+      if (prov?.invalidReason) {
+        valid = false;
+        note = prov.invalidReason;
+        crossEpisodeContaminationDetected = true;
+      } else if (!srcUrl) {
+        valid = false;
+        note = 'لا يوجد رابط أصلي للحلقة (sourceUrl)';
+        crossEpisodeContaminationDetected = true;
+      } else if (prov?.clonedFromRoot) {
+        valid = false;
+        note = 'تم منع نسخ سيرفرات صفحة المسلسل/الجذر إلى الحلقة';
+        crossEpisodeContaminationDetected = true;
+      } else {
+        const badSrv = srvs.find(
+          (s) => !s.url || isInvalidServerCandidateUrl(s.url, sourceOrigin)
+        );
+        if (badSrv) {
+          valid = false;
+          note = `سيرفر غير صالح أو يشير إلى صفحة موقع: ${badSrv.url || '(فارغ)'}`;
+        }
+      }
+
+      if (valid) validEpisodes += 1;
+      else invalidEpisodes += 1;
+
+      perEpisode.set(epKey, {
+        valid,
+        note: note || undefined,
+        sourceUrl: srcUrl,
+        watchSubpageUrl: ep.watchSubpageUrl || prov?.watchSubpageUrl,
+      });
+
+      if (srvs.length > 0 && srcUrl) {
+        const sig = srvs.map((s) => canonicalizeCompareUrl(s.url)).sort().join('|');
+        const list = serverSignatureOwners.get(sig) || [];
+        list.push({ epKey, sourceUrl: canonicalizeCompareUrl(srcUrl) });
+        serverSignatureOwners.set(sig, list);
+      }
+    }
+  }
+
+  let duplicateServerSetsCount = 0;
+  for (const [, owners] of serverSignatureOwners.entries()) {
+    const uniqueSrcUrls = new Set(owners.map((o) => o.sourceUrl).filter(Boolean));
+    if (owners.length > 1 && uniqueSrcUrls.size > 1) {
+      duplicateServerSetsCount += owners.length - 1;
+    }
+  }
+
+  if (crossEpisodeContaminationDetected) {
+    notes.push('تم رصد خلل في استقلالية مصدر السيرفرات لإحدى الحلقات.');
+  }
+  if (invalidEpisodes > 0) {
+    notes.push(`يوجد ${invalidEpisodes} حلقة لم يتحقق ربط سيرفراتها بشكل سليم.`);
+  }
+  if (duplicateServerSetsCount > 0) {
+    notes.push(`ملاحظة: ${duplicateServerSetsCount} حلقات بروابط مستقلة أعادت نفس روابط التضمين من الموقع المصدر.`);
+  }
+
+  return {
+    validEpisodes,
+    invalidEpisodes,
+    duplicateServerSetsCount,
+    crossEpisodeContaminationDetected,
+    notes,
+    perEpisode,
+  };
+}
+
 export async function executeAdapterScrapeInBrowser(params: {
   url: string;
   rawHtml?: string;
@@ -1373,6 +1608,8 @@ export async function executeAdapterScrapeInBrowser(params: {
   visibleEpisodesHint: number;
   visibleServersHint: number;
   failedServers: FailedServerReport[];
+  validationSummary?: ScraperTestResult['validationSummary'];
+  episodeValidationMap?: Map<string, BrowserEpisodeBindingValidationEntry>;
   error?: string;
 }> {
   const {
@@ -1438,9 +1675,9 @@ export async function executeAdapterScrapeInBrowser(params: {
     ).length
   );
 
-  // 2. Follow watch subpage (watch.php -> play.php)
+  // 2. Follow watch subpage (strictly ID-matched: watch.php?vid=X -> play.php?vid=X)
   const watchSubpageUrl = adapter.navigationRules.followWatchSubpage
-    ? findBestWatchSubpageUrlBrowser(doc, effectiveUrl, adapter) || baseline.hints.watchSubpageUrl || ''
+    ? findBestWatchSubpageUrlBrowser(doc, effectiveUrl, adapter) || ''
     : '';
 
   if (watchSubpageUrl && canonicalizeCompareUrl(watchSubpageUrl) !== canonicalizeCompareUrl(effectiveUrl)) {
@@ -1475,7 +1712,7 @@ export async function executeAdapterScrapeInBrowser(params: {
   media.servers = rootVerify.kept;
   failedServers.push(...rootVerify.failed);
 
-  // 3. Seasons & Episodes
+  // 3. Extract ALL Seasons & Episodes FIRST
   if (contentTypeHint !== 'movie') {
     const epExtract = extractSeasonsAndEpisodesWithAdapterBrowser(
       doc,
@@ -1487,12 +1724,56 @@ export async function executeAdapterScrapeInBrowser(params: {
     const seasons = epExtract.seasons;
     let visibleEpisodesHint = epExtract.visibleEpisodesHint;
 
+    const mergeExtractedSeasons = (incomingSeasons: typeof seasons): number => {
+      let addedCount = 0;
+      for (const nextSeason of incomingSeasons) {
+        const targetSeason = seasons.find((s) => s.seasonNumber === nextSeason.seasonNumber);
+        if (!targetSeason) {
+          seasons.push(nextSeason);
+          addedCount += nextSeason.episodes.length;
+        } else {
+          for (const ep of nextSeason.episodes) {
+            if (!targetSeason.episodes.some((e) => e.number === ep.number)) {
+              targetSeason.episodes.push(ep);
+              addedCount += 1;
+            }
+          }
+          targetSeason.episodes.sort((a, b) => a.number - b.number);
+        }
+      }
+      return addedCount;
+    };
+
+    const canonEffective = canonicalizeCompareUrl(effectiveUrl);
+    if (adapter.episodeRules.preserveMultiSeason && epExtract.seasonPageLinks.length > 0) {
+      const visitedSeasonPages = new Set<string>([canonEffective]);
+      for (const sLink of epExtract.seasonPageLinks) {
+        const canonSeasonUrl = canonicalizeCompareUrl(sLink.url);
+        if (!canonSeasonUrl || visitedSeasonPages.has(canonSeasonUrl)) continue;
+        visitedSeasonPages.add(canonSeasonUrl);
+        const sRes = await fetchViaBrowserOrCorsRelay(sLink.url, 9000);
+        if (!sRes.ok || sRes.text.length < 100) continue;
+        const sDoc = new DOMParser().parseFromString(sRes.text, 'text/html');
+        const sExtract = extractSeasonsAndEpisodesWithAdapterBrowser(
+          sDoc,
+          sLink.url,
+          adapter,
+          media.year,
+          media.quality,
+          { forcedSeasonNumber: sLink.seasonNumber }
+        );
+        const added = mergeExtractedSeasons(sExtract.seasons);
+        visibleEpisodesHint += added;
+      }
+      seasons.sort((a, b) => a.seasonNumber - b.seasonNumber);
+    }
+
     if (
       adapter.navigationRules.followPagination &&
       epExtract.paginationLinks.length > 0 &&
       (!rawHtml || rawHtml.trim().length < 50)
     ) {
-      const visitedPag = new Set<string>([canonicalizeCompareUrl(effectiveUrl)]);
+      const visitedPag = new Set<string>([canonEffective]);
       const queue = [...epExtract.paginationLinks];
       let pagesVisited = 1;
       const maxPag = Math.max(1, Math.min(20, adapter.navigationRules.maxPaginationPages || 6));
@@ -1514,23 +1795,7 @@ export async function executeAdapterScrapeInBrowser(params: {
           media.year,
           media.quality
         );
-        let newlyAddedOnPage = 0;
-
-        for (const nextSeason of nextExtract.seasons) {
-          const targetSeason = seasons.find((s) => s.seasonNumber === nextSeason.seasonNumber);
-          if (!targetSeason) {
-            seasons.push(nextSeason);
-            newlyAddedOnPage += nextSeason.episodes.length;
-          } else {
-            for (const ep of nextSeason.episodes) {
-              if (!targetSeason.episodes.some((e) => e.number === ep.number)) {
-                targetSeason.episodes.push(ep);
-                newlyAddedOnPage += 1;
-              }
-            }
-            targetSeason.episodes.sort((a, b) => a.number - b.number);
-          }
-        }
+        const newlyAddedOnPage = mergeExtractedSeasons(nextExtract.seasons);
         visibleEpisodesHint += newlyAddedOnPage;
         if (newlyAddedOnPage === 0) break;
         for (const moreUrl of nextExtract.paginationLinks) {
@@ -1547,55 +1812,153 @@ export async function executeAdapterScrapeInBrowser(params: {
       if (media.kind !== 'wrestling') media.kind = 'series';
     }
 
-    // 4. Per-episode server extraction
+    const provenanceMap = new Map<
+      string,
+      { expectedSourceUrl: string; fetchedUrls: string[]; watchSubpageUrl?: string; clonedFromRoot?: boolean; invalidReason?: string }
+    >();
+
+    // 4. Independent per-episode server extraction across ALL seasons
     if (deepEpisodeCrawl && media.seasons.length > 0) {
-      const canonEffective = canonicalizeCompareUrl(effectiveUrl);
-      const canonWatch = canonicalizeCompareUrl(watchSubpageUrl);
-      const allEpisodes = media.seasons.flatMap((s) => s.episodes);
-      const crawlCap = maxEpisodesForCrawl ? Math.min(allEpisodes.length, maxEpisodesForCrawl) : allEpisodes.length;
+      type CrawlTarget = { seasonNumber: number; ep: ScrapedPayload['seasons'][number]['episodes'][number] };
+      const allTargetsSequential: CrawlTarget[] = media.seasons.flatMap((s) =>
+        s.episodes.map((ep) => ({ seasonNumber: s.seasonNumber, ep }))
+      );
 
+      let crawlTargets: CrawlTarget[] = allTargetsSequential;
+      if (maxEpisodesForCrawl && allTargetsSequential.length > maxEpisodesForCrawl) {
+        const roundRobin: CrawlTarget[] = [];
+        const maxLenInAnySeason = Math.max(...media.seasons.map((s) => s.episodes.length));
+        for (let idx = 0; idx < maxLenInAnySeason && roundRobin.length < maxEpisodesForCrawl; idx++) {
+          for (const season of media.seasons) {
+            if (season.episodes[idx] && roundRobin.length < maxEpisodesForCrawl) {
+              roundRobin.push({ seasonNumber: season.seasonNumber, ep: season.episodes[idx] });
+            }
+          }
+        }
+        crawlTargets = roundRobin;
+      }
+
+      const matchingEffectiveCount = allTargetsSequential.filter(
+        ({ ep }) => canonicalizeCompareUrl(ep.sourceUrl || ep.watchUrl || '') === canonEffective
+      ).length;
+
+      const fetchedHtmlCache = new Map<string, { ok: boolean; text: string; finalUrl: string }>();
+      const fetchCachedUrl = async (targetUrl: string) => {
+        const canon = canonicalizeCompareUrl(targetUrl);
+        const cached = fetchedHtmlCache.get(canon);
+        if (cached) return cached;
+        if (adapter.siteSettings.requestDelayMs > 0) {
+          await sleepMs(Math.min(400, adapter.siteSettings.requestDelayMs));
+        }
+        const res = await fetchViaBrowserOrCorsRelay(targetUrl, 9000);
+        const entry = { ok: res.ok, text: res.text, finalUrl: res.finalUrl || targetUrl };
+        fetchedHtmlCache.set(canon, entry);
+        return entry;
+      };
+
+      const idParam = adapter.episodeRules.episodeIdParam || 'vid';
+      const customWatchSel = adapter.pageDetection.watchSubpageSelector.trim();
       const CONCURRENCY = getCustomApiBaseUrl() ? 4 : 2;
-      for (let i = 0; i < crawlCap; i += CONCURRENCY) {
-        const chunk = allEpisodes.slice(i, i + CONCURRENCY);
-        await Promise.all(
-          chunk.map(async (ep) => {
-            const epUrl = ep.watchUrl || '';
-            const canonEp = canonicalizeCompareUrl(epUrl);
 
-            if (!canonEp || canonEp === canonEffective || canonEp === canonWatch) {
+      for (let i = 0; i < crawlTargets.length; i += CONCURRENCY) {
+        const chunk = crawlTargets.slice(i, i + CONCURRENCY);
+        await Promise.all(
+          chunk.map(async ({ seasonNumber, ep }) => {
+            const originalEpUrl = (ep.sourceUrl || ep.watchUrl || '').trim();
+            ep.sourceUrl = originalEpUrl;
+            const canonEp = canonicalizeCompareUrl(originalEpUrl);
+            const epKey = `${seasonNumber}:${ep.number}`;
+
+            if (!canonEp) {
+              ep.servers = [];
+              ep.watchUrl = '';
+              provenanceMap.set(epKey, {
+                expectedSourceUrl: '',
+                fetchedUrls: [],
+                invalidReason: 'لا يوجد رابط مستقل للحلقة — تم منع نسخ سيرفرات صفحة المسلسل',
+              });
+              return;
+            }
+
+            if (canonEp === canonEffective) {
+              if (matchingEffectiveCount > 1) {
+                ep.servers = [];
+                ep.watchUrl = '';
+                provenanceMap.set(epKey, {
+                  expectedSourceUrl: originalEpUrl,
+                  fetchedUrls: [],
+                  clonedFromRoot: true,
+                  invalidReason: 'عدة حلقات تشترك في نفس رابط الجذر — تم منع التعميم التلقائي للسيرفرات',
+                });
+                return;
+              }
               ep.servers = media.servers.map((s, sIdx) => ({
                 ...s,
-                id: `ep-${ep.number}-srv-${sIdx + 1}`,
+                id: `ep-s${seasonNumber}-e${ep.number}-srv-${sIdx + 1}`,
               }));
+              ep.watchSubpageUrl = watchSubpageUrl || undefined;
               ep.watchUrl = ep.servers[0]?.url || '';
+              provenanceMap.set(epKey, {
+                expectedSourceUrl: originalEpUrl,
+                fetchedUrls: [effectiveUrl, ...(watchSubpageUrl ? [watchSubpageUrl] : [])],
+                watchSubpageUrl: watchSubpageUrl || undefined,
+              });
               return;
             }
 
-            if (adapter.siteSettings.requestDelayMs > 0) {
-              await sleepMs(Math.min(400, adapter.siteSettings.requestDelayMs));
-            }
-            const epRes = await fetchViaBrowserOrCorsRelay(epUrl, 9000);
+            const epRes = await fetchCachedUrl(originalEpUrl);
             if (!epRes.ok || epRes.text.length < 100) {
               ep.servers = [];
+              ep.watchUrl = '';
+              provenanceMap.set(epKey, {
+                expectedSourceUrl: originalEpUrl,
+                fetchedUrls: [],
+                invalidReason: 'تعذر جلب صفحة الحلقة المستقلة',
+              });
               return;
             }
 
+            const fetchedUrls = [originalEpUrl];
             const epDoc = new DOMParser().parseFromString(epRes.text, 'text/html');
-            const epSrvExtract = extractServersWithAdapterBrowser(epDoc, epUrl, adapter, media.quality);
+            const epSrvExtract = extractServersWithAdapterBrowser(epDoc, originalEpUrl, adapter, media.quality);
             let epRawServers = [...epSrvExtract.servers];
+            let matchedWatchSubUrl = '';
 
-            if (epRawServers.length === 0 && adapter.navigationRules.followWatchSubpage) {
-              const epWatchUrl = findBestWatchSubpageUrlBrowser(epDoc, epUrl, adapter);
-              if (epWatchUrl && canonicalizeCompareUrl(epWatchUrl) !== canonEp) {
-                const subRes = await fetchViaBrowserOrCorsRelay(epWatchUrl, 9000);
-                if (subRes.ok && subRes.text.length > 100) {
-                  const subDoc = new DOMParser().parseFromString(subRes.text, 'text/html');
-                  epRawServers = extractServersWithAdapterBrowser(
-                    subDoc,
-                    epWatchUrl,
-                    adapter,
-                    media.quality
-                  ).servers;
+            if (adapter.navigationRules.followWatchSubpage) {
+              const epWatchUrl = findBestWatchSubpageUrlBrowser(epDoc, originalEpUrl, adapter);
+              const canonEpWatch = canonicalizeCompareUrl(epWatchUrl);
+              if (epWatchUrl && canonEpWatch !== canonEp && canonEpWatch !== canonEffective) {
+                const epUrlId = extractEpisodeIdFromUrlBrowser(originalEpUrl, idParam);
+                const watchUrlId = extractEpisodeIdFromUrlBrowser(epWatchUrl, idParam);
+                const isExactIdMatch = Boolean(epUrlId && watchUrlId && epUrlId === watchUrlId);
+                const hasCustomWatchSelector = Boolean(
+                  customWatchSel && safeQueryAll(epDoc, customWatchSel).length > 0
+                );
+
+                if (epRawServers.length === 0 || isExactIdMatch || hasCustomWatchSelector) {
+                  matchedWatchSubUrl = epWatchUrl;
+                  fetchedUrls.push(epWatchUrl);
+                  const subRes = await fetchCachedUrl(epWatchUrl);
+                  if (subRes.ok && subRes.text.length > 100) {
+                    const subDoc = new DOMParser().parseFromString(subRes.text, 'text/html');
+                    const subServers = extractServersWithAdapterBrowser(
+                      subDoc,
+                      epWatchUrl,
+                      adapter,
+                      media.quality
+                    ).servers;
+                    if (subServers.length > 0) {
+                      const merged: typeof epRawServers = [];
+                      const seenMerged = new Set<string>();
+                      for (const srv of [...subServers, ...epRawServers]) {
+                        if (srv.url && !seenMerged.has(srv.url)) {
+                          seenMerged.add(srv.url);
+                          merged.push(srv);
+                        }
+                      }
+                      epRawServers = merged;
+                    }
+                  }
                 }
               }
             }
@@ -1608,16 +1971,24 @@ export async function executeAdapterScrapeInBrowser(params: {
             );
             ep.servers = epVerified.kept.map((s, sIdx) => ({
               ...s,
-              id: `ep-${ep.number}-srv-${sIdx + 1}`,
+              id: `ep-s${seasonNumber}-e${ep.number}-srv-${sIdx + 1}`,
             }));
+            if (matchedWatchSubUrl) {
+              ep.watchSubpageUrl = matchedWatchSubUrl;
+            }
             failedServers.push(...epVerified.failed);
-            ep.watchUrl = ep.servers[0]?.url || epUrl;
+            ep.watchUrl = ep.servers[0]?.url || '';
+            provenanceMap.set(epKey, {
+              expectedSourceUrl: originalEpUrl,
+              fetchedUrls,
+              watchSubpageUrl: matchedWatchSubUrl || undefined,
+            });
           })
         );
       }
 
       if (media.servers.length === 0) {
-        const firstWithServers = allEpisodes.find((e) => e.servers && e.servers.length > 0);
+        const firstWithServers = allTargetsSequential.find((t) => t.ep.servers && t.ep.servers.length > 0)?.ep;
         if (firstWithServers?.servers) {
           media.servers = firstWithServers.servers.map((s, sIdx) => ({
             ...s,
@@ -1627,12 +1998,21 @@ export async function executeAdapterScrapeInBrowser(params: {
       }
     }
 
+    const validation = validateSeriesEpisodeServerBindingsBrowser(media.seasons, provenanceMap, sourceOrigin);
     return {
       ok: true,
       media,
       visibleEpisodesHint,
       visibleServersHint,
       failedServers,
+      validationSummary: {
+        validEpisodes: validation.validEpisodes,
+        invalidEpisodes: validation.invalidEpisodes,
+        duplicateServerSetsCount: validation.duplicateServerSetsCount,
+        crossEpisodeContaminationDetected: validation.crossEpisodeContaminationDetected,
+        notes: validation.notes,
+      },
+      episodeValidationMap: validation.perEpisode,
     };
   } else {
     media.seasons = [];
@@ -1672,7 +2052,7 @@ export async function testAdapterCandidateInBrowser(params: {
     adapter,
     contentTypeHint,
     deepEpisodeCrawl: true,
-    maxEpisodesForCrawl: 24,
+    maxEpisodesForCrawl: 36,
   });
 
   const media = execResult.media;
@@ -1714,12 +2094,17 @@ export async function testAdapterCandidateInBrowser(params: {
       if (count < minSrv) minSrv = count;
       if (count > maxSrv) maxSrv = count;
 
+      const vEntry = execResult.episodeValidationMap?.get(`${season.seasonNumber}:${ep.number}`);
       episodesReport.push({
         seasonNumber: season.seasonNumber,
         seasonLabel: season.label,
         episodeNumber: ep.number,
         title: ep.title,
         watchUrl: ep.watchUrl || '',
+        sourceUrl: ep.sourceUrl || vEntry?.sourceUrl,
+        watchSubpageUrl: ep.watchSubpageUrl || vEntry?.watchSubpageUrl,
+        serverBindingValid: vEntry ? vEntry.valid : true,
+        validationNote: vEntry?.note,
         serversCount: count,
         serverNames: srvs.map((s) => s.name),
         serverUrls: srvs.map((s) => s.url || ''),
@@ -1774,11 +2159,17 @@ export async function testAdapterCandidateInBrowser(params: {
 
   let completenessVerdict: 'complete' | 'partial' | 'incomplete' = 'complete';
   const comparisonNotes: string[] = [];
+  const hasBindingFailure = Boolean(
+    execResult.validationSummary &&
+      (execResult.validationSummary.invalidEpisodes > 0 ||
+        execResult.validationSummary.crossEpisodeContaminationDetected)
+  );
 
   if (!execResult.ok || (media.servers.length === 0 && episodesDiscovered === 0)) {
     completenessVerdict = 'incomplete';
     comparisonNotes.push(execResult.error || 'لم يتم استخراج أي سيرفرات أو حلقات صالحة.');
   } else if (
+    hasBindingFailure ||
     visibleEpisodesHint > episodesDiscovered ||
     visibleServersHint > media.servers.length ||
     missingEpisodes.length > 0 ||
@@ -1786,7 +2177,12 @@ export async function testAdapterCandidateInBrowser(params: {
     (episodesReport.length > 0 && episodesReport.some((e) => e.serversCount === 0))
   ) {
     completenessVerdict =
-      media.servers.length > 0 && srvCoverage >= 60 && epCoverage >= 70 ? 'partial' : 'incomplete';
+      !hasBindingFailure && media.servers.length > 0 && srvCoverage >= 60 && epCoverage >= 70
+        ? 'partial'
+        : 'incomplete';
+    if (hasBindingFailure && execResult.validationSummary?.notes?.length) {
+      comparisonNotes.push(...execResult.validationSummary.notes);
+    }
     if (visibleEpisodesHint > episodesDiscovered) {
       comparisonNotes.push(`استُخرج ${episodesDiscovered} من أصل ${visibleEpisodesHint} حلقة ظاهرة.`);
     }
@@ -1847,6 +2243,17 @@ export async function testAdapterCandidateInBrowser(params: {
   }
 
   const diagnostics: ScraperDiagnosticIssue[] = [];
+  if (hasBindingFailure) {
+    diagnostics.push({
+      code: 'episode_page_differs_from_series',
+      severity: 'critical',
+      title: 'تعذر التحقق من ربط السيرفرات بالحلقات المستقلة',
+      probableCause:
+        execResult.validationSummary?.notes?.[0] || 'إحدى الحلقات لم تُجلب من رابطها المستقل أو تحتوي على رابط غير صالح.',
+      suggestedFix: 'تحقق من محدّد روابط الحلقات (linkSelector) ومحدّد صفحة المشاهدة (watchSubpageSelector) ومعامل معرف الحلقة.',
+      evidence: `صالح: ${execResult.validationSummary?.validEpisodes ?? 0} | غير صالح: ${execResult.validationSummary?.invalidEpisodes ?? 0}`,
+    });
+  }
   if (missingEpisodes.length > 0) {
     diagnostics.push({
       code: 'episode_count_mismatch_or_capped',
@@ -1916,6 +2323,8 @@ export async function testAdapterCandidateInBrowser(params: {
         duration: ep.duration,
         quality: ep.quality,
         watchUrl: ep.watchUrl,
+        sourceUrl: ep.sourceUrl,
+        watchSubpageUrl: ep.watchSubpageUrl,
         servers: ep.servers?.map((es) => ({
           id: es.id,
           name: es.name,
@@ -1964,6 +2373,7 @@ export async function testAdapterCandidateInBrowser(params: {
     recommendedStatus,
     recommendedStatusReason,
     extractedPreview,
+    validationSummary: execResult.validationSummary,
     ...(comparisonDiff ? { comparisonDiff } : {}),
     ...(execResult.error ? { error: execResult.error } : {}),
   };

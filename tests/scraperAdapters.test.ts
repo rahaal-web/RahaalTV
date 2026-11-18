@@ -16,6 +16,10 @@ import {
   isBlockedHostEnhanced,
   testAdapterCandidate,
 } from '../server/scraperAdapterEngine';
+import {
+  parseHtmlToMediaWithHints,
+  scrapeFullItemWithSubpages,
+} from '../server';
 
 const makeMockBaselineParse: (overrides?: {
   baselineServers?: { id: string; name: string; url: string }[];
@@ -373,3 +377,401 @@ test('Old vs New comparisonDiff measures improvements over an earlier incomplete
     }
   );
 });
+
+// =========================================================================
+// Mandatory 3-Season Independent Per-Episode Server Binding Test Fixtures
+// =========================================================================
+
+function buildEpisodeWatchPageHtml(vid: string, seasonNum: number, epNum: number): string {
+  // Intentionally includes Season 1 list BEFORE the episode's own xtgo play.php link to ensure
+  // the scraper never hijacks watchSubpageUrl with Season 1 Ep 1!
+  return `<!doctype html>
+  <html lang="ar" dir="rtl">
+  <head>
+    <title>مشاهدة مسلسل الملحمة الموسم ${seasonNum} الحلقة ${epNum}</title>
+  </head>
+  <body>
+    <div class="pm-ads-banner">
+      <a href="https://tri-series.example.com/play.php?vid=99999">إعلان مزيف</a>
+    </div>
+    <div class="SeasonsList">
+      <button class="tablinks" data-season="1">الموسم الأول</button>
+      <button class="tablinks" data-season="2">الموسم الثاني</button>
+      <button class="tablinks" data-season="3">الموسم الثالث</button>
+    </div>
+    <div id="Season1" class="tabcontent">
+      <a href="https://tri-series.example.com/watch.php?vid=101">الحلقة 1</a>
+      <a href="https://tri-series.example.com/watch.php?vid=102">الحلقة 2</a>
+    </div>
+    <a class="xtgo" href="https://tri-series.example.com/play.php?vid=${vid}">شاهد الحلقة ${epNum} الآن</a>
+  </body>
+  </html>`;
+}
+
+function buildEpisodePlayPageHtml(vid: string, seasonNum: number, epNum: number): string {
+  return `<!doctype html>
+  <html lang="ar" dir="rtl">
+  <head>
+    <title>سيرفرات مشاهدة الموسم ${seasonNum} الحلقة ${epNum} (vid=${vid})</title>
+  </head>
+  <body>
+    <div class="pm-ads-banner">
+      <a href="https://tri-series.example.com/watch.php?vid=88888">إعلان</a>
+    </div>
+    <ul class="WatchList">
+      <li class="active" data-embed-url="https://vidmoly.examplecdn.net/embed-s${seasonNum}e${epNum}-1080p.html">Vidmoly 1080p</li>
+      <li data-embed-url="https://okru.examplecdn.net/videoembed/s${seasonNum}e${epNum}-720p">Ok.ru 720p</li>
+      <li data-embed-url="https://uqload.examplecdn.net/embed-s${seasonNum}e${epNum}-4k.mp4">Uqload 4K</li>
+    </ul>
+    <iframe src="https://vidmoly.examplecdn.net/embed-s${seasonNum}e${epNum}-1080p.html" allowfullscreen></iframe>
+  </body>
+  </html>`;
+}
+
+const THREE_SEASON_TABBED_SERIES_HTML = `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <title>مسلسل الملحمة - جميع المواسم</title>
+  <meta name="description" content="مسلسل تجريبي من 3 مواسم للتحقق من استقلالية سيرفرات كل حلقة." />
+</head>
+<body>
+  <div class="trailer">
+    <a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ">التريلر</a>
+  </div>
+  <!-- Decoy root server on the series landing page that MUST NOT be cloned onto Season 2/3 episodes -->
+  <ul class="WatchList">
+    <li data-embed-url="https://root-teaser.examplecdn.net/teaser-only.html">Teaser 720p</li>
+  </ul>
+  <div class="SeasonsList">
+    <button class="tablinks active" data-season="1">الموسم الأول</button>
+    <button class="tablinks" data-season="2">الموسم الثاني</button>
+    <button class="tablinks" data-season="3">الموسم الثالث</button>
+  </div>
+  <div id="Season1" class="tabcontent">
+    <a href="https://tri-series.example.com/watch.php?vid=101">الحلقة 1</a>
+    <a href="https://tri-series.example.com/watch.php?vid=102">الحلقة 2</a>
+    <a href="https://tri-series.example.com/watch.php?vid=103">الحلقة 3</a>
+  </div>
+  <div id="Season2" class="tabcontent">
+    <a href="https://tri-series.example.com/watch.php?vid=201">الحلقة 1</a>
+    <a href="https://tri-series.example.com/watch.php?vid=202">الحلقة 2</a>
+    <a href="https://tri-series.example.com/watch.php?vid=203">الحلقة 3</a>
+  </div>
+  <div id="Season3" class="tabcontent">
+    <a href="https://tri-series.example.com/watch.php?vid=301">الحلقة 1</a>
+    <a href="https://tri-series.example.com/watch.php?vid=302">الحلقة 2</a>
+    <a href="https://tri-series.example.com/watch.php?vid=303">الحلقة 3</a>
+  </div>
+</body>
+</html>`;
+
+function mockThreeSeasonRouter(url: string): { ok: boolean; status: number; body: string } {
+  if (url === 'https://tri-series.example.com/series/epic') {
+    return { ok: true, status: 200, body: THREE_SEASON_TABBED_SERIES_HTML };
+  }
+  if (url === 'https://tri-series.example.com/series/epic/season-2') {
+    return {
+      ok: true,
+      status: 200,
+      body: `<!doctype html><html><head><title>الموسم الثاني</title></head><body>
+        <div class="episodes-list">
+          <a href="https://tri-series.example.com/watch.php?vid=201">الحلقة 1</a>
+          <a href="https://tri-series.example.com/watch.php?vid=202">الحلقة 2</a>
+          <a href="https://tri-series.example.com/watch.php?vid=203">الحلقة 3</a>
+        </div>
+      </body></html>`,
+    };
+  }
+  if (url === 'https://tri-series.example.com/series/epic/season-3') {
+    return {
+      ok: true,
+      status: 200,
+      body: `<!doctype html><html><head><title>الموسم الثالث</title></head><body>
+        <div class="episodes-list">
+          <a href="https://tri-series.example.com/watch.php?vid=301">الحلقة 1</a>
+          <a href="https://tri-series.example.com/watch.php?vid=302">الحلقة 2</a>
+          <a href="https://tri-series.example.com/watch.php?vid=303">الحلقة 3</a>
+        </div>
+      </body></html>`,
+    };
+  }
+  const watchMatch = url.match(/watch\.php\?vid=(\d)(\d\d)/);
+  if (watchMatch) {
+    const sNum = Number(watchMatch[1]);
+    const eNum = Number(watchMatch[2]);
+    return { ok: true, status: 200, body: buildEpisodeWatchPageHtml(`${sNum}${watchMatch[2]}`, sNum, eNum) };
+  }
+  const playMatch = url.match(/play\.php\?vid=(\d)(\d\d)/);
+  if (playMatch) {
+    const sNum = Number(playMatch[1]);
+    const eNum = Number(playMatch[2]);
+    return { ok: true, status: 200, body: buildEpisodePlayPageHtml(`${sNum}${playMatch[2]}`, sNum, eNum) };
+  }
+  if (/examplecdn\.net/i.test(url)) {
+    return { ok: true, status: 200, body: '<video src="https://cdn.examplecdn.net/stream.mp4"></video>' };
+  }
+  return { ok: false, status: 404, body: '<html><title>404 Not Found</title></html>' };
+}
+
+test('Mandatory 3-season test (Adapter Engine): each season & episode fetches independent servers via watch.php -> play.php without cross-season cloning', async () => {
+  await withMockedFetch(mockThreeSeasonRouter, async () => {
+    const adapter = createDefaultScraperAdapter('tri-series.example.com', 'https://tri-series.example.com/series/epic');
+    adapter.siteSettings.verifyMode = 'none';
+    adapter.siteSettings.requestDelayMs = 0;
+    adapter.episodeRules.seasonTabSelector = '.SeasonsList .tablinks';
+    adapter.episodeRules.seasonPanelSelector = '.tabcontent';
+    adapter.episodeRules.containerSelector = '.tabcontent';
+    adapter.episodeRules.preserveMultiSeason = true;
+    adapter.serverRules.itemSelector = '.WatchList li';
+    adapter.serverRules.preserveServerNames = true;
+    adapter.navigationRules.followWatchSubpage = true;
+
+    const result = await executeAdapterScrape({
+      url: 'https://tri-series.example.com/series/epic',
+      adapter,
+      baselineParseFn: parseHtmlToMediaWithHints,
+      contentTypeHint: 'series',
+      deepEpisodeCrawl: true,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.media.seasons.length, 3);
+    assert.ok(result.validationSummary);
+    assert.equal(result.validationSummary.validEpisodes, 9);
+    assert.equal(result.validationSummary.invalidEpisodes, 0);
+    assert.equal(result.validationSummary.crossEpisodeContaminationDetected, false);
+
+    for (const sNum of [1, 2, 3]) {
+      const season = result.media.seasons.find((s) => s.seasonNumber === sNum);
+      if (!season) throw new Error(`Season ${sNum} should exist`);
+      assert.equal(season.episodes.length, 3);
+
+      for (const eNum of [1, 2, 3]) {
+        const ep: (typeof season.episodes)[number] | undefined = season.episodes.find(
+          (e) => e.number === eNum
+        );
+        if (!ep) throw new Error(`S${sNum}E${eNum} should exist`);
+        const expectedVid = `${sNum}0${eNum}`;
+        assert.equal(ep.sourceUrl, `https://tri-series.example.com/watch.php?vid=${expectedVid}`);
+        assert.equal(ep.watchSubpageUrl, `https://tri-series.example.com/play.php?vid=${expectedVid}`);
+        const epServers: { id: string; name: string; mode: 'url' | 'embed'; url: string; quality: string }[] =
+          ep.servers || [];
+        assert.equal(epServers.length, 3, `S${sNum}E${eNum} should have 3 servers`);
+
+        // Verify zero teaser/cross-episode leaks and exact per-episode server URLs, names, order & qualities
+        assert.equal(epServers.some((srv) => srv.url.includes('teaser-only')), false);
+        assert.deepEqual(
+          epServers.map((srv) => srv.name),
+          ['Vidmoly', 'Ok.ru', 'Uqload']
+        );
+        assert.deepEqual(
+          epServers.map((srv) => srv.quality),
+          ['1080p', '720p', '4K']
+        );
+        assert.deepEqual(
+          epServers.map((srv) => srv.id),
+          [`ep-s${sNum}-e${eNum}-srv-1`, `ep-s${sNum}-e${eNum}-srv-2`, `ep-s${sNum}-e${eNum}-srv-3`]
+        );
+        assert.ok(epServers[0].url.includes(`s${sNum}e${eNum}-1080p`));
+        assert.ok(epServers[1].url.includes(`s${sNum}e${eNum}-720p`));
+        assert.ok(epServers[2].url.includes(`s${sNum}e${eNum}-4k.mp4`));
+        assert.equal(epServers[2].mode, 'url');
+      }
+    }
+  });
+});
+
+test('Mandatory 3-season test (Adapter Engine): supports distributed separate season pages (/season-2, /season-3)', async () => {
+  const distributedRootHtml = `<!doctype html>
+  <html lang="ar" dir="rtl">
+  <head><title>مسلسل الملحمة - المواسم المنفصلة</title></head>
+  <body>
+    <div class="SeasonsList">
+      <a class="active" data-season="1" href="https://tri-series.example.com/series/epic-distributed">الموسم الأول</a>
+      <a data-season="2" href="https://tri-series.example.com/series/epic/season-2">الموسم الثاني</a>
+      <a data-season="3" href="https://tri-series.example.com/series/epic/season-3">الموسم الثالث</a>
+    </div>
+    <div class="episodes-list">
+      <a href="https://tri-series.example.com/watch.php?vid=101">الحلقة 1</a>
+      <a href="https://tri-series.example.com/watch.php?vid=102">الحلقة 2</a>
+      <a href="https://tri-series.example.com/watch.php?vid=103">الحلقة 3</a>
+    </div>
+  </body></html>`;
+
+  await withMockedFetch(
+    (url) =>
+      url === 'https://tri-series.example.com/series/epic-distributed'
+        ? { ok: true, status: 200, body: distributedRootHtml }
+        : mockThreeSeasonRouter(url),
+    async () => {
+      const adapter = createDefaultScraperAdapter(
+        'tri-series.example.com',
+        'https://tri-series.example.com/series/epic-distributed'
+      );
+      adapter.siteSettings.verifyMode = 'none';
+      adapter.siteSettings.requestDelayMs = 0;
+      adapter.episodeRules.containerSelector = '.episodes-list';
+      adapter.episodeRules.preserveMultiSeason = true;
+      adapter.serverRules.itemSelector = '.WatchList li';
+      adapter.navigationRules.followWatchSubpage = true;
+
+      const testResult = await testAdapterCandidate({
+        url: 'https://tri-series.example.com/series/epic-distributed',
+        adapter,
+        contentTypeHint: 'series',
+        baselineParseFn: parseHtmlToMediaWithHints,
+      });
+
+      assert.equal(testResult.ok, true);
+      assert.equal(testResult.seasonsDiscovered, 3);
+      assert.equal(testResult.episodesDiscovered, 9);
+      assert.equal(testResult.validationSummary?.validEpisodes, 9);
+      assert.equal(testResult.validationSummary?.invalidEpisodes, 0);
+      assert.equal(testResult.recommendedStatus, 'supported');
+
+      const s2Ep2 = testResult.extractedPreview?.seasons
+        .find((s) => s.seasonNumber === 2)
+        ?.episodes.find((e) => e.number === 2);
+      const s3Ep3 = testResult.extractedPreview?.seasons
+        .find((s) => s.seasonNumber === 3)
+        ?.episodes.find((e) => e.number === 3);
+
+      assert.ok(s2Ep2?.servers?.[0]?.url.includes('s2e2-1080p'));
+      assert.ok(s3Ep3?.servers?.[0]?.url.includes('s3e3-1080p'));
+      assert.equal(s2Ep2?.sourceUrl, 'https://tri-series.example.com/watch.php?vid=202');
+      assert.equal(s3Ep3?.sourceUrl, 'https://tri-series.example.com/watch.php?vid=303');
+    }
+  );
+});
+
+test('Anti-contamination validation prevents copying root series servers when episodes share the root URL', async () => {
+  const sharedRootHtml = `<!doctype html><html><head><title>مسلسل مشترك الرابط</title></head><body>
+    <ul class="WatchList">
+      <li data-embed-url="https://root-only.examplecdn.net/embed-root.html">RootSrv</li>
+    </ul>
+    <div class="episodes-list">
+      <a href="https://shared.example.com/series/alpha">الحلقة 1</a>
+      <a href="https://shared.example.com/series/alpha">الحلقة 2</a>
+    </div>
+  </body></html>`;
+
+  await withMockedFetch(
+    () => ({ ok: true, status: 200, body: sharedRootHtml }),
+    async () => {
+      const adapter = createDefaultScraperAdapter('shared.example.com', 'https://shared.example.com/series/alpha');
+      adapter.siteSettings.verifyMode = 'none';
+      adapter.siteSettings.requestDelayMs = 0;
+      adapter.episodeRules.containerSelector = '.episodes-list';
+      adapter.serverRules.itemSelector = '.WatchList li';
+
+      const testResult = await testAdapterCandidate({
+        url: 'https://shared.example.com/series/alpha',
+        rawHtml: sharedRootHtml,
+        adapter,
+        contentTypeHint: 'series',
+        baselineParseFn: parseHtmlToMediaWithHints,
+      });
+
+      assert.equal(testResult.ok, true);
+      assert.equal(testResult.validationSummary?.crossEpisodeContaminationDetected, true);
+      assert.equal(testResult.validationSummary?.invalidEpisodes, 2);
+      assert.equal(testResult.recommendedStatus, 'needs_fix');
+      for (const ep of testResult.extractedPreview?.seasons[0]?.episodes || []) {
+        assert.equal(ep.servers?.length || 0, 0);
+      }
+    }
+  );
+});
+
+test('Mandatory 3-season test (Baseline Server Scraper in server.ts): scrapes 3 seasons independently & preserves server names/qualities', async () => {
+  await withMockedFetch(mockThreeSeasonRouter, async () => {
+    const media = await scrapeFullItemWithSubpages(
+      'https://tri-series.example.com/series/epic',
+      THREE_SEASON_TABBED_SERIES_HTML
+    );
+
+    assert.equal(media.kind, 'series');
+    assert.equal(media.seasons.length, 3);
+
+    for (const sNum of [1, 2, 3]) {
+      const season = media.seasons.find((s) => s.seasonNumber === sNum);
+      if (!season) throw new Error(`Baseline Season ${sNum} should exist`);
+      assert.equal(season.episodes.length, 3);
+
+      for (const eNum of [1, 2, 3]) {
+        const ep: (typeof season.episodes)[number] | undefined = season.episodes.find(
+          (e) => e.number === eNum
+        );
+        if (!ep) throw new Error(`Baseline S${sNum}E${eNum} should exist`);
+        const expectedVid = `${sNum}0${eNum}`;
+        assert.equal(ep.sourceUrl, `https://tri-series.example.com/watch.php?vid=${expectedVid}`);
+        assert.equal(ep.watchSubpageUrl, `https://tri-series.example.com/play.php?vid=${expectedVid}`);
+        const epServers: { id: string; name: string; mode: 'url' | 'embed'; url: string; quality: string }[] =
+          ep.servers || [];
+        assert.equal(epServers.length, 3, `Baseline S${sNum}E${eNum} should have 3 servers`);
+        assert.equal(epServers.some((srv) => srv.url.includes('teaser-only')), false);
+        assert.deepEqual(
+          epServers.map((srv) => srv.name),
+          ['Vidmoly 1080p', 'Ok.ru 720p', 'Uqload 4K']
+        );
+        assert.deepEqual(
+          epServers.map((srv) => srv.quality),
+          ['1080P', '720P', '4K']
+        );
+        assert.ok(epServers[0].url.includes(`s${sNum}e${eNum}-1080p`));
+        assert.ok(epServers[1].url.includes(`s${sNum}e${eNum}-720p`));
+        assert.ok(epServers[2].url.includes(`s${sNum}e${eNum}-4k.mp4`));
+      }
+    }
+  });
+});
+
+test('Mandatory 3-season test (Baseline Server Scraper in server.ts): supports distributed separate season pages (/season-2, /season-3)', async () => {
+  const distributedRootHtml = `<!doctype html>
+  <html lang="ar" dir="rtl">
+  <head><title>مسلسل الملحمة - المواسم المنفصلة</title></head>
+  <body>
+    <div class="trailer">
+      <a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ">التريلر</a>
+    </div>
+    <div class="SeasonsList">
+      <a class="active" data-season="1" href="https://tri-series.example.com/series/epic-distributed">الموسم الأول</a>
+      <a data-season="2" href="https://tri-series.example.com/series/epic/season-2">الموسم الثاني</a>
+      <a data-season="3" href="https://tri-series.example.com/series/epic/season-3">الموسم الثالث</a>
+    </div>
+    <div class="episodes-list">
+      <a href="https://tri-series.example.com/watch.php?vid=101">الحلقة 1</a>
+      <a href="https://tri-series.example.com/watch.php?vid=102">الحلقة 2</a>
+      <a href="https://tri-series.example.com/watch.php?vid=103">الحلقة 3</a>
+    </div>
+  </body></html>`;
+
+  await withMockedFetch(
+    (url) =>
+      url === 'https://tri-series.example.com/series/epic-distributed'
+        ? { ok: true, status: 200, body: distributedRootHtml }
+        : mockThreeSeasonRouter(url),
+    async () => {
+      const media = await scrapeFullItemWithSubpages(
+        'https://tri-series.example.com/series/epic-distributed',
+        distributedRootHtml
+      );
+
+      assert.equal(media.kind, 'series');
+      assert.equal(media.seasons.length, 3);
+
+      const s1e1 = media.seasons.find((s) => s.seasonNumber === 1)?.episodes.find((e) => e.number === 1);
+      const s2e3 = media.seasons.find((s) => s.seasonNumber === 2)?.episodes.find((e) => e.number === 3);
+      const s3e2 = media.seasons.find((s) => s.seasonNumber === 3)?.episodes.find((e) => e.number === 2);
+
+      assert.ok(s1e1?.servers?.[0]?.url.includes('s1e1-1080p'));
+      assert.ok(s2e3?.servers?.[0]?.url.includes('s2e3-1080p'));
+      assert.ok(s3e2?.servers?.[0]?.url.includes('s3e2-1080p'));
+      assert.equal(s1e1?.sourceUrl, 'https://tri-series.example.com/watch.php?vid=101');
+      assert.equal(s2e3?.sourceUrl, 'https://tri-series.example.com/watch.php?vid=203');
+      assert.equal(s3e2?.sourceUrl, 'https://tri-series.example.com/watch.php?vid=302');
+    }
+  );
+});
+
+

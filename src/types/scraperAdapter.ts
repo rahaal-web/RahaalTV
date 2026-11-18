@@ -187,6 +187,10 @@ export interface TestedEpisodeReport {
   episodeNumber: number;
   title: string;
   watchUrl: string;
+  sourceUrl?: string;
+  watchSubpageUrl?: string;
+  serverBindingValid?: boolean;
+  validationNote?: string;
   serversCount: number;
   serverNames: string[];
   serverUrls: string[];
@@ -266,6 +270,8 @@ export interface ScrapedAdapterPreviewMedia {
       duration: string;
       quality: string;
       watchUrl?: string;
+      sourceUrl?: string;
+      watchSubpageUrl?: string;
       servers?: {
         id: string;
         name: string;
@@ -314,6 +320,13 @@ export interface ScraperTestResult {
   recommendedStatus: AdapterStatus;
   recommendedStatusReason: string;
   extractedPreview: ScrapedAdapterPreviewMedia;
+  validationSummary?: {
+    validEpisodes: number;
+    invalidEpisodes: number;
+    duplicateServerSetsCount: number;
+    crossEpisodeContaminationDetected: boolean;
+    notes: string[];
+  };
   comparisonDiff?: ScraperComparisonDiff;
   error?: string;
 }

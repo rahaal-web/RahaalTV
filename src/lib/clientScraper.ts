@@ -654,6 +654,82 @@ function isWebsiteHomepageHtmlBrowser(finalUrl: string, snippet: string): boolea
 interface SubpageHints {
   watchSubpageUrl?: string;
   downloadSubpageUrl?: string;
+  seasonPageUrls?: { seasonNumber: number; label: string; url: string }[];
+}
+
+function parseBrowserSeasonNumber(label: string, fallbackIdx: number): number {
+  const norm = normalizeArabicDigits(String(label || '').replace(/\s+/g, ' ').trim());
+  const m = norm.match(/(?:الموسم|موسم|Season|S)\s*#?(\d{1,2})/i);
+  if (m?.[1]) {
+    const n = Number(m[1]);
+    if (n > 0 && n <= 50) return n;
+  }
+  if (/الأول|الاول|First/i.test(norm)) return 1;
+  if (/الثاني|Second/i.test(norm)) return 2;
+  if (/الثالث|Third/i.test(norm)) return 3;
+  if (/الرابع|Fourth/i.test(norm)) return 4;
+  if (/الخامس|Fifth/i.test(norm)) return 5;
+  if (/السادس|Sixth/i.test(norm)) return 6;
+  if (/السابع|Seventh/i.test(norm)) return 7;
+  if (/الثامن|Eighth/i.test(norm)) return 8;
+  if (/التاسع|Ninth/i.test(norm)) return 9;
+  if (/العاشر|Tenth/i.test(norm)) return 10;
+  return fallbackIdx;
+}
+
+function extractBrowserEpisodeId(rawUrl: string): string {
+  if (!rawUrl) return '';
+  try {
+    const u = new URL(rawUrl.trim());
+    for (const p of ['vid', 'ep', 'episode', 'id', 'e']) {
+      const val = u.searchParams.get(p);
+      if (val && val.trim()) return val.trim();
+    }
+    const pathMatch = u.pathname.match(
+      /(?:\/watch|\/play|\/player|\/episode|\/ep)[\/\-_](\d+|[A-Za-z0-9]{4,24})(?:[./]|$)/i
+    );
+    if (pathMatch?.[1]) return pathMatch[1];
+  } catch {
+    const m = rawUrl.match(/[?&](?:vid|ep|episode|id|e)=([^&#]+)/i);
+    if (m?.[1]) return m[1].trim();
+  }
+  return '';
+}
+
+function extractBrowserServerQuality(label: string, fallbackQuality: string): string {
+  const norm = normalizeArabicDigits(String(label || '').replace(/\s+/g, ' ').trim());
+  const qMatch = norm.match(/\b(4K\s*UHD|4K|2160p|1080p|720p|480p|360p|FHD|HD)\b/i);
+  return qMatch ? qMatch[1].toUpperCase().replace(/\s+/g, ' ') : fallbackQuality;
+}
+
+function cleanBrowserServerName(rawName: string | undefined, _url: string | undefined, idx: number): string {
+  const trimmed = String(rawName || '').replace(/\s+/g, ' ').trim();
+  if (
+    !trimmed ||
+    trimmed.length > 45 ||
+    /^(?:سيرفر\s*\d*|server\s*\d*|embed|مستورد|مشاهدة|watch|play)$/i.test(trimmed)
+  ) {
+    return `سيرفر ${idx + 1}`;
+  }
+  return trimmed;
+}
+
+function extractBrowserEpisodeNumber(label: string, href: string): number | null {
+  const normLabel = normalizeArabicDigits(String(label || '').replace(/\s+/g, ' ').trim());
+  if (!normLabel && !href) return null;
+  if (/أحدث\s*الحلقات|جميع\s*الحلقات|كل\s*الحلقات|اختر\s*الحلقة|الموسم\s*\d+$/i.test(normLabel)) {
+    return null;
+  }
+  const epMatch =
+    normLabel.match(/(?:الحلقة|حلقة|Episode|Ep\.?)\s*#?(\d{1,3})/i) ||
+    normLabel.match(/^(\d{1,3})\s*(?:حلقة|الحلقة)\b/i) ||
+    normLabel.match(/\bE(\d{1,3})\b/i) ||
+    (/(?:vid=|ep=|episode|watch|play|حلقة)/i.test(href) ? normLabel.match(/^(\d{1,3})$/) : null);
+  if (epMatch?.[1]) {
+    const num = Number(epMatch[1]);
+    if (num > 0 && num <= 999) return num;
+  }
+  return null;
 }
 
 function extractBestImageFromElementBrowser(el: Element | null, baseUrl: string): string {
@@ -737,7 +813,7 @@ function pickFirstValidImageFromSelectorsBrowser(
 export function parseHtmlToMediaWithHintsBrowser(
   html: string,
   sourceUrl: string,
-  options?: { isDownloadPage?: boolean }
+  options?: { isDownloadPage?: boolean; forcedSeasonNumber?: number }
 ): { media: ScrapedPayload; hints: SubpageHints } {
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
@@ -1106,46 +1182,51 @@ export function parseHtmlToMediaWithHintsBrowser(
   // 6. Watch Servers
   const serversMap = new Map<string, StreamServer>();
 
-  const pushEmbedServer = (rawCandidate: string, _preferredName?: string) => {
+  const pushEmbedServer = (rawCandidate: string, preferredName?: string) => {
     const src = resolveUrl(sourceUrl, rawCandidate);
     if (!src) return;
     if (isYoutubeUrlBrowser(src)) {
       trySetTrailer(src);
       return;
     }
-    if (serversMap.has(src) || isLikelyNonVideoWebsiteUrl(src, sourceOrigin)) return;
+    if (isLikelyNonVideoWebsiteUrl(src, sourceOrigin)) return;
+
+    const existing = serversMap.get(src);
+    if (existing) {
+      if (preferredName && /^سيرفر\s*\d+$/i.test(existing.name)) {
+        existing.name = cleanBrowserServerName(preferredName, src, serversMap.size - 1);
+        const srvQuality = extractBrowserServerQuality(preferredName, existing.quality || quality);
+        existing.quality = srvQuality;
+        if (existing.mode === 'embed') existing.tag = srvQuality;
+      }
+      return;
+    }
 
     const seqNum = serversMap.size + 1;
+    const isDirectStream = /\.(mp4|m3u8|webm|ogg)(\?|$)/i.test(src);
+    const srvQuality = extractBrowserServerQuality(preferredName || '', quality);
     serversMap.set(src, {
       id: `srv-ext-${seqNum}`,
-      name: `سيرفر ${seqNum}`,
-      mode: 'embed',
+      name: cleanBrowserServerName(preferredName, src, seqNum - 1),
+      mode: isDirectStream ? 'url' : 'embed',
       url: src,
-      embedCode: `<iframe src="${src}" frameborder="0" allowfullscreen></iframe>`,
-      quality,
+      embedCode: isDirectStream ? '' : `<iframe src="${src}" frameborder="0" allowfullscreen></iframe>`,
+      quality: srvQuality,
       speed: 'سريع',
-      tag: quality,
+      tag: isDirectStream ? 'MP4' : srvQuality,
     });
   };
 
-  doc.querySelectorAll('iframe').forEach((el) => {
-    if (el.closest('header, nav, footer, .ads, .banner, .trailer, #trailer')) return;
-    const rawSrc =
-      el.getAttribute('src') ||
-      el.getAttribute('data-src') ||
-      el.getAttribute('data-lazy-src') ||
-      '';
-    pushEmbedServer(rawSrc);
-  });
-
+  // Scan clickable server buttons FIRST so real names, order, and qualities are preserved cleanly
   doc
     .querySelectorAll(
-      '[data-embed], [data-iframe], [data-server], [data-video], [data-url], [data-watch], [data-link], [data-play], li[data-src], button[data-src], a[data-src]'
+      '[data-embed-url], [data-embed], [data-iframe], [data-server], [data-video], [data-url], [data-watch], [data-link], [data-play], li[data-src], button[data-src], a[data-src], .WatchList li[href], .WatchList li a[href], .servers li a[href]'
     )
     .forEach((el) => {
       if (el.tagName.toLowerCase() === 'img') return;
-      if (el.closest('header, nav, footer, .ads, .banner, .trailer, #trailer')) return;
+      if (el.closest('header, nav, footer, .ads, .banner, .pm-ads-banner, .trailer, #trailer')) return;
       const attrVal =
+        el.getAttribute('data-embed-url') ||
         el.getAttribute('data-embed') ||
         el.getAttribute('data-iframe') ||
         el.getAttribute('data-server') ||
@@ -1154,7 +1235,8 @@ export function parseHtmlToMediaWithHintsBrowser(
         el.getAttribute('data-watch') ||
         el.getAttribute('data-link') ||
         el.getAttribute('data-play') ||
-        el.getAttribute('data-src');
+        el.getAttribute('data-src') ||
+        el.getAttribute('href');
       if (!attrVal) return;
 
       let candidateUrl = decodeBase64Safe(attrVal);
@@ -1162,7 +1244,9 @@ export function parseHtmlToMediaWithHintsBrowser(
       if (iframeMatch) candidateUrl = iframeMatch[1];
 
       const btnText =
-        cleanText(el.querySelector('.name')?.textContent) || cleanText(el.textContent);
+        cleanText(el.querySelector('.name, span')?.textContent) ||
+        cleanText(el.textContent) ||
+        cleanText(el.getAttribute('title'));
 
       if (/^[0-9a-zA-Z_-]{1,24}$/.test(candidateUrl) && !/[./:?]/.test(candidateUrl)) {
         return;
@@ -1170,9 +1254,20 @@ export function parseHtmlToMediaWithHintsBrowser(
       pushEmbedServer(candidateUrl, btnText || undefined);
     });
 
+  doc.querySelectorAll('iframe').forEach((el) => {
+    if (el.closest('header, nav, footer, .ads, .banner, .pm-ads-banner, .trailer, #trailer')) return;
+    const rawSrc =
+      el.getAttribute('src') ||
+      el.getAttribute('data-src') ||
+      el.getAttribute('data-lazy-src') ||
+      '';
+    const titleAttr = cleanText(el.getAttribute('title'));
+    pushEmbedServer(rawSrc, titleAttr || undefined);
+  });
+
   const serverButtonLabels = Array.from(
     doc.querySelectorAll(
-      '.server-btn, .servers li, .watch-servers button, .servers-list button, .server-item, .btn-service'
+      '.server-btn, .WatchList li, .servers li, .watch-servers button, .servers-list button, .server-item, .btn-service'
     )
   )
     .map((el) => cleanText(el.querySelector('.name')?.textContent) || cleanText(el.textContent))
@@ -1229,13 +1324,14 @@ export function parseHtmlToMediaWithHintsBrowser(
     const src = resolveUrl(sourceUrl, el.getAttribute('src'));
     if (!src || serversMap.has(src) || isLikelyNonVideoWebsiteUrl(src, sourceOrigin)) return;
     const seqNum = serversMap.size + 1;
+    const label = cleanText(el.getAttribute('title') || el.getAttribute('data-label'));
     serversMap.set(src, {
       id: `srv-vid-${seqNum}`,
-      name: `سيرفر ${seqNum}`,
+      name: cleanBrowserServerName(label || undefined, src, seqNum - 1),
       mode: 'url',
       url: src,
       embedCode: '',
-      quality,
+      quality: extractBrowserServerQuality(label || '', quality),
       speed: 'فائق',
       tag: 'MP4',
     });
@@ -1250,12 +1346,16 @@ export function parseHtmlToMediaWithHintsBrowser(
   const knownMirrorRegex =
     /(mediafire|mega\.nz|drive\.google|gofile|1fichier|pixeldrain|uqload|streamtape|dood|filemoon|liiivideo|vidmoly|vidspeed|anafast|vidoba|abyssplayer|mp4plus|bysetayico|filelions|streamwish|earnvids|voe\.sx|mixdrop|krakenfiles|turbobit|rapidgator|nitroflare)/i;
 
+  const watchCandidates: { url: string; score: number }[] = [];
+  const sourceIdVal = extractBrowserEpisodeId(sourceUrl);
+  const canonicalSourceUrl = canonicalizeCompareUrlBrowser(sourceUrl);
+
   doc.querySelectorAll('a[href]').forEach((el, idx) => {
     const rawHref = el.getAttribute('href');
     const href = resolveUrl(sourceUrl, rawHref);
     const text = cleanText(el.textContent);
     const cls = cleanText(el.getAttribute('class'));
-    if (!href || href === sourceUrl) return;
+    if (!href || canonicalizeCompareUrlBrowser(href) === canonicalSourceUrl) return;
 
     let hrefOrigin = '';
     try {
@@ -1266,23 +1366,44 @@ export function parseHtmlToMediaWithHintsBrowser(
 
     const sameOrigin = Boolean(sourceOrigin && hrefOrigin === sourceOrigin);
 
+    const inIgnoredWatchParent =
+      Boolean(
+        el.closest(
+          'header, nav, footer, .navbar, .ads, .banner, .pm-ads-banner, .ad-box, .sidebar, .widget, .related, .recommended, .comments, .tabcontent, .SeasonsEpisodes, .SeasonsList, .episodes-list, .episodes, [id^="Season"]'
+        )
+      ) && !/\b(xtgo|btnplay|watch-btn)\b/i.test(cls);
+
     if (
       sameOrigin &&
-      !hints.watchSubpageUrl &&
+      !inIgnoredWatchParent &&
       (/play\.php|\/watch\/|\/player\/|\/embed\//i.test(href) ||
-        /\bxtgo\b/i.test(cls) ||
-        (/مشاهدة/i.test(text) && /\b(play|watch|vid=)\b/i.test(href)))
+        /\b(xtgo|btnplay|watch-btn)\b/i.test(cls) ||
+        (/مشاهدة|شاهد/i.test(text) && /\b(play|watch|vid=)\b/i.test(href)))
     ) {
-      hints.watchSubpageUrl = href;
+      const candIdVal = extractBrowserEpisodeId(href);
+      if (!(sourceIdVal && candIdVal && candIdVal !== sourceIdVal)) {
+        let score = 0;
+        if (sourceIdVal && candIdVal && candIdVal === sourceIdVal) score += 50;
+        if (/\b(xtgo|btnplay|watch-btn)\b/i.test(cls)) score += 35;
+        if (/play\.php/i.test(href)) score += 20;
+        if (/\/watch\/|\/player\/|\/embed\//i.test(href)) score += 12;
+        if (/مشاهدة|شاهد|watch|play/i.test(text)) score += 8;
+        if (!sourceIdVal && !candIdVal && /الموسم|الحلقة/i.test(text)) score -= 20;
+        if (score > 0) watchCandidates.push({ url: href, score });
+      }
     }
 
     if (
       sameOrigin &&
       !hints.downloadSubpageUrl &&
+      !el.closest('.pm-ads-banner, .ads, .banner') &&
       (/download\.php|\/downloads?\//i.test(href) ||
         (/تحميل/i.test(text) && /vid=|download/i.test(href)))
     ) {
-      hints.downloadSubpageUrl = href;
+      const candIdVal = extractBrowserEpisodeId(href);
+      if (!(sourceIdVal && candIdVal && candIdVal !== sourceIdVal)) {
+        hints.downloadSubpageUrl = href;
+      }
     }
 
     if (downloadsMap.has(href)) return;
@@ -1333,6 +1454,11 @@ export function parseHtmlToMediaWithHintsBrowser(
     });
   });
 
+  if (watchCandidates.length > 0) {
+    watchCandidates.sort((a, b) => b.score - a.score);
+    hints.watchSubpageUrl = watchCandidates[0].url;
+  }
+
   if (!hints.watchSubpageUrl && allScriptsText) {
     const jsWatchMatch = allScriptsText.match(
       /["'](https?:\/\/[^"'\s<>]+\/+(?:watch|play|player)\/?)["']/i
@@ -1344,51 +1470,218 @@ export function parseHtmlToMediaWithHintsBrowser(
     if (jsDlMatch?.[1]) hints.downloadSubpageUrl = jsDlMatch[1];
   }
 
-  // 8. Episodes
-  const episodes: EpisodeItem[] = [];
-  doc.querySelectorAll('a[href]').forEach((el) => {
-    if (el.closest('header nav, .navbar, footer')) return;
-    const rawHref = resolveUrl(sourceUrl, el.getAttribute('href'));
-    if (!rawHref) return;
-    const text = normalizeArabicDigits(cleanText(el.textContent));
-    const titleAttr = normalizeArabicDigits(cleanText(el.getAttribute('title')));
-    const combinedLabel = text || titleAttr;
-    if (!combinedLabel || /أحدث\s*الحلقات|جميع\s*الحلقات|كل\s*الحلقات/.test(combinedLabel)) return;
+  // 8. Multi-Season & Episodes (preserves seasonNumber, episode number, and original sourceUrl)
+  const seasonsAccumulator = new Map<
+    number,
+    { seasonNumber: number; label: string; episodes: Map<number, EpisodeItem> }
+  >();
+  const seasonPageLinksMap = new Map<string, { seasonNumber: number; label: string; url: string }>();
+  const forcedSeasonNum = options?.forcedSeasonNumber;
 
-    const epMatch =
-      combinedLabel.match(/(?:الحلقة|حلقة|Episode|Ep\.?)\s*#?(\d{1,3})/i) ||
-      (rawHref.includes('vid=') ? combinedLabel.match(/^(\d{1,3})$/) : null);
-    if (epMatch && episodes.length < 40) {
-      const num = Number(epMatch[1]);
-      if (num > 0 && !episodes.some((e) => e.number === num)) {
-        episodes.push({
-          number: num,
-          title: (text || titleAttr || `الحلقة ${num}`).slice(0, 80),
-          duration: '45 دقيقة',
-          quality,
-          watchUrl: rawHref,
-        });
+  const ensureSeasonBucket = (seasonNum: number, label?: string) => {
+    const cleanNum = Number.isFinite(seasonNum) && seasonNum > 0 ? seasonNum : 1;
+    let bucket = seasonsAccumulator.get(cleanNum);
+    if (!bucket) {
+      bucket = {
+        seasonNumber: cleanNum,
+        label: label || `الموسم ${String(cleanNum).padStart(2, '0')}`,
+        episodes: new Map(),
+      };
+      seasonsAccumulator.set(cleanNum, bucket);
+    } else if (label && /^الموسم\s+\d+$/.test(bucket.label) && !/^الموسم\s+\d+$/.test(label)) {
+      bucket.label = label;
+    }
+    return bucket;
+  };
+
+  const totalExtractedCount = () => {
+    let n = 0;
+    for (const s of seasonsAccumulator.values()) n += s.episodes.size;
+    return n;
+  };
+
+  const addEpisodeToSeason = (
+    seasonNum: number,
+    seasonLabel: string | undefined,
+    epNum: number,
+    epTitle: string,
+    epHref: string
+  ) => {
+    if (!epNum || epNum <= 0 || !epHref || totalExtractedCount() >= 250) return;
+    const targetSeason = forcedSeasonNum || seasonNum || 1;
+    const bucket = ensureSeasonBucket(targetSeason, seasonLabel);
+    if (!bucket.episodes.has(epNum)) {
+      bucket.episodes.set(epNum, {
+        number: epNum,
+        title: (epTitle || `الحلقة ${epNum}`).slice(0, 80),
+        duration: '45 دقيقة',
+        quality,
+        watchUrl: epHref,
+        sourceUrl: epHref,
+      });
+    }
+  };
+
+  const recordSeasonPageLink = (seasonNum: number, label: string, rawHref: string | undefined) => {
+    const resolved = resolveUrl(sourceUrl, rawHref);
+    if (!resolved) return;
+    const canon = canonicalizeCompareUrlBrowser(resolved);
+    if (!canon || canon === canonicalSourceUrl) return;
+    if (!seasonPageLinksMap.has(canon)) {
+      seasonPageLinksMap.set(canon, {
+        seasonNumber: seasonNum,
+        label: label || `الموسم ${String(seasonNum).padStart(2, '0')}`,
+        url: resolved,
+      });
+    }
+  };
+
+  doc
+    .querySelectorAll(
+      '.SeasonsList a[href], .seasons-sec a[href], .seasons-list a[href], .TabS a[href], a[data-season][href], a[href*="season"]'
+    )
+    .forEach((el, idx) => {
+      if (el.closest('header nav, .navbar, footer, .ads, .pm-ads-banner')) return;
+      const href = el.getAttribute('href') || '';
+      const txt = cleanText(el.textContent) || cleanText(el.getAttribute('title'));
+      const dataS = Number(el.getAttribute('data-season'));
+      if (!href || (!/موسم|season/i.test(txt) && !Number.isFinite(dataS) && !/season[-_=]?\d+/i.test(href))) {
+        return;
       }
+      const sNum =
+        Number.isFinite(dataS) && dataS > 0
+          ? dataS
+          : parseBrowserSeasonNumber(`${txt} ${href}`, idx + 1);
+      recordSeasonPageLink(sNum, txt || `الموسم ${sNum}`, href);
+    });
+
+  doc.querySelectorAll('select.TabS option, select[name*="season"] option').forEach((el, idx) => {
+    const val = el.getAttribute('value') || el.getAttribute('data-url') || '';
+    const txt = cleanText(el.textContent);
+    const sNum = parseBrowserSeasonNumber(txt || val, idx + 1);
+    if (val && (/^https?:\/\//i.test(val) || val.startsWith('/'))) {
+      recordSeasonPageLink(sNum, txt || `الموسم ${sNum}`, val);
     }
   });
-  episodes.sort((a, b) => a.number - b.number);
+
+  doc
+    .querySelectorAll('select.TabE option, select.episodeoption option, select[name*="episode"] option')
+    .forEach((el) => {
+      if (el.closest('header nav, .navbar, footer')) return;
+      const rawHref = resolveUrl(
+        sourceUrl,
+        el.getAttribute('value') || el.getAttribute('data-url')
+      );
+      if (!rawHref) return;
+      const text = cleanText(el.textContent);
+      const epNum = extractBrowserEpisodeNumber(text, rawHref);
+      if (epNum) {
+        const sNum = forcedSeasonNum || parseBrowserSeasonNumber(text, 1);
+        addEpisodeToSeason(sNum, undefined, epNum, text, rawHref);
+      }
+    });
+
+  const tabLabels = Array.from(
+    doc.querySelectorAll(
+      '.SeasonsList .tablinks, .SeasonsList [data-season], .seasons-tabs .tablinks, [role="tab"][data-season]'
+    )
+  ).map((el, idx) => ({
+    num:
+      Number(el.getAttribute('data-season')) ||
+      parseBrowserSeasonNumber(cleanText(el.textContent), idx + 1),
+    label: cleanText(el.textContent) || `الموسم ${idx + 1}`,
+  }));
+
+  let foundMultiSeasonPanels = false;
+  const seasonPanels = Array.from(
+    doc.querySelectorAll('.tabcontent, .SeasonsEpisodes, .season-episodes, [data-season-panel], [id^="Season"]')
+  );
+  if (seasonPanels.length > 0) {
+    seasonPanels.forEach((panel, idx) => {
+      const idAttr = panel.getAttribute('id') || '';
+      const dataS = Number(
+        panel.getAttribute('data-season') || panel.getAttribute('data-season-panel')
+      );
+      const matchedTab = tabLabels[idx];
+      const headingText = cleanText(panel.querySelector('h2, h3, h4, .season-title')?.textContent);
+      const sNum =
+        forcedSeasonNum ||
+        (Number.isFinite(dataS) && dataS > 0 ? dataS : 0) ||
+        parseBrowserSeasonNumber(headingText || matchedTab?.label || idAttr, matchedTab?.num || idx + 1);
+      const sLabel = matchedTab?.label || headingText || `الموسم ${String(sNum).padStart(2, '0')}`;
+
+      const beforeCount = seasonsAccumulator.get(sNum)?.episodes.size || 0;
+      panel.querySelectorAll('a[href]').forEach((aEl) => {
+        if (aEl.closest('header nav, .navbar, footer, .ads, .pm-ads-banner')) return;
+        const rawHref = resolveUrl(sourceUrl, aEl.getAttribute('href'));
+        if (!rawHref) return;
+        const text = cleanText(aEl.textContent);
+        const titleAttr = cleanText(aEl.getAttribute('title'));
+        const epNum = extractBrowserEpisodeNumber(text || titleAttr, rawHref);
+        if (epNum) {
+          addEpisodeToSeason(sNum, sLabel, epNum, text || titleAttr || `الحلقة ${epNum}`, rawHref);
+        }
+      });
+      if ((seasonsAccumulator.get(sNum)?.episodes.size || 0) > beforeCount) {
+        foundMultiSeasonPanels = true;
+      }
+    });
+  }
+
+  if (!foundMultiSeasonPanels) {
+    doc.querySelectorAll('a[href]').forEach((el) => {
+      if (el.closest('header nav, .navbar, footer, .ads, .banner, .pm-ads-banner')) return;
+      const rawHref = resolveUrl(sourceUrl, el.getAttribute('href'));
+      if (!rawHref) return;
+      const text = cleanText(el.textContent);
+      const titleAttr = cleanText(el.getAttribute('title'));
+      const combinedLabel = text || titleAttr;
+      const epNum = extractBrowserEpisodeNumber(combinedLabel, rawHref);
+      if (epNum) {
+        const nearestSeasonAttr = el.closest('[data-season]')?.getAttribute('data-season');
+        const nearestHeading = cleanText(
+          el.closest('.season, .season-block, section, .tabcontent')?.querySelector('h2, h3, h4, .season-title')
+            ?.textContent
+        );
+        const sNum =
+          forcedSeasonNum ||
+          (nearestSeasonAttr ? Number(nearestSeasonAttr) || 1 : parseBrowserSeasonNumber(nearestHeading || combinedLabel, 1));
+        addEpisodeToSeason(sNum, nearestHeading || undefined, epNum, text || titleAttr || `الحلقة ${epNum}`, rawHref);
+      }
+    });
+  }
 
   const currentEpMatch = normalizeArabicDigits(`${rawTitle} ${h1Title}`).match(
     /(?:الحلقة|حلقة|Episode|Ep\.?)\s*#?(\d{1,3})/i
   );
   if (currentEpMatch && sourceUrl) {
     const currNum = Number(currentEpMatch[1]);
-    if (currNum > 0 && episodes.length > 0 && !episodes.some((e) => e.number === currNum)) {
-      episodes.push({
-        number: currNum,
-        title: `الحلقة ${String(currNum).padStart(2, '0')}`,
-        duration: '45 دقيقة',
-        quality,
-        watchUrl: sourceUrl,
-      });
-      episodes.sort((a, b) => a.number - b.number);
+    const currSeasonNum = forcedSeasonNum || parseBrowserSeasonNumber(`${rawTitle} ${h1Title}`, 1);
+    const bucket = seasonsAccumulator.get(currSeasonNum);
+    if (currNum > 0 && bucket && bucket.episodes.size > 0 && !bucket.episodes.has(currNum)) {
+      addEpisodeToSeason(
+        currSeasonNum,
+        bucket.label,
+        currNum,
+        `الحلقة ${String(currNum).padStart(2, '0')}`,
+        sourceUrl
+      );
     }
   }
+
+  if (seasonPageLinksMap.size > 0) {
+    hints.seasonPageUrls = Array.from(seasonPageLinksMap.values()).sort((a, b) => a.seasonNumber - b.seasonNumber);
+  }
+
+  const parsedSeasons = Array.from(seasonsAccumulator.values())
+    .sort((a, b) => a.seasonNumber - b.seasonNumber)
+    .map((s) => ({
+      seasonNumber: s.seasonNumber,
+      label: s.label,
+      year,
+      episodes: Array.from(s.episodes.values()).sort((a, b) => a.number - b.number),
+    }))
+    .filter((s) => s.episodes.length > 0);
 
   // 9. Cast fallback
   if (jsonLdCast.length === 0) {
@@ -1411,7 +1704,7 @@ export function parseHtmlToMediaWithHintsBrowser(
     .map((srv, idx) => ({
       ...srv,
       id: srv.id || `srv-ext-${idx + 1}`,
-      name: `سيرفر ${idx + 1}`,
+      name: cleanBrowserServerName(srv.name, srv.url, idx),
     }));
 
   return {
@@ -1447,10 +1740,7 @@ export function parseHtmlToMediaWithHintsBrowser(
       cast: jsonLdCast,
       servers: normalizedServers,
       downloads: Array.from(downloadsMap.values()).slice(0, 12),
-      seasons:
-        (kind === 'series' || episodes.length > 1) && episodes.length > 0
-          ? [{ seasonNumber: 1, label: 'الموسم 01', year, episodes }]
-          : [],
+      seasons: parsedSeasons,
     },
     hints,
   };
@@ -2226,7 +2516,7 @@ async function verifyScrapedServersInBrowser(
     .map((srv, idx) => ({
       ...srv,
       id: srv.id || `srv-ext-${idx + 1}`,
-      name: `سيرفر ${idx + 1}`,
+      name: cleanBrowserServerName(srv.name, srv.url, idx),
     }));
 }
 
@@ -2262,13 +2552,15 @@ async function scrapeFullItemInBrowser(
             media.trailerUrl = watchParsed.media.trailerUrl;
           }
           if (watchParsed.media.servers.length > 0) {
-            const seen = new Set(media.servers.map((s) => s.url));
-            for (const srv of watchParsed.media.servers) {
+            const merged = [...watchParsed.media.servers];
+            const seen = new Set(merged.map((s) => s.url));
+            for (const srv of media.servers) {
               if (srv.url && !seen.has(srv.url)) {
-                media.servers.push(srv);
+                merged.push(srv);
                 seen.add(srv.url);
               }
             }
+            media.servers = merged;
           }
           if (watchParsed.media.downloads.length > 0) {
             const seenDl = new Set(media.downloads.map((d) => d.url));
@@ -2367,67 +2659,144 @@ async function scrapeFullItemInBrowser(
   }
   media.downloads = media.downloads.slice(0, 12);
 
-  // Per-Episode Deep Server Extraction so Episode 2, 3, 4... each get their OWN watch servers
-  if (!options?.skipEpisodeCrawl && media.seasons.length > 0 && media.seasons[0].episodes.length > 0) {
+  // Follow distributed multi-season page links FIRST (/season-2, /season-3)
+  if (!options?.skipEpisodeCrawl && hints.seasonPageUrls && hints.seasonPageUrls.length > 0) {
     const canonicalMain = canonicalizeCompareUrlBrowser(mainUrl);
-    const canonicalWatch = canonicalizeCompareUrlBrowser(watchUrl);
-    const episodesList = media.seasons[0].episodes;
-    const EP_CONCURRENCY = getCustomApiBaseUrl() ? 4 : 3;
-
-    for (let i = 0; i < episodesList.length; i += EP_CONCURRENCY) {
-      const chunk = episodesList.slice(i, i + EP_CONCURRENCY);
-      await Promise.all(
-        chunk.map(async (ep) => {
-          const epPageUrl = ep.watchUrl || '';
-          const canonicalEp = canonicalizeCompareUrlBrowser(epPageUrl);
-
-          if (!canonicalEp || canonicalEp === canonicalMain || canonicalEp === canonicalWatch) {
-            ep.servers = filteredServers.map((s, sIdx) => ({
-              ...s,
-              id: `ep-${ep.number}-srv-${sIdx + 1}`,
-              name: `سيرفر ${sIdx + 1}`,
-            }));
-            ep.watchUrl = ep.servers[0]?.url || '';
-            return;
+    const visitedSeasonUrls = new Set<string>([canonicalMain]);
+    for (const sLink of hints.seasonPageUrls) {
+      const canonSeasonUrl = canonicalizeCompareUrlBrowser(sLink.url);
+      if (!canonSeasonUrl || visitedSeasonUrls.has(canonSeasonUrl)) continue;
+      visitedSeasonUrls.add(canonSeasonUrl);
+      try {
+        const parsedS = new URL(sLink.url);
+        if (isBlockedHost(parsedS.hostname)) continue;
+        const sRes = await fetchViaBrowserOrCorsRelay(sLink.url, 8500);
+        if (!sRes.ok || sRes.text.length < 100) continue;
+        const sParsed = parseHtmlToMediaWithHintsBrowser(sRes.text, sLink.url, {
+          forcedSeasonNumber: sLink.seasonNumber,
+        });
+        for (const nextSeason of sParsed.media.seasons) {
+          const existing = media.seasons.find((s) => s.seasonNumber === nextSeason.seasonNumber);
+          if (!existing) {
+            media.seasons.push(nextSeason);
+          } else {
+            for (const ep of nextSeason.episodes) {
+              if (!existing.episodes.some((e) => e.number === ep.number)) {
+                existing.episodes.push(ep);
+              }
+            }
+            existing.episodes.sort((a, b) => a.number - b.number);
           }
+        }
+      } catch {
+        // Non-fatal
+      }
+    }
+    media.seasons.sort((a, b) => a.seasonNumber - b.seasonNumber);
+  }
 
-          try {
-            const parsedEpUrl = new URL(epPageUrl);
-            if (isBlockedHost(parsedEpUrl.hostname)) {
+  // Per-Episode Independent Server Extraction across ALL Seasons (never clone from root or other episodes)
+  if (!options?.skipEpisodeCrawl && media.seasons.length > 0) {
+    const canonicalMain = canonicalizeCompareUrlBrowser(mainUrl);
+    const allTargets = media.seasons.flatMap((s) =>
+      s.episodes.map((ep) => ({ seasonNumber: s.seasonNumber, ep }))
+    );
+
+    if (allTargets.length > 0) {
+      if (media.kind !== 'wrestling') media.kind = 'series';
+
+      const matchingMainCount = allTargets.filter(
+        ({ ep }) => canonicalizeCompareUrlBrowser(ep.sourceUrl || ep.watchUrl || '') === canonicalMain
+      ).length;
+
+      const epFetchCache = new Map<string, { ok: boolean; text: string }>();
+      const fetchEpisodeCached = async (targetUrl: string) => {
+        const canon = canonicalizeCompareUrlBrowser(targetUrl);
+        const cached = epFetchCache.get(canon);
+        if (cached) return cached;
+        const res = await fetchViaBrowserOrCorsRelay(targetUrl, 8500);
+        const entry = { ok: res.ok, text: res.text };
+        epFetchCache.set(canon, entry);
+        return entry;
+      };
+
+      const EP_CONCURRENCY = getCustomApiBaseUrl() ? 4 : 3;
+      for (let i = 0; i < allTargets.length; i += EP_CONCURRENCY) {
+        const chunk = allTargets.slice(i, i + EP_CONCURRENCY);
+        await Promise.all(
+          chunk.map(async ({ seasonNumber, ep }) => {
+            const epPageUrl = (ep.sourceUrl || ep.watchUrl || '').trim();
+            ep.sourceUrl = epPageUrl;
+            const canonicalEp = canonicalizeCompareUrlBrowser(epPageUrl);
+
+            if (!canonicalEp) {
               ep.servers = [];
               ep.watchUrl = '';
               return;
             }
-            const epRes = await fetchViaBrowserOrCorsRelay(epPageUrl, 8500);
-            if (epRes.ok && epRes.text.length > 100) {
-              const epData = await scrapeFullItemInBrowser(epPageUrl, epRes.text, {
-                skipEpisodeCrawl: true,
-              });
-              ep.servers = epData.servers.map((s, sIdx) => ({
-                ...s,
-                id: `ep-${ep.number}-srv-${sIdx + 1}`,
-                name: `سيرفر ${sIdx + 1}`,
-              }));
+
+            if (canonicalEp === canonicalMain) {
+              if (matchingMainCount > 1) {
+                ep.servers = [];
+                ep.watchUrl = '';
+                return;
+              }
+              ep.servers = filteredServers
+                .filter((s) => s.url && !isLikelyNonVideoWebsiteUrl(s.url, mainOrigin))
+                .map((s, sIdx) => ({
+                  ...s,
+                  id: `ep-s${seasonNumber}-e${ep.number}-srv-${sIdx + 1}`,
+                  name: cleanBrowserServerName(s.name, s.url, sIdx),
+                }));
+              if (watchUrl) ep.watchSubpageUrl = watchUrl;
               ep.watchUrl = ep.servers[0]?.url || '';
               return;
             }
-          } catch {
-            // Fall through cleanly
-          }
-          ep.servers = [];
-          ep.watchUrl = '';
-        })
-      );
-    }
 
-    if (media.servers.length === 0) {
-      const firstPopulatedEp = episodesList.find((e) => e.servers && e.servers.length > 0);
-      if (firstPopulatedEp?.servers) {
-        media.servers = firstPopulatedEp.servers.map((s, sIdx) => ({
-          ...s,
-          id: `srv-ext-${sIdx + 1}`,
-          name: `سيرفر ${sIdx + 1}`,
-        }));
+            try {
+              const parsedEpUrl = new URL(epPageUrl);
+              if (isBlockedHost(parsedEpUrl.hostname)) {
+                ep.servers = [];
+                ep.watchUrl = '';
+                return;
+              }
+              const epRes = await fetchEpisodeCached(epPageUrl);
+              if (epRes.ok && epRes.text.length > 100) {
+                const epHintsCheck = parseHtmlToMediaWithHintsBrowser(epRes.text, epPageUrl).hints;
+                const epData = await scrapeFullItemInBrowser(epPageUrl, epRes.text, {
+                  skipEpisodeCrawl: true,
+                });
+                ep.servers = epData.servers
+                  .filter((s) => s.url && !isLikelyNonVideoWebsiteUrl(s.url, mainOrigin))
+                  .map((s, sIdx) => ({
+                    ...s,
+                    id: `ep-s${seasonNumber}-e${ep.number}-srv-${sIdx + 1}`,
+                    name: cleanBrowserServerName(s.name, s.url, sIdx),
+                  }));
+                if (epHintsCheck.watchSubpageUrl) {
+                  ep.watchSubpageUrl = epHintsCheck.watchSubpageUrl;
+                }
+                ep.watchUrl = ep.servers[0]?.url || '';
+                return;
+              }
+            } catch {
+              // Fall through cleanly
+            }
+            ep.servers = [];
+            ep.watchUrl = '';
+          })
+        );
+      }
+
+      if (media.servers.length === 0) {
+        const firstPopulatedEp = allTargets.find((t) => t.ep.servers && t.ep.servers.length > 0)?.ep;
+        if (firstPopulatedEp?.servers) {
+          media.servers = firstPopulatedEp.servers.map((s, sIdx) => ({
+            ...s,
+            id: `srv-ext-${sIdx + 1}`,
+            name: cleanBrowserServerName(s.name, s.url, sIdx),
+          }));
+        }
       }
     }
   }
@@ -3060,7 +3429,7 @@ export async function verifyAndFilterItemServers(item: MediaItem): Promise<{
         .filter((s) => isHealthyServer(s))
         .map((s, idx) => ({
           ...s,
-          id: s.id || `ep-${ep.number}-srv-${idx + 1}`,
+          id: s.id || `ep-s${season.seasonNumber}-e${ep.number}-srv-${idx + 1}`,
           name: resolveCleanedServerName(s.name, idx),
         }));
 
@@ -3089,7 +3458,9 @@ export async function verifyAndFilterItemServers(item: MediaItem): Promise<{
   }));
 
   if (cleanedRootServers.length === 0 && cleanedSeasons.length > 0) {
-    const firstValidEp = cleanedSeasons[0].episodes.find((ep) => ep.servers && ep.servers.length > 0);
+    const firstValidEp = cleanedSeasons
+      .flatMap((s) => s.episodes)
+      .find((ep) => ep.servers && ep.servers.length > 0);
     if (firstValidEp?.servers) {
       cleanedRootServers = firstValidEp.servers.map((s, idx) => ({
         ...s,

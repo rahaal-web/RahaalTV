@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Wrench } from 'lucide-react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, doc, onSnapshot, orderBy, query, where } from 'firebase/firestore';
-import type { AdminTab } from './components/admin/adminNavigation';
+import type { AdminTab } from './components/AdminDashboardView';
 import { CatalogArchiveView } from './components/CatalogArchiveView';
 import { Footer, FooterTopic } from './components/Footer';
 import { Header } from './components/Header';

@@ -136,11 +136,11 @@ export function AdminWatchServersPanel({
       const urls = sample.map((s) => s.url);
       const checked = await checkServerUrlsInBrowser(urls);
       const next: Record<string, { ok: boolean; statusText: string }> = { ...probeResults };
-      checked.forEach((res, idx) => {
-        const u = sample[idx]?.url;
-        if (!u) return;
+      sample.forEach((row) => {
+        const res = checked[row.url];
+        if (!res) return;
         const ok = res.status === 'working';
-        next[u] = {
+        next[row.url] = {
           ok,
           statusText: res.label || (ok ? 'متاح' : 'غير مستجيب'),
         };

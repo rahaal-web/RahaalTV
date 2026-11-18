@@ -91,12 +91,12 @@ export function AdminBackupRestorePanel({
       let restoredMediaCount = 0;
 
       if (restoreMediaFlag && Array.isArray(data.media) && data.media.length > 0) {
-        await bulkSaveMediaToFirestore(data.media);
+        await bulkSaveMediaToFirestore(data.media, adminUid);
         restoredMediaCount = data.media.length;
       }
 
       if (restoreSettingsFlag && data.settings && data.settings.siteName) {
-        await saveSiteSettingsToFirestore(data.settings);
+        await saveSiteSettingsToFirestore(data.settings, adminUid);
       }
 
       if (data.displayPrefs) {
