@@ -40,6 +40,7 @@ import {
   getPosterUrl,
 } from '../lib/mediaImages';
 import { resolveDisplayShortUrl } from '../lib/permalink';
+import { formatShortServerName } from '../lib/playerTheme';
 import { MediaItem, CatalogFilterState, MediaRatingRecord } from '../types/media';
 import { MovieCard } from './MovieCard';
 
@@ -95,6 +96,7 @@ export function SingleDetailView({
     initialEpisode || item.seasons?.[0]?.episodes?.[0]?.number || 1
   );
   const [copiedUrl, setCopiedUrl] = useState(false);
+  const [showMobileSecondaryDetails, setShowMobileSecondaryDetails] = useState(false);
 
   // Firestore Star Rating State
   const [ratingsList, setRatingsList] = useState<MediaRatingRecord[]>([]);
@@ -111,6 +113,7 @@ export function SingleDetailView({
     setSelectedSeasonIdx(0);
     setSelectedEpisodeNumber(initialEpisode || item.seasons?.[0]?.episodes?.[0]?.number || 1);
     setHoverStar(null);
+    setShowMobileSecondaryDetails(false);
     if (initialOpenDownloads) {
       setTimeout(() => {
         document.getElementById('watch-download-tabs')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -280,7 +283,7 @@ export function SingleDetailView({
   };
 
   return (
-    <div className="pb-10">
+    <div className="pb-10 overflow-x-hidden">
       {/* 1. Compact Single Hero Head */}
       <section className="relative overflow-hidden border-b border-white/[0.08] bg-[#0c1821]">
         <img
@@ -295,7 +298,7 @@ export function SingleDetailView({
         <div className="absolute inset-0 bg-gradient-to-t from-[#06131c] via-[#06131c]/30 to-black/15" />
         <div className="absolute inset-0 bg-gradient-to-l from-[#06131c]/70 via-[#06131c]/20 to-transparent" />
 
-        <div className="relative z-10 mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 pt-24 pb-7">
+        <div className="relative z-10 mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 pt-20 pb-5 md:pt-24 md:pb-7">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
             {/* Breadcrumb & Page Title */}
             <div className="min-w-0 flex-1 drop-shadow-[0_2px_10px_rgba(0,0,0,0.9)]">
@@ -464,15 +467,29 @@ export function SingleDetailView({
               <p className="text-sm sm:text-base leading-relaxed text-[#b7c9ef]">{item.story}</p>
             </div>
 
-            {/* Clickable Details Grid (.single-details) - Stretches evenly to match adjacent columns */}
-            <div className="flex-1 flex flex-col justify-between rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 shadow-xl">
+            {/* Clickable Details Grid (.single-details) - Collapsible on mobile, full grid on md+ */}
+            <div className="flex-1 flex flex-col justify-between rounded-3xl bg-[#0c1821] border border-white/[0.08] p-4 md:p-5 shadow-xl">
               <div>
-                <h2 className="font-display text-lg font-extrabold text-white mb-4 flex items-center gap-2">
-                  <span className="h-5 w-1.5 rounded-full bg-[#f9c400]" />
-                  تفاصيل العرض
-                </h2>
+                <div className="flex items-center justify-between gap-2 md:mb-4">
+                  <h2 className="font-display text-base md:text-lg font-extrabold text-white flex items-center gap-2">
+                    <span className="h-5 w-1.5 rounded-full bg-[#f9c400]" />
+                    <span>تفاصيل العرض</span>
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => setShowMobileSecondaryDetails((prev) => !prev)}
+                    className="md:hidden inline-flex items-center gap-1.5 rounded-xl bg-[#15222d] border border-white/10 px-3 min-h-[40px] py-1.5 text-xs font-extrabold text-[#b7c9ef] cursor-pointer"
+                  >
+                    <span>{showMobileSecondaryDetails ? 'إخفاء التفاصيل' : 'عرض التفاصيل'}</span>
+                    {showMobileSecondaryDetails ? (
+                      <ChevronUp className="w-4 h-4" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                <div className={`${showMobileSecondaryDetails ? 'grid mt-3' : 'hidden'} md:grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm`}>
                   <div className="flex items-center justify-between gap-2 rounded-2xl bg-[#15222d]/85 border border-white/[0.05] px-3.5 py-3">
                     <span className="flex items-center gap-2 text-xs text-[#b7c9ef] shrink-0">
                       <Layers className="w-4 h-4 text-[#D92321]" />
@@ -597,7 +614,7 @@ export function SingleDetailView({
               </div>
 
               {/* Balanced Bottom Info Bar inside Details Card */}
-              <div className="mt-4 pt-3 border-t border-white/[0.06] flex flex-wrap items-center justify-between gap-2 text-xs text-[#b7c9ef]">
+              <div className={`${showMobileSecondaryDetails ? 'flex' : 'hidden'} md:flex mt-4 pt-3 border-t border-white/[0.06] flex-wrap items-center justify-between gap-2 text-xs text-[#b7c9ef]`}>
                 <span className="font-latin font-bold text-white/80 truncate">{item.englishTitle}</span>
                 <span className="inline-flex items-center gap-1.5 text-[11px] font-bold">
                   <span className="h-2 w-2 rounded-full bg-[#4CAF50]" />
@@ -745,18 +762,19 @@ export function SingleDetailView({
                         String(srv.quality || item.quality || 'HD')
                           .replace(/مستورد|embed/gi, '')
                           .trim() || 'HD';
+                      const shortName = formatShortServerName(srv.name, idx, srv.url);
                       return (
                         <button
                           key={srv.id || idx}
                           type="button"
                           onClick={() => onOpenPlayer(item, selectedEpisodeNumber, idx)}
-                          className="group flex items-center justify-between gap-1.5 rounded-xl bg-[#15222d] border border-white/[0.08] px-2.5 py-2 text-[11px] font-bold text-white hover:border-[#D92321]/80 hover:bg-[#D92321]/15 transition-all cursor-pointer"
+                          className="group flex items-center justify-between gap-1.5 rounded-xl bg-[#15222d] border border-white/[0.08] px-2.5 min-h-[44px] md:min-h-0 py-2 text-[11px] font-bold text-white hover:border-[#D92321]/80 hover:bg-[#D92321]/15 transition-all cursor-pointer"
                         >
-                          <span className="flex items-center gap-1.5 truncate">
-                            <span className="h-1.5 w-1.5 rounded-full bg-[#4CAF50] shrink-0" />
-                            <span className="truncate">سيرفر {idx + 1}</span>
+                          <span className="flex items-center gap-1.5 min-w-0 truncate">
+                            <Play className="w-2.5 h-2.5 text-[#D92321] fill-current shrink-0" />
+                            <span className="truncate">{shortName}</span>
                           </span>
-                          <span className="font-latin rounded bg-[#0b1620] px-1.5 py-0.5 text-[9px] font-black text-[#f9c400] shrink-0">
+                          <span className="font-latin text-[10px] font-black text-[#f9c400] shrink-0">
                             {cleanQ}
                           </span>
                         </button>
@@ -898,11 +916,11 @@ export function SingleDetailView({
       <section id="watch-download-tabs" className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 mt-8">
         <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] overflow-hidden">
           {/* Tab Switcher */}
-          <div className="flex flex-wrap border-b border-white/[0.08] bg-[#1a242e]">
+          <div className="flex flex-nowrap overflow-x-auto no-scrollbar md:flex-wrap border-b border-white/[0.08] bg-[#1a242e]">
             <button
               type="button"
               onClick={() => setActiveTab('watch')}
-              className={`inline-flex items-center gap-2 px-6 py-4 text-sm font-extrabold transition-colors cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 md:gap-2 px-3.5 py-3 md:px-6 md:py-4 text-xs md:text-sm font-extrabold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 activeTab === 'watch'
                   ? 'bg-[#D92321] text-white'
                   : 'text-[#b7c9ef] hover:text-white hover:bg-white/5'
@@ -916,7 +934,7 @@ export function SingleDetailView({
               <button
                 type="button"
                 onClick={() => setActiveTab('seasons')}
-                className={`inline-flex items-center gap-2 px-6 py-4 text-sm font-extrabold transition-colors cursor-pointer ${
+                className={`inline-flex items-center gap-1.5 md:gap-2 px-3.5 py-3 md:px-6 md:py-4 text-xs md:text-sm font-extrabold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                   activeTab === 'seasons'
                     ? 'bg-[#D92321] text-white'
                     : 'text-[#b7c9ef] hover:text-white hover:bg-white/5'
@@ -931,7 +949,7 @@ export function SingleDetailView({
               <button
                 type="button"
                 onClick={() => setActiveTab('franchise')}
-                className={`inline-flex items-center gap-2 px-6 py-4 text-sm font-extrabold transition-colors cursor-pointer ${
+                className={`inline-flex items-center gap-1.5 md:gap-2 px-3.5 py-3 md:px-6 md:py-4 text-xs md:text-sm font-extrabold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                   activeTab === 'franchise'
                     ? 'bg-[#D92321] text-white'
                     : 'text-[#b7c9ef] hover:text-white hover:bg-white/5'
@@ -945,7 +963,7 @@ export function SingleDetailView({
             <button
               type="button"
               onClick={() => setActiveTab('cast')}
-              className={`inline-flex items-center gap-2 px-6 py-4 text-sm font-extrabold transition-colors cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 md:gap-2 px-3.5 py-3 md:px-6 md:py-4 text-xs md:text-sm font-extrabold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 activeTab === 'cast'
                   ? 'bg-[#D92321] text-white'
                   : 'text-[#b7c9ef] hover:text-white hover:bg-white/5'
@@ -957,7 +975,7 @@ export function SingleDetailView({
           </div>
 
           {/* Tab Panel Content */}
-          <div className="p-5 sm:p-6">
+          <div className="p-4 sm:p-6">
             {activeTab === 'watch' && (
               <div className="space-y-5">
                 {/* Per-Episode Quick Selector Strip for Series */}
@@ -972,7 +990,7 @@ export function SingleDetailView({
                         اختر الحلقة لعرض سيرفرات المشاهدة الخاصة بها
                       </span>
                     </div>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto md:max-h-none md:overflow-visible">
                       {allEpisodes.map((ep) => {
                         const isEpActive = ep.number === selectedEpisodeNumber;
                         const epSrvCount = ep.servers?.length || 0;
@@ -981,7 +999,7 @@ export function SingleDetailView({
                             key={ep.number}
                             type="button"
                             onClick={() => setSelectedEpisodeNumber(ep.number)}
-                            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-extrabold transition-all cursor-pointer ${
+                            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 min-h-[42px] md:min-h-0 py-2 text-xs font-extrabold transition-all cursor-pointer ${
                               isEpActive
                                 ? 'bg-[#D92321] border-[#ff5a58] text-white shadow-md'
                                 : 'bg-[#1a242e] border-white/[0.08] text-[#b7c9ef] hover:text-white hover:border-[#D92321]/60'
@@ -1027,20 +1045,21 @@ export function SingleDetailView({
                           String(srv.quality || item.quality || 'HD')
                             .replace(/مستورد|embed/gi, '')
                             .trim() || 'HD';
+                        const shortName = formatShortServerName(srv.name, idx, srv.url);
                         return (
                           <button
                             key={srv.id || idx}
                             type="button"
                             onClick={() => onOpenPlayer(item, selectedEpisodeNumber, idx)}
                             style={{ animationDelay: `${idx * 35}ms` }}
-                            className="moov-server-card moov-server-enter group flex items-center justify-between gap-2 rounded-xl bg-[#1a242e]/90 border border-white/[0.08] px-3 py-2.5 transition-all duration-300 hover:border-[#D92321]/80 hover:bg-gradient-to-l hover:from-[#D92321]/25 hover:to-[#1a242e] hover:-translate-y-0.5 cursor-pointer"
+                            className="moov-server-card moov-server-enter group flex items-center justify-between gap-2 rounded-xl bg-[#1a242e]/90 border border-white/[0.08] px-3 min-h-[44px] md:min-h-0 py-2.5 transition-all duration-300 hover:border-[#D92321]/80 hover:bg-gradient-to-l hover:from-[#D92321]/25 hover:to-[#1a242e] hover:-translate-y-0.5 cursor-pointer"
                           >
                             <span className="flex items-center gap-1.5 min-w-0">
                               <span className="font-latin flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[#0c1821] border border-white/10 text-[11px] font-black text-white tabular-nums group-hover:bg-[#D92321] group-hover:border-[#D92321] transition-colors">
                                 {idx + 1}
                               </span>
                               <span className="text-xs font-extrabold text-white truncate">
-                                سيرفر {idx + 1}
+                                {shortName}
                               </span>
                             </span>
 
@@ -1117,18 +1136,18 @@ export function SingleDetailView({
 
                 {/* Short URL & Social Share Row */}
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 rounded-2xl bg-[#1a242e]/60 border border-white/[0.08] p-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-1">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-1 min-w-0">
                     <span className="text-xs font-extrabold text-[#b7c9ef] whitespace-nowrap">
                       الرابط المختصر:
                     </span>
-                    <div className="flex flex-1 items-center gap-2 rounded-xl bg-[#06131c] border border-white/10 px-3 py-2">
+                    <div className="flex flex-1 min-w-0 items-center gap-2 rounded-xl bg-[#06131c] border border-white/10 px-3 py-2">
                       <input
                         type="text"
                         readOnly
                         dir="ltr"
                         value={dedicatedShortUrl}
                         aria-label="الرابط المختصر للعرض"
-                        className="font-latin w-full bg-transparent text-xs text-white/90 focus:outline-none text-left"
+                        className="font-latin w-full min-w-0 bg-transparent text-xs text-white/90 focus:outline-none text-left"
                       />
                       <button
                         type="button"

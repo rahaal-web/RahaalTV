@@ -195,3 +195,65 @@ export function buildPlayerThemeVars(theme?: Partial<PlayerThemeConfig> | null):
     '--pt-shadow': getPlayerBoxShadow(t.accentColor, t.glowIntensity),
   } as CSSProperties;
 }
+
+/**
+ * Normalizes verbose server labels (e.g. "سيرفر RahaL TV الرئيسي", "VidStream Pro", "سيرفر 1")
+ * into concise, readable names suitable for mobile server grids without technical jargon.
+ */
+export function formatShortServerName(
+  rawName: string | undefined | null,
+  index: number,
+  fallbackUrl?: string
+): string {
+  const fallbackLabel = `سيرفر ${index + 1}`;
+  const original = String(rawName || '').trim();
+  if (/^سيرفر\s*\d+$/i.test(original)) {
+    if (fallbackUrl && /^https?:\/\//i.test(fallbackUrl)) {
+      try {
+        const hostPart = new URL(fallbackUrl)
+          .hostname.replace(/^(?:www\.|m\.|embed\.)/i, '')
+          .split('.')[0];
+        if (hostPart && hostPart.length >= 2 && hostPart.length <= 12) {
+          return hostPart.charAt(0).toUpperCase() + hostPart.slice(1);
+        }
+      } catch {
+        // Ignore invalid URL
+      }
+    }
+    return original;
+  }
+
+  let cleaned = original
+    .replace(/^(?:سيرفر\s*(?:المشاهدة|العرض|رقم)?\s*\d*\s*[:\-–|]?)\s*/i, '')
+    .replace(
+      /(?:^|\s)(?:الرئيسي|الاساسي|الأساسي|بديل|سريع\s*جداً|سريع\s*جدا|فائق\s*السرعة|فائق|سريع|ممتاز|اقتصادي|مترجم|مستورد|بدون\s*تقطيع)(?=$|\s)/gi,
+      ' '
+    )
+    .replace(/\b(?:embed|mirror|player|watch|play|pro|vip|2160p|1080p|720p|480p|360p|FHD|UHD|HDR|4K|HD|SD)\b/gi, '')
+    .replace(/^[\s\-–·:|]+|[\s\-–·:|]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned || /^(?:سيرفر|server|\d+)$/i.test(cleaned)) {
+    if (fallbackUrl && /^https?:\/\//i.test(fallbackUrl)) {
+      try {
+        const hostPart = new URL(fallbackUrl)
+          .hostname.replace(/^(?:www\.|m\.|embed\.)/i, '')
+          .split('.')[0];
+        if (hostPart && hostPart.length >= 2 && hostPart.length <= 12) {
+          return hostPart.charAt(0).toUpperCase() + hostPart.slice(1);
+        }
+      } catch {
+        // Ignore invalid URL and use Arabic numbered fallback
+      }
+    }
+    return fallbackLabel;
+  }
+
+  if (cleaned.length > 15) {
+    cleaned = cleaned.slice(0, 14).trim();
+  }
+
+  return cleaned || fallbackLabel;
+}
+

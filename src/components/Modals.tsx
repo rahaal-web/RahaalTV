@@ -46,6 +46,7 @@ import {
 } from '../lib/firebase';
 import {
   buildPlayerThemeVars,
+  formatShortServerName,
   loadStoredPlayerTheme,
   normalizePlayerTheme,
 } from '../lib/playerTheme';
@@ -505,8 +506,20 @@ export function PlayerModal({
   const [showMobileDetails, setShowMobileDetails] = useState(false);
   const [isTheaterMode, setIsTheaterMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isMobileCinemaFill, setIsMobileCinemaFill] = useState(false);
   const playerBoxRef = useRef<HTMLDivElement | null>(null);
+  const videoElementRef = useRef<HTMLVideoElement | null>(null);
   const lastBlurObservedRef = useRef<number>(0);
+
+  // Lock background page scroll while Watch Modal is open (prevents iOS/Android bleed)
+  useEffect(() => {
+    if (!item) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [item]);
 
   useEffect(() => {
     const onFsChange = () => {
@@ -518,16 +531,36 @@ export function PlayerModal({
 
   const handleToggleFullscreen = async () => {
     const el = playerBoxRef.current;
-    if (!el) return;
-    try {
-      if (document.fullscreenElement) {
+    const vid = videoElementRef.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
+
+    if (document.fullscreenElement) {
+      try {
         await document.exitFullscreen();
-      } else {
-        await el.requestFullscreen();
+      } catch {
+        setIsMobileCinemaFill(false);
       }
-    } catch {
-      // Fullscreen may be restricted inside nested preview frames
+      return;
     }
+
+    if (el && typeof el.requestFullscreen === 'function') {
+      try {
+        await el.requestFullscreen();
+        return;
+      } catch {
+        // Fallback below for iOS Safari / restricted frames
+      }
+    }
+
+    if (vid && typeof vid.webkitEnterFullscreen === 'function') {
+      try {
+        vid.webkitEnterFullscreen();
+        return;
+      } catch {
+        // Fallback to CSS cinema fill
+      }
+    }
+
+    setIsMobileCinemaFill((prev) => !prev);
   };
 
   // Reset selections when media item or initial props change
@@ -546,6 +579,7 @@ export function PlayerModal({
     setPlayerReloadKey(0);
     setShieldSessionOverrides({});
     setShowMobileDetails(false);
+    setIsMobileCinemaFill(false);
   }, [item?.id, initialEpisode, initialServerIndex]);
 
   // Helper to mark a server faulty at runtime and auto-switch to next healthy server
@@ -585,15 +619,30 @@ export function PlayerModal({
         }
 
         if (candidateIdx !== -1) {
+          const faultName = formatShortServerName(
+            effectiveServers[faultIdx]?.name,
+            faultIdx,
+            effectiveServers[faultIdx]?.url
+          );
+          const nextName = formatShortServerName(
+            effectiveServers[candidateIdx]?.name,
+            candidateIdx,
+            effectiveServers[candidateIdx]?.url
+          );
           setSelectedServer(candidateIdx);
           setFilterAlert({
             kind: 'switched',
-            message: `سيرفر ${faultIdx + 1} غير متاح حالياً — تم التبديل تلقائياً إلى سيرفر ${candidateIdx + 1}.`,
+            message: `${faultName} غير متاح حالياً — تم التبديل تلقائياً إلى ${nextName}.`,
           });
         } else {
+          const faultName = formatShortServerName(
+            effectiveServers[faultIdx]?.name,
+            faultIdx,
+            effectiveServers[faultIdx]?.url
+          );
           setFilterAlert({
             kind: 'warning',
-            message: `تعذر تشغيل سيرفر ${faultIdx + 1} — يمكنك تجربة سيرفر آخر أو إعادة المحاولة.`,
+            message: `تعذر تشغيل ${faultName} — يمكنك تجربة سيرفر آخر أو إعادة المحاولة.`,
           });
         }
 
@@ -673,11 +722,16 @@ export function PlayerModal({
         const firstHealthyIdx = targetServers.findIndex((_, idx) => nextMap[idx]?.ok === true);
 
         if (epSrc && epResult && !epResult.ok && firstHealthyIdx !== -1) {
+          const healthyName = formatShortServerName(
+            targetServers[firstHealthyIdx]?.name,
+            firstHealthyIdx,
+            targetServers[firstHealthyIdx]?.url
+          );
           setBypassEpisodeSrc(true);
           setSelectedServer(firstHealthyIdx);
           setFilterAlert({
             kind: 'switched',
-            message: `تم التبديل تلقائياً إلى سيرفر ${firstHealthyIdx + 1} لضمان تشغيل الحلقة.`,
+            message: `تم التبديل تلقائياً إلى ${healthyName} لضمان تشغيل الحلقة.`,
           });
           return;
         }
@@ -685,16 +739,26 @@ export function PlayerModal({
         const safeCurrentIdx = selectedServer < targetServers.length ? selectedServer : 0;
         const activeEntry = nextMap[safeCurrentIdx];
         if (activeEntry && !activeEntry.ok) {
+          const currentName = formatShortServerName(
+            targetServers[safeCurrentIdx]?.name,
+            safeCurrentIdx,
+            targetServers[safeCurrentIdx]?.url
+          );
           if (firstHealthyIdx !== -1 && firstHealthyIdx !== safeCurrentIdx) {
+            const healthyName = formatShortServerName(
+              targetServers[firstHealthyIdx]?.name,
+              firstHealthyIdx,
+              targetServers[firstHealthyIdx]?.url
+            );
             setSelectedServer(firstHealthyIdx);
             setFilterAlert({
               kind: 'switched',
-              message: `سيرفر ${safeCurrentIdx + 1} غير متاح حالياً — تم التبديل تلقائياً إلى سيرفر ${firstHealthyIdx + 1}.`,
+              message: `${currentName} غير متاح حالياً — تم التبديل تلقائياً إلى ${healthyName}.`,
             });
           } else {
             setFilterAlert({
               kind: 'warning',
-              message: `سيرفر ${safeCurrentIdx + 1} غير متاح حالياً — جرّب سيرفراً آخر.`,
+              message: `${currentName} غير متاح حالياً — جرّب سيرفراً آخر.`,
             });
           }
         } else if (faultyIndices.length > 0 && targetServers.length > 1) {
@@ -842,9 +906,14 @@ export function PlayerModal({
           targetUrl: currentActiveStreamSrc || '',
           detail: 'رفض السيرفر قيود sandbox — تم تبديله فوراً إلى التشغيل المتوافق دون تعطيل الفيديو.',
         });
+        const resolvedShortName = formatShortServerName(
+          previewServerObj?.name,
+          previewServerIndex,
+          currentActiveStreamSrc || previewServerObj?.url
+        );
         setFilterAlert({
           kind: 'switched',
-          message: `تم ضبط التوافق لسيرفر ${previewServerIndex + 1} تلقائياً لضمان التشغيل.`,
+          message: `تم ضبط التوافق لـ ${resolvedShortName} تلقائياً لضمان التشغيل.`,
         });
         return;
       }
@@ -953,18 +1022,20 @@ export function PlayerModal({
   const handleManualServerSelect = (idx: number) => {
     const entry = filterMap[idx];
     if (entry && !entry.ok) {
+      const selectedName = formatShortServerName(serversList[idx]?.name, idx, serversList[idx]?.url);
       const healthyAlt = serversList.findIndex((_, i) => i !== idx && filterMap[i]?.ok === true);
       if (healthyAlt !== -1) {
+        const altName = formatShortServerName(serversList[healthyAlt]?.name, healthyAlt, serversList[healthyAlt]?.url);
         setSelectedServer(healthyAlt);
         setFilterAlert({
           kind: 'switched',
-          message: `سيرفر ${idx + 1} غير متاح حالياً — تم التبديل تلقائياً إلى سيرفر ${healthyAlt + 1}.`,
+          message: `${selectedName} غير متاح حالياً — تم التبديل تلقائياً إلى ${altName}.`,
         });
         return;
       }
       setFilterAlert({
         kind: 'warning',
-        message: `سيرفر ${idx + 1} غير متاح حالياً — جرّب سيرفراً آخر.`,
+        message: `${selectedName} غير متاح حالياً — جرّب سيرفراً آخر.`,
       });
     }
     setSelectedServer(idx);
@@ -1019,9 +1090,15 @@ export function PlayerModal({
     (_, idx) => idx !== safeServerIndex && filterMap[idx]?.ok !== false
   );
 
+  const activeServerLabel = formatShortServerName(
+    activeServer.name,
+    safeServerIndex,
+    finalStreamSrc || activeServer.url
+  );
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-stretch lg:items-center justify-center p-0 lg:p-4 overflow-x-hidden"
+      className="fixed inset-0 z-[55] flex items-stretch lg:items-center justify-center p-0 lg:p-4 overflow-x-hidden"
       style={themeVars}
     >
       <div className="fixed inset-0 bg-black/95 lg:bg-black/90 lg:backdrop-blur-md" onClick={onClose} />
@@ -1034,52 +1111,55 @@ export function PlayerModal({
       >
         {/* Mobile Slim Watch Header (< 1024px) */}
         <div
-          className="flex lg:hidden items-center justify-between gap-2 px-2.5 h-11 border-b border-white/[0.08] shrink-0"
+          className="rtv-mobile-watch-header flex lg:hidden items-center justify-between gap-2 px-2 h-11 border-b border-white/[0.08] shrink-0"
           style={{ backgroundColor: 'var(--pt-frame)' }}
         >
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0">
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-white/[0.07] text-white active:scale-95 transition-transform cursor-pointer shrink-0"
+              className="inline-flex min-h-[44px] min-w-[44px] max-lg:landscape:min-h-[36px] max-lg:landscape:min-w-[36px] items-center justify-center rounded-lg text-white active:scale-95 transition-transform cursor-pointer shrink-0"
               aria-label="إغلاق المشغل"
             >
-              <X className="w-4 h-4" />
+              <X className="w-5 h-5" />
             </button>
-            <h3 className="font-display text-xs font-extrabold text-white truncate">
-              {item.title}
-              {episodes.length > 0 ? ` · ح ${String(episodeNum).padStart(2, '0')}` : ''}
-            </h3>
+            <div className="min-w-0 flex items-center gap-1.5 text-xs">
+              <span className="font-display font-extrabold text-white truncate">
+                {item.title}
+              </span>
+              {episodes.length > 0 && (
+                <span className="font-latin text-[11px] font-bold text-[#f9c400] shrink-0 tabular-nums">
+                  · ح {String(episodeNum).padStart(2, '0')}
+                </span>
+              )}
+            </div>
           </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
-            <span className="text-[11px] font-bold text-[#b7c9ef] tabular-nums whitespace-nowrap">
-              سيرفر {safeServerIndex + 1}
-            </span>
+          <div className="flex items-center gap-1 shrink-0">
             <button
               type="button"
               onClick={() => setPlayerReloadKey((k) => k + 1)}
               title="إعادة تحميل المشغل"
               aria-label="إعادة تحميل المشغل"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/[0.07] text-white/90 active:scale-95 transition-transform cursor-pointer"
+              className="inline-flex min-h-[44px] min-w-[44px] max-lg:landscape:min-h-[36px] max-lg:landscape:min-w-[36px] items-center justify-center rounded-lg text-white/90 hover:bg-white/10 active:scale-95 transition-transform cursor-pointer"
             >
-              <RotateCw className="w-3.5 h-3.5" />
+              <RotateCw className="w-4 h-4" />
             </button>
             <button
               type="button"
               onClick={() => void handleToggleFullscreen()}
               title="ملء الشاشة"
               aria-label="ملء الشاشة"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg active:scale-95 transition-transform cursor-pointer"
+              className="inline-flex min-h-[44px] min-w-[44px] max-lg:landscape:min-h-[36px] max-lg:landscape:min-w-[36px] items-center justify-center rounded-lg active:scale-95 transition-transform cursor-pointer"
               style={{
                 backgroundColor: 'var(--pt-accent)',
                 color: 'var(--pt-accent-contrast)',
               }}
             >
-              {isFullscreen ? (
-                <Minimize2 className="w-3.5 h-3.5" />
+              {isFullscreen || isMobileCinemaFill ? (
+                <Minimize2 className="w-4 h-4" />
               ) : (
-                <Maximize2 className="w-3.5 h-3.5" />
+                <Maximize2 className="w-4 h-4" />
               )}
             </button>
           </div>
@@ -1132,18 +1212,18 @@ export function PlayerModal({
           </button>
         </div>
 
-        {/* Auto Server Filtering Alert Banner (Simple, Non-Technical) */}
+        {/* Desktop Auto Server Filtering Alert Banner */}
         {filterAlert && (
           <div
-            className={`flex items-center justify-between gap-2 px-3 lg:px-4 py-1.5 lg:py-2 text-[11px] lg:text-xs font-bold border-b shrink-0 ${
+            className={`hidden lg:flex items-center justify-between gap-2 px-4 py-2 text-xs font-bold border-b shrink-0 ${
               filterAlert.kind === 'switched'
                 ? 'bg-[#f9c400]/10 border-[#f9c400]/25 text-[#f9c400]'
                 : 'bg-[#D92321]/12 border-[#D92321]/25 text-[#ff9b99]'
             }`}
           >
             <div className="flex items-center gap-2 min-w-0">
-              <AlertTriangle className="w-3.5 h-3.5 lg:w-4 lg:h-4 shrink-0" />
-              <span className="truncate sm:whitespace-normal">{filterAlert.message}</span>
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{filterAlert.message}</span>
             </div>
             <button
               type="button"
@@ -1157,7 +1237,7 @@ export function PlayerModal({
         )}
 
         {/* Main Body: Mobile Edge-to-Edge Watch First | Desktop Server Rail + Video Stage */}
-        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-0 lg:p-4">
+        <div className="rtv-mobile-watch-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-0 lg:p-4">
           <div
             className={`flex flex-col lg:grid gap-0 lg:gap-3.5 lg:items-start ${
               isTheaterMode ? 'lg:grid-cols-1' : 'lg:grid-cols-[200px_minmax(0,1fr)]'
@@ -1182,25 +1262,20 @@ export function PlayerModal({
                         <span>فحص</span>
                       </span>
                     )}
-                    <span
-                      className="font-latin tabular-nums rounded px-1.5 py-0.5 text-[10px] font-black"
-                      style={{
-                        backgroundColor: 'var(--pt-accent-20)',
-                        color: 'var(--pt-accent)',
-                      }}
-                    >
+                    <span className="font-latin tabular-nums text-[11px] font-black text-[#b7c9ef]">
                       {serversList.length}
                     </span>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 min-[390px]:grid-cols-3 lg:grid-cols-1 gap-2 lg:gap-1.5 lg:max-h-[580px] lg:overflow-y-auto">
+                <div className="grid grid-cols-2 min-[480px]:grid-cols-3 lg:grid-cols-1 gap-2 lg:gap-1.5 lg:max-h-[580px] lg:overflow-y-auto">
                   {serversList.map((srv, idx) => {
                     const isActive = safeServerIndex === idx;
                     const srvFilter = filterMap[idx];
                     const isBroken = Boolean(srvFilter && !srvFilter.ok);
                     const isVerifiedOk = Boolean(srvFilter && srvFilter.ok);
                     const qualityLabel = cleanQualityIdentifier(srv.quality, item.quality);
+                    const shortLabel = formatShortServerName(srv.name, idx, srv.url);
 
                     return (
                       <button
@@ -1209,8 +1284,8 @@ export function PlayerModal({
                         onClick={() => handleManualServerSelect(idx)}
                         title={
                           isBroken
-                            ? `سيرفر ${idx + 1} غير متاح حالياً`
-                            : `سيرفر ${idx + 1} (${qualityLabel})`
+                            ? `${shortLabel} غير متاح حالياً`
+                            : `${shortLabel} · ${qualityLabel}`
                         }
                         style={{
                           animationDelay: `${idx * 35}ms`,
@@ -1222,9 +1297,9 @@ export function PlayerModal({
                               }
                             : {}),
                         }}
-                        className={`moov-server-enter group flex items-center justify-between gap-1.5 rounded-xl lg:rounded-lg border px-2.5 min-h-[44px] lg:min-h-0 py-2 transition-all duration-200 cursor-pointer ${
+                        className={`moov-server-enter group flex items-center justify-between gap-1.5 rounded-xl lg:rounded-lg border px-2.5 min-h-[46px] lg:min-h-0 py-2 transition-all duration-200 cursor-pointer ${
                           isActive
-                            ? 'shadow-lg font-black ring-2 ring-white/25 lg:ring-0'
+                            ? 'shadow-lg font-black ring-2 ring-white/30 lg:ring-0'
                             : isBroken
                               ? 'bg-[#D92321]/10 border-[#D92321]/25 text-[#ff9d9b] opacity-75 hover:opacity-100'
                               : 'bg-white/[0.04] border-white/[0.07] text-white/90 hover:bg-white/[0.09] hover:border-white/20'
@@ -1243,8 +1318,8 @@ export function PlayerModal({
                             <Play className="w-2.5 h-2.5 fill-current" />
                           </span>
 
-                          <span className="text-xs font-extrabold truncate tabular-nums">
-                            سيرفر {idx + 1}
+                          <span className="text-xs font-extrabold truncate">
+                            {shortLabel}
                           </span>
 
                           {isBroken ? (
@@ -1255,10 +1330,8 @@ export function PlayerModal({
                         </div>
 
                         <span
-                          className={`font-latin shrink-0 rounded px-1.5 py-0.5 text-[10px] font-black ${
-                            isActive
-                              ? 'bg-black/20 text-current'
-                              : 'bg-black/35 text-[#b7c9ef] border border-white/[0.06]'
+                          className={`font-latin shrink-0 text-[10px] font-black ${
+                            isActive ? 'text-current opacity-90' : 'text-[#b7c9ef]'
                           }`}
                         >
                           {qualityLabel}
@@ -1422,30 +1495,34 @@ export function PlayerModal({
 
                 {/* Pure Edge-to-Edge 16:9 Video Stage (Landscape-Safe on Mobile) */}
                 <div className="rtv-mobile-player-shell w-full bg-black">
-                  <div className="rtv-mobile-player-stage relative aspect-video w-full bg-black overflow-hidden">
+                  <div
+                    className={`rtv-mobile-player-stage relative aspect-video w-full bg-black overflow-hidden ${
+                      isMobileCinemaFill ? 'rtv-mobile-cinema-fill' : ''
+                    }`}
+                  >
                     {isBlockedHomepageUrl || isActiveServerFaulty ? (
-                      <div className="h-full w-full flex flex-col items-center justify-center p-4 sm:p-6 text-center bg-[#090d14] space-y-2.5 sm:space-y-3">
+                      <div className="h-full w-full flex flex-col items-center justify-center p-2.5 sm:p-6 text-center bg-[#090d14] gap-1.5 sm:gap-3">
                         <div
-                          className="inline-flex h-11 w-11 sm:h-14 sm:w-14 items-center justify-center rounded-2xl border"
+                          className="inline-flex h-8 w-8 sm:h-14 sm:w-14 items-center justify-center rounded-xl sm:rounded-2xl border shrink-0"
                           style={{
                             backgroundColor: 'var(--pt-accent-12)',
                             borderColor: 'var(--pt-accent-35)',
                             color: 'var(--pt-accent)',
                           }}
                         >
-                          <AlertTriangle className="w-5 h-5 sm:w-7 sm:h-7" />
+                          <AlertTriangle className="w-4 h-4 sm:w-7 sm:h-7" />
                         </div>
-                        <h4 className="font-display text-sm sm:text-base font-extrabold text-white">
+                        <h4 className="font-display text-xs sm:text-base font-extrabold text-white leading-tight">
                           {isBlockedHomepageUrl
                             ? 'الرابط غير صالح للمشاهدة'
                             : friendlyServerError.title}
                         </h4>
-                        <p className="max-w-md text-xs text-[#b7c9ef] leading-relaxed">
+                        <p className="max-w-md text-[11px] sm:text-xs text-[#b7c9ef] leading-snug line-clamp-2">
                           {isBlockedHomepageUrl
-                            ? `سيرفر ${safeServerIndex + 1} لا يعرض فيديو مباشراً. يمكنك تجربة سيرفر آخر.`
+                            ? `${activeServerLabel} لا يعرض فيديو مباشراً. يمكنك تجربة سيرفر آخر.`
                             : friendlyServerError.subtitle}
                         </p>
-                        <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                        <div className="flex flex-wrap items-center justify-center gap-2 pt-0.5 sm:pt-1">
                           {serversList.length > 1 && (
                             <button
                               type="button"
@@ -1456,7 +1533,7 @@ export function PlayerModal({
                                     : (safeServerIndex + 1) % serversList.length
                                 )
                               }
-                              className="inline-flex items-center gap-2 rounded-xl px-4 min-h-[42px] py-2 text-xs font-extrabold cursor-pointer"
+                              className="inline-flex items-center gap-1.5 rounded-xl px-3.5 sm:px-4 min-h-[38px] sm:min-h-[44px] py-1.5 text-[11px] sm:text-xs font-extrabold cursor-pointer"
                               style={{
                                 backgroundColor: 'var(--pt-accent)',
                                 color: 'var(--pt-accent-contrast)',
@@ -1476,7 +1553,7 @@ export function PlayerModal({
                                 }));
                                 setPlayerReloadKey((k) => k + 1);
                               }}
-                              className="inline-flex items-center gap-1.5 rounded-xl bg-white/[0.08] border border-white/15 px-3.5 min-h-[42px] py-2 text-xs font-bold text-white/90 hover:bg-white/15 cursor-pointer"
+                              className="inline-flex items-center gap-1.5 rounded-xl bg-white/[0.08] border border-white/15 px-3 sm:px-3.5 min-h-[38px] sm:min-h-[44px] py-1.5 text-[11px] sm:text-xs font-bold text-white/90 hover:bg-white/15 cursor-pointer"
                             >
                               <RotateCw className="w-3.5 h-3.5" />
                               <span>إعادة المحاولة</span>
@@ -1487,6 +1564,7 @@ export function PlayerModal({
                     ) : finalStreamSrc ? (
                       isDirectVideoFile ? (
                         <video
+                          ref={videoElementRef}
                           key={`${finalStreamSrc}-${playerReloadKey}`}
                           src={finalStreamSrc}
                           controls
@@ -1499,7 +1577,7 @@ export function PlayerModal({
                         <iframe
                           key={`${finalStreamSrc}-${shieldDecision.mode}-${playerReloadKey}`}
                           src={finalStreamSrc}
-                          title={`${item.title} - سيرفر ${safeServerIndex + 1}`}
+                          title={`${item.title} - ${activeServerLabel}`}
                           sandbox={shieldDecision.sandboxAttr}
                           allowFullScreen
                           referrerPolicy="no-referrer"
@@ -1639,22 +1717,22 @@ export function PlayerModal({
 
               {/* Mobile Prominent "تغيير السيرفر" Bar Directly Below Player */}
               <div
-                className="flex lg:hidden items-center justify-between gap-2 px-3 py-2.5 border-b border-white/[0.08]"
+                className="flex lg:hidden items-center justify-between gap-2 px-3 py-2 border-b border-white/[0.08]"
                 style={{ backgroundColor: 'var(--pt-frame)' }}
               >
                 <div className="flex items-center gap-2 min-w-0 text-xs">
-                  <span className="font-extrabold text-white tabular-nums">
-                    سيرفر {safeServerIndex + 1}
+                  <span className="font-extrabold text-white truncate">
+                    {activeServerLabel}
                   </span>
                   <span className="text-white/30">·</span>
-                  <span className="font-latin font-black text-[#f9c400] text-[11px]">
+                  <span className="font-latin font-black text-[#f9c400] text-[11px] shrink-0">
                     {activeQuality}
                   </span>
                   {activeFilterEntry && (
                     <>
                       <span className="text-white/30">·</span>
                       <span
-                        className={`text-[11px] font-bold ${
+                        className={`text-[11px] font-bold shrink-0 ${
                           activeFilterEntry.ok ? 'text-[#4CAF50]' : 'text-[#ff8a88]'
                         }`}
                       >
@@ -1667,7 +1745,7 @@ export function PlayerModal({
                 <button
                   type="button"
                   onClick={handleSwitchToNextServer}
-                  className="inline-flex items-center gap-1.5 rounded-xl px-3.5 min-h-[40px] py-1.5 text-xs font-extrabold transition-opacity active:scale-95 shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 rounded-xl px-4 min-h-[44px] py-2 text-xs font-extrabold transition-opacity active:scale-95 shrink-0 cursor-pointer"
                   style={{
                     backgroundColor: 'var(--pt-accent)',
                     color: 'var(--pt-accent-contrast)',
@@ -1677,6 +1755,30 @@ export function PlayerModal({
                   <span>{serversList.length > 1 ? 'تغيير السيرفر' : 'إعادة التحميل'}</span>
                 </button>
               </div>
+
+              {/* Mobile Non-Intrusive Auto-Switch Alert (Placed Below Player) */}
+              {filterAlert && (
+                <div
+                  className={`flex lg:hidden items-center justify-between gap-2 mx-3 mt-2.5 rounded-xl px-3 py-2 text-[11px] font-bold border ${
+                    filterAlert.kind === 'switched'
+                      ? 'bg-[#f9c400]/10 border-[#f9c400]/25 text-[#f9c400]'
+                      : 'bg-[#D92321]/12 border-[#D92321]/25 text-[#ff9b99]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    <span className="leading-snug">{filterAlert.message}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setFilterAlert(null)}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg hover:bg-white/10 cursor-pointer shrink-0"
+                    aria-label="إخفاء التنبيه"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
 
               {/* Desktop Series Episodes Switcher */}
               {episodes.length > 0 && (
@@ -1818,7 +1920,7 @@ export function PlayerModal({
                             setManualBypassFault({});
                             setPlayerReloadKey((k) => k + 1);
                           }}
-                          className={`shrink-0 rounded-xl px-3 min-h-[38px] py-1.5 text-xs font-extrabold border transition-colors cursor-pointer ${
+                          className={`shrink-0 rounded-xl px-3.5 min-h-[44px] py-1.5 text-xs font-extrabold border transition-colors cursor-pointer ${
                             seasonIdx === sIdx
                               ? 'border-transparent'
                               : 'bg-white/[0.04] border-white/10 text-[#b7c9ef]'
