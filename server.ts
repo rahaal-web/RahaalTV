@@ -12,6 +12,7 @@ import {
   extractImdbIdFromText,
   extractJsonLdImageUrl,
   extractJsonLdNodes,
+  inferEffectiveYear,
   isJunkImageCandidate,
   isLowTrustScrapedPosterUrl,
   parseSrcsetBestUrl,
@@ -884,6 +885,497 @@ async function queryCinemetaImagesServer(params: {
   return null;
 }
 
+export interface ServerRatingLookupInput {
+  id?: string;
+  title: string;
+  englishTitle?: string;
+  year?: string;
+  kind?: string;
+  imdbId?: string;
+}
+
+export interface ServerResolvedMediaRating {
+  id?: string;
+  imdb: number;
+  imdbId?: string;
+  votes?: string;
+  matchedTitle?: string;
+  year?: string;
+  source: 'imdb' | 'tmdb' | 'tvmaze';
+}
+
+function normalizeRatingNumberServer(raw: unknown): number | null {
+  const num = typeof raw === 'number' ? raw : parseFloat(String(raw ?? ''));
+  if (!Number.isFinite(num) || num <= 0 || num > 10) return null;
+  return Math.round(num * 10) / 10;
+}
+
+function buildRatingSearchQueriesServer(title: string, englishTitle = ''): string[] {
+  const cleanedFromTitleEng = extractCleanEnglishTitleCandidate(title);
+  const cleanedFromTitle = cleanExternalSearchTitle(title, '');
+  const cleanedFromEnglish = cleanExternalSearchTitle('', englishTitle);
+
+  const rawList: string[] = [];
+  if (
+    cleanedFromTitleEng &&
+    cleanedFromEnglish &&
+    cleanedFromTitleEng.length > cleanedFromEnglish.length + 2 &&
+    cleanedFromTitleEng.toLowerCase().startsWith(cleanedFromEnglish.toLowerCase())
+  ) {
+    rawList.push(cleanedFromTitleEng, cleanedFromEnglish, cleanedFromTitle);
+  } else {
+    rawList.push(cleanedFromEnglish, cleanedFromTitleEng, cleanedFromTitle);
+  }
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const q of rawList) {
+    const clean = q.trim();
+    const key = clean.toLowerCase();
+    if (clean.length >= 2 && !seen.has(key)) {
+      seen.add(key);
+      out.push(clean);
+    }
+  }
+  return out;
+}
+
+async function fetchCinemetaRatingByImdbIdServer(
+  ttId: string,
+  kind: string
+): Promise<{ rating: number; name?: string; year?: string } | null> {
+  const typesToTry =
+    kind === 'series'
+      ? ['series', 'movie']
+      : kind === 'tv' || kind === 'wrestling'
+        ? ['movie', 'series']
+        : ['movie'];
+
+  for (const cmType of typesToTry) {
+    try {
+      const res = await fetch(
+        `https://v3-cinemeta.strem.io/meta/${cmType}/${encodeURIComponent(ttId)}.json`,
+        { signal: AbortSignal.timeout(5500) }
+      );
+      if (!res.ok) continue;
+      const json = (await res.json()) as {
+        meta?: {
+          imdbRating?: string | number;
+          name?: string;
+          year?: string | number;
+          releaseInfo?: string;
+        };
+      };
+      const rating = normalizeRatingNumberServer(json.meta?.imdbRating);
+      if (rating !== null) {
+        return {
+          rating,
+          name: json.meta?.name,
+          year: String(json.meta?.year || json.meta?.releaseInfo || '').slice(0, 4) || undefined,
+        };
+      }
+    } catch {
+      // ignore Cinemeta meta lookup errors
+    }
+  }
+  return null;
+}
+
+async function queryTmdbRatingServer(params: {
+  queries: string[];
+  title: string;
+  englishTitle: string;
+  year: string;
+  yearExplicit: boolean;
+  kind: string;
+}): Promise<ServerResolvedMediaRating | null> {
+  const { queries, title, englishTitle, year, yearExplicit, kind } = params;
+  const tmdbKey = (process.env.TMDB_API_KEY || '').trim();
+  const tmdbBearer = (process.env.TMDB_READ_ACCESS_TOKEN || '').trim();
+  if ((!tmdbKey && !tmdbBearer) || queries.length === 0) return null;
+
+  const isSeries = kind === 'series';
+  const searchType = isSeries ? 'tv' : 'movie';
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (tmdbBearer) headers.Authorization = `Bearer ${tmdbBearer}`;
+
+  const buildUrl = (pathAndQuery: string) => {
+    const sep = pathAndQuery.includes('?') ? '&' : '?';
+    return tmdbBearer
+      ? `https://api.themoviedb.org/3${pathAndQuery}`
+      : `https://api.themoviedb.org/3${pathAndQuery}${sep}api_key=${encodeURIComponent(tmdbKey)}`;
+  };
+
+  interface TmdbSearchEntry {
+    id: number;
+    title?: string;
+    original_title?: string;
+    name?: string;
+    original_name?: string;
+    release_date?: string;
+    first_air_date?: string;
+    vote_average?: number;
+    vote_count?: number;
+  }
+
+  for (const query of queries.slice(0, 2)) {
+    try {
+      const yearParam =
+        yearExplicit && /^\d{4}$/.test(year)
+          ? isSeries
+            ? `&first_air_date_year=${year}`
+            : `&year=${year}`
+          : '';
+      let res = await fetch(
+        buildUrl(`/search/${searchType}?query=${encodeURIComponent(query)}&include_adult=false${yearParam}`),
+        { headers, signal: AbortSignal.timeout(6000) }
+      );
+      let results: TmdbSearchEntry[] = [];
+      if (res.ok) {
+        const json = (await res.json()) as { results?: TmdbSearchEntry[] };
+        results = json.results || [];
+      }
+      if (results.length === 0 && yearParam) {
+        res = await fetch(
+          buildUrl(`/search/${searchType}?query=${encodeURIComponent(query)}&include_adult=false`),
+          { headers, signal: AbortSignal.timeout(6000) }
+        );
+        if (res.ok) {
+          const json = (await res.json()) as { results?: TmdbSearchEntry[] };
+          results = json.results || [];
+        }
+      }
+
+      let best: { score: number; entry: TmdbSearchEntry; year: string } | null = null;
+      for (const item of results.slice(0, 8)) {
+        if (!item?.id) continue;
+        const candYear = (item.release_date || item.first_air_date || '').slice(0, 4);
+        const check = scoreExternalTitleMatch({
+          queryTitle: title,
+          englishTitle,
+          expectedYear: year,
+          expectedYearExplicit: yearExplicit,
+          candidateTitles: [item.title, item.original_title, item.name, item.original_name],
+          candidateYear: candYear,
+        });
+        if (check.matched && (!best || check.score > best.score)) {
+          best = { score: check.score, entry: item, year: candYear };
+        }
+      }
+      if (!best) continue;
+
+      let imdbId = '';
+      let voteAverage = best.entry.vote_average;
+      let voteCount = best.entry.vote_count || 0;
+      try {
+        const detailsRes = await fetch(
+          buildUrl(`/${searchType}/${best.entry.id}?append_to_response=external_ids`),
+          { headers, signal: AbortSignal.timeout(6000) }
+        );
+        if (detailsRes.ok) {
+          const detailsJson = (await detailsRes.json()) as {
+            imdb_id?: string;
+            vote_average?: number;
+            vote_count?: number;
+            external_ids?: { imdb_id?: string };
+          };
+          imdbId = detailsJson.imdb_id || detailsJson.external_ids?.imdb_id || '';
+          if (typeof detailsJson.vote_average === 'number') voteAverage = detailsJson.vote_average;
+          if (typeof detailsJson.vote_count === 'number') voteCount = detailsJson.vote_count;
+        }
+      } catch {
+        // non-fatal
+      }
+
+      if (imdbId && /^tt\d{6,10}$/i.test(imdbId)) {
+        const cinemeta = await fetchCinemetaRatingByImdbIdServer(imdbId, kind);
+        if (cinemeta) {
+          return {
+            imdb: cinemeta.rating,
+            imdbId,
+            votes: voteCount > 0 ? voteCount.toLocaleString('en-US') : undefined,
+            matchedTitle:
+              cinemeta.name || best.entry.title || best.entry.name || best.entry.original_title,
+            year: cinemeta.year || best.year || undefined,
+            source: 'imdb',
+          };
+        }
+      }
+
+      const tmdbRating = normalizeRatingNumberServer(voteAverage);
+      if (tmdbRating !== null && voteCount > 0) {
+        return {
+          imdb: tmdbRating,
+          imdbId: imdbId || undefined,
+          votes: voteCount.toLocaleString('en-US'),
+          matchedTitle: best.entry.title || best.entry.name || best.entry.original_title,
+          year: best.year || undefined,
+          source: 'tmdb',
+        };
+      }
+    } catch {
+      // ignore TMDB error
+    }
+  }
+  return null;
+}
+
+async function queryImdbSuggestionIdServer(params: {
+  queries: string[];
+  title: string;
+  englishTitle: string;
+  year: string;
+  yearExplicit: boolean;
+  kind: string;
+}): Promise<string | null> {
+  const { queries, title, englishTitle, year, yearExplicit, kind } = params;
+  for (const rawQ of queries.slice(0, 3)) {
+    const cleanQ = rawQ.trim();
+    if (cleanQ.length < 2) continue;
+    const firstChar = cleanQ.charAt(0).toLowerCase();
+    const prefix = /[a-z0-9]/.test(firstChar) ? firstChar : 'a';
+    try {
+      const res = await fetch(
+        `https://v3.sg.media-imdb.com/suggestion/${prefix}/${encodeURIComponent(cleanQ.toLowerCase())}.json`,
+        { signal: AbortSignal.timeout(5500) }
+      );
+      if (!res.ok) continue;
+      const json = (await res.json()) as {
+        d?: Array<{ id?: string; l?: string; qid?: string; y?: number }>;
+      };
+      let best: { score: number; id: string } | null = null;
+      for (const item of (json.d || []).slice(0, 10)) {
+        if (!item?.id || !/^tt\d+$/i.test(item.id) || !item.l) continue;
+        const qid = (item.qid || '').toLowerCase();
+        if (kind === 'movie' && qid && !['movie', 'feature', 'tvmovie', 'short', 'video'].includes(qid)) {
+          continue;
+        }
+        if (kind === 'series' && qid && !['tvseries', 'tvminiseries'].includes(qid)) {
+          continue;
+        }
+        const check = scoreExternalTitleMatch({
+          queryTitle: title,
+          englishTitle,
+          expectedYear: year,
+          expectedYearExplicit: yearExplicit,
+          candidateTitles: [item.l],
+          candidateYear: item.y ? String(item.y) : undefined,
+        });
+        if (check.matched && (!best || check.score > best.score)) {
+          best = { score: check.score, id: item.id };
+        }
+      }
+      if (best?.id) return best.id;
+    } catch {
+      // ignore suggestion lookup errors
+    }
+  }
+  return null;
+}
+
+async function resolveMediaRatingServer(
+  input: ServerRatingLookupInput
+): Promise<ServerResolvedMediaRating | null> {
+  const title = cleanText(input.title);
+  const englishTitle = cleanText(input.englishTitle);
+  const kind = String(input.kind || 'movie');
+  const existingImdbId = cleanText(input.imdbId);
+  const { year: effectiveYear, explicit: yearExplicit } = inferEffectiveYear(title, input.year);
+  const queries = buildRatingSearchQueriesServer(title, englishTitle);
+
+  if (existingImdbId && /^tt\d{6,10}$/i.test(existingImdbId)) {
+    const direct = await fetchCinemetaRatingByImdbIdServer(existingImdbId, kind);
+    if (direct) {
+      return {
+        id: input.id,
+        imdb: direct.rating,
+        imdbId: existingImdbId,
+        matchedTitle: direct.name,
+        year: direct.year,
+        source: 'imdb',
+      };
+    }
+  }
+
+  if (queries.length === 0) return null;
+
+  // 1. TMDB API when configured (gives both IMDb ID -> IMDb rating or TMDB vote_average + votes)
+  const tmdbRes = await queryTmdbRatingServer({
+    queries,
+    title,
+    englishTitle,
+    year: effectiveYear,
+    yearExplicit,
+    kind,
+  });
+  if (tmdbRes) {
+    return { ...tmdbRes, id: input.id };
+  }
+
+  // 2. Cinemeta catalog search -> meta.imdbRating
+  const cmTypes =
+    kind === 'series' ? ['series'] : kind === 'tv' || kind === 'wrestling' ? ['series', 'movie'] : ['movie'];
+  for (const cmType of cmTypes) {
+    for (const q of queries.slice(0, 2)) {
+      try {
+        const res = await fetch(
+          `https://v3-cinemeta.strem.io/catalog/${cmType}/top/search=${encodeURIComponent(q)}.json`,
+          { signal: AbortSignal.timeout(5500) }
+        );
+        if (!res.ok) continue;
+        const json = (await res.json()) as {
+          metas?: Array<{ id?: string; name?: string; releaseInfo?: string; year?: string | number }>;
+        };
+        let bestId = '';
+        let bestScore = 0;
+        let bestName = '';
+        let bestYear = '';
+        for (const m of (json.metas || []).slice(0, 10)) {
+          if (!m?.id || !/^tt\d+$/i.test(m.id) || !m.name) continue;
+          const candYear = String(m.year || m.releaseInfo || '').slice(0, 4);
+          const check = scoreExternalTitleMatch({
+            queryTitle: title,
+            englishTitle,
+            expectedYear: effectiveYear,
+            expectedYearExplicit: yearExplicit,
+            candidateTitles: [m.name],
+            candidateYear: candYear,
+          });
+          if (check.matched && check.score > bestScore) {
+            bestScore = check.score;
+            bestId = m.id;
+            bestName = m.name;
+            bestYear = candYear;
+          }
+        }
+        if (bestId) {
+          const meta = await fetchCinemetaRatingByImdbIdServer(bestId, cmType);
+          if (meta) {
+            return {
+              id: input.id,
+              imdb: meta.rating,
+              imdbId: bestId,
+              matchedTitle: meta.name || bestName,
+              year: meta.year || bestYear || undefined,
+              source: 'imdb',
+            };
+          }
+        }
+      } catch {
+        // ignore Cinemeta search errors
+      }
+    }
+  }
+
+  // 3. IMDb Suggestion ID discovery -> Cinemeta meta rating
+  const suggestedId = await queryImdbSuggestionIdServer({
+    queries,
+    title,
+    englishTitle,
+    year: effectiveYear,
+    yearExplicit,
+    kind,
+  });
+  if (suggestedId) {
+    const meta = await fetchCinemetaRatingByImdbIdServer(suggestedId, kind);
+    if (meta) {
+      return {
+        id: input.id,
+        imdb: meta.rating,
+        imdbId: suggestedId,
+        matchedTitle: meta.name,
+        year: meta.year,
+        source: 'imdb',
+      };
+    }
+  }
+
+  // 4. Wikidata Arabic/English bridge -> Cinemeta meta rating
+  const wiki = await queryWikidataBridgeServer({
+    queries,
+    title,
+    englishTitle,
+    year: effectiveYear,
+    kind,
+  });
+  if (wiki?.imdbId) {
+    const meta = await fetchCinemetaRatingByImdbIdServer(wiki.imdbId, kind);
+    if (meta) {
+      return {
+        id: input.id,
+        imdb: meta.rating,
+        imdbId: wiki.imdbId,
+        matchedTitle: meta.name || wiki.englishTitle,
+        year: meta.year || wiki.year || undefined,
+        source: 'imdb',
+      };
+    }
+  }
+
+  // 5. TVmaze fallback for TV series/programs
+  if (kind === 'series' || kind === 'tv') {
+    for (const q of queries.slice(0, 2)) {
+      try {
+        const res = await fetch(
+          `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(q)}`,
+          { signal: AbortSignal.timeout(5000) }
+        );
+        if (!res.ok) continue;
+        const list = (await res.json()) as Array<{
+          show?: {
+            name?: string;
+            premiered?: string;
+            rating?: { average?: number | null };
+            externals?: { imdb?: string | null };
+          };
+        }>;
+        for (const entry of list.slice(0, 6)) {
+          const show = entry?.show;
+          if (!show?.name) continue;
+          const check = scoreExternalTitleMatch({
+            queryTitle: title,
+            englishTitle,
+            expectedYear: effectiveYear,
+            expectedYearExplicit: yearExplicit,
+            candidateTitles: [show.name],
+            candidateYear: show.premiered?.slice(0, 4),
+          });
+          if (!check.matched) continue;
+          const extImdb = show.externals?.imdb || '';
+          if (extImdb && /^tt\d+$/i.test(extImdb)) {
+            const meta = await fetchCinemetaRatingByImdbIdServer(extImdb, 'series');
+            if (meta) {
+              return {
+                id: input.id,
+                imdb: meta.rating,
+                imdbId: extImdb,
+                matchedTitle: meta.name || show.name,
+                year: meta.year || show.premiered?.slice(0, 4),
+                source: 'imdb',
+              };
+            }
+          }
+          const tvRating = normalizeRatingNumberServer(show.rating?.average);
+          if (tvRating !== null) {
+            return {
+              id: input.id,
+              imdb: tvRating,
+              imdbId: extImdb || undefined,
+              matchedTitle: show.name,
+              year: show.premiered?.slice(0, 4),
+              source: 'tvmaze',
+            };
+          }
+        }
+      } catch {
+        // ignore TVmaze errors
+      }
+    }
+  }
+
+  return null;
+}
+
 async function resolveHighResImagesServer(params: {
   title: string;
   englishTitle?: string;
@@ -1364,6 +1856,7 @@ interface SubpageHints {
   ajaxEmbedIds: { id: string; label: string }[];
   candidateOrigins: string[];
   seasonPageUrls?: { seasonNumber: number; label: string; url: string }[];
+  hasExplicitImdbRating?: boolean;
 }
 
 function parseBaselineSeasonNumber(label: string, fallbackIdx: number): number {
@@ -1714,7 +2207,8 @@ export function parseHtmlToMediaWithHints(
     );
     if (m) imdb = parseFloat(m[1]);
   }
-  if (!imdb || imdb > 10) imdb = 7.8;
+  const hasExplicitImdbRating = Boolean(imdb && imdb > 0 && imdb <= 10);
+  if (!hasExplicitImdbRating) imdb = 7.8;
 
   // Kind inference
   let kind: 'movie' | 'series' | 'tv' | 'wrestling' = 'movie';
@@ -2027,6 +2521,7 @@ export function parseHtmlToMediaWithHints(
   const hints: SubpageHints = {
     ajaxEmbedIds,
     candidateOrigins: Array.from(candidateOriginsSet),
+    hasExplicitImdbRating,
   };
   const ignoredDownloadHosts =
     /facebook\.com|twitter\.com|x\.com|t\.me|telegram|whatsapp|instagram|youtube\.com|tiktok\.com|pinterest|linkedin|plus\.google\.com|google\.com\/search|sharer\.php|\/share\?/i;
@@ -2960,8 +3455,8 @@ export async function scrapeFullItemWithSubpages(
   }
 
   // Step 4: Verify scraped servers aren't website homepages / broken while preserving real names & qualities
-  // Step 5: Fallback trailer search + independent High-Res Poster (2:3) & Backdrop (16:9) enrichment with real pixel probing
-  const [filteredServers, fallbackTrailer, resolvedImages] = await Promise.all([
+  // Step 5: Fallback trailer search + independent High-Res Poster (2:3) & Backdrop (16:9) enrichment + real IMDb/TMDb rating
+  const [filteredServers, fallbackTrailer, resolvedImages, resolvedRating] = await Promise.all([
     verifyScrapedServers(media.servers, mainOrigin),
     media.trailerUrl || options?.skipEpisodeCrawl
       ? Promise.resolve(media.trailerUrl)
@@ -2978,10 +3473,35 @@ export async function scrapeFullItemWithSubpages(
           currentBackdrop: media.backdrop,
           preferOfficial: true,
         }),
+    options?.skipEpisodeCrawl || (hints.hasExplicitImdbRating && media.imdb !== 7.8)
+      ? Promise.resolve(null)
+      : resolveMediaRatingServer({
+          title: media.title,
+          englishTitle: media.englishTitle,
+          year: media.year,
+          kind: media.kind,
+          imdbId: media.imdbId,
+        }),
   ]);
 
   media.servers = filteredServers;
   media.trailerUrl = fallbackTrailer || '';
+  if (resolvedRating && resolvedRating.imdb > 0) {
+    media.imdb = resolvedRating.imdb;
+    if (!media.imdbId && resolvedRating.imdbId) {
+      media.imdbId = resolvedRating.imdbId;
+    }
+    if (resolvedRating.votes) {
+      media.votes = resolvedRating.votes;
+    }
+    if (
+      (!media.year || media.year === '2026') &&
+      resolvedRating.year &&
+      /^(?:19|20)\d{2}$/.test(resolvedRating.year)
+    ) {
+      media.year = resolvedRating.year;
+    }
+  }
   if (resolvedImages) {
     if (resolvedImages.poster_url) {
       media.poster = resolvedImages.poster_url;
@@ -3329,7 +3849,7 @@ async function enrichScrapedMediaFromAdapter(
     imdbId: baseMedia.imdbId || '',
   };
 
-  const [fallbackTrailer, resolvedImages] = await Promise.all([
+  const [fallbackTrailer, resolvedImages, resolvedRating] = await Promise.all([
     full.trailerUrl
       ? Promise.resolve(full.trailerUrl)
       : findYoutubeTrailerFallback(full.title, full.englishTitle, full.year, full.kind),
@@ -3343,9 +3863,34 @@ async function enrichScrapedMediaFromAdapter(
       currentBackdrop: full.backdrop,
       preferOfficial: true,
     }),
+    !full.imdb || full.imdb === 7.8
+      ? resolveMediaRatingServer({
+          title: full.title,
+          englishTitle: full.englishTitle,
+          year: full.year,
+          kind: full.kind,
+          imdbId: full.imdbId,
+        })
+      : Promise.resolve(null),
   ]);
 
   full.trailerUrl = fallbackTrailer || '';
+  if (resolvedRating && resolvedRating.imdb > 0) {
+    full.imdb = resolvedRating.imdb;
+    if (!full.imdbId && resolvedRating.imdbId) {
+      full.imdbId = resolvedRating.imdbId;
+    }
+    if (resolvedRating.votes) {
+      full.votes = resolvedRating.votes;
+    }
+    if (
+      (!full.year || full.year === '2026') &&
+      resolvedRating.year &&
+      /^(?:19|20)\d{2}$/.test(resolvedRating.year)
+    ) {
+      full.year = resolvedRating.year;
+    }
+  }
   if (resolvedImages) {
     if (resolvedImages.poster_url) {
       full.poster = resolvedImages.poster_url;
@@ -3944,21 +4489,32 @@ async function startServer() {
                 // Fall back to card metadata if single detail page fails
               }
               const upgradedPoster = upgradeKnownImageUrlServer(card.poster);
+              const inferredCardYear = inferEffectiveYear(card.title).year;
+              const fallbackKind: ScrapedMediaItem['kind'] = /مسلسل|حلقات/.test(card.title)
+                ? 'series'
+                : 'movie';
+              const cardRating = await resolveMediaRatingServer({
+                title: card.title || '',
+                englishTitle: extractCleanEnglishTitleCandidate(card.title || '') || card.title || '',
+                year: inferredCardYear,
+                kind: fallbackKind,
+              }).catch(() => null);
               return {
                 title: card.title || 'عمل مستورد',
                 englishTitle: card.title || 'Imported Title',
-                kind: (/مسلسل|حلقات/.test(card.title) ? 'series' : 'movie') as ScrapedMediaItem['kind'],
-                categories: /مسلسل|حلقات/.test(card.title)
-                  ? ['مسلسلات', /عربي|مصري/.test(card.title) ? 'مسلسلات عربية' : 'مسلسلات اجنبية']
-                  : ['افلام', /عربي|مصري/.test(card.title) ? 'افلام عربية' : 'افلام اجنبية'],
+                kind: fallbackKind,
+                categories:
+                  fallbackKind === 'series'
+                    ? ['مسلسلات', /عربي|مصري/.test(card.title) ? 'مسلسلات عربية' : 'مسلسلات اجنبية']
+                    : ['افلام', /عربي|مصري/.test(card.title) ? 'افلام عربية' : 'افلام اجنبية'],
                 genres: ['دراما'],
-                year: (card.title.match(/\b(20[1-3]\d)\b/) || [])[1] || '2026',
+                year: inferredCardYear || '2026',
                 country: 'الولايات المتحدة',
                 language: 'مترجم للعربية',
                 quality: 'WEB-DL',
                 duration: '120 دقيقة',
-                imdb: 7.8,
-                votes: '10,000',
+                imdb: cardRating?.imdb ?? 7.8,
+                votes: cardRating?.votes || '10,000',
                 poster: upgradedPoster,
                 backdrop: '',
                 poster_url: upgradedPoster,
@@ -3972,7 +4528,7 @@ async function startServer() {
                 tagline: card.title,
                 story: card.title,
                 sourceUrl: card.url,
-                imdbId: '',
+                imdbId: cardRating?.imdbId || '',
                 shortUrl: '',
                 trailerUrl: '',
                 cast: [],
@@ -3985,44 +4541,62 @@ async function startServer() {
           finalItems.push(...results);
         }
       } else {
-        for (const card of candidates) {
-          const upgradedPoster = upgradeKnownImageUrlServer(card.poster);
-          finalItems.push({
-            title: card.title || 'عمل مستورد',
-            englishTitle: card.title || 'Imported Title',
-            kind: /مسلسل|حلقات/.test(card.title) ? 'series' : 'movie',
-            categories: /مسلسل|حلقات/.test(card.title)
-              ? ['مسلسلات', /عربي|مصري/.test(card.title) ? 'مسلسلات عربية' : 'مسلسلات اجنبية']
-              : ['افلام', /عربي|مصري/.test(card.title) ? 'افلام عربية' : 'افلام اجنبية'],
-            genres: ['دراما'],
-            year: (card.title.match(/\b(20[1-3]\d)\b/) || [])[1] || '2026',
-            country: 'الولايات المتحدة',
-            language: 'مترجم للعربية',
-            quality: 'WEB-DL',
-            duration: '120 دقيقة',
-            imdb: 7.8,
-            votes: '10,000',
-            poster: upgradedPoster,
-            backdrop: '',
-            poster_url: upgradedPoster,
-            backdrop_url: '',
-            poster_width: 0,
-            poster_height: 0,
-            backdrop_width: 0,
-            backdrop_height: 0,
-            image_source: 'card_fallback',
-            image_quality_status: 'missing_backdrop',
-            tagline: card.title,
-            story: card.title,
-            sourceUrl: card.url,
-            imdbId: '',
-            shortUrl: '',
-            trailerUrl: '',
-            cast: [],
-            servers: [],
-            downloads: [],
-            seasons: [],
-          });
+        const FALLBACK_CONC = 5;
+        for (let i = 0; i < candidates.length; i += FALLBACK_CONC) {
+          const chunk = candidates.slice(i, i + FALLBACK_CONC);
+          const resolvedChunk = await Promise.all(
+            chunk.map(async (card) => {
+              const upgradedPoster = upgradeKnownImageUrlServer(card.poster);
+              const inferredCardYear = inferEffectiveYear(card.title).year;
+              const fallbackKind: ScrapedMediaItem['kind'] = /مسلسل|حلقات/.test(card.title)
+                ? 'series'
+                : 'movie';
+              const cardRating = await resolveMediaRatingServer({
+                title: card.title || '',
+                englishTitle: extractCleanEnglishTitleCandidate(card.title || '') || card.title || '',
+                year: inferredCardYear,
+                kind: fallbackKind,
+              }).catch(() => null);
+              return {
+                title: card.title || 'عمل مستورد',
+                englishTitle: card.title || 'Imported Title',
+                kind: fallbackKind,
+                categories:
+                  fallbackKind === 'series'
+                    ? ['مسلسلات', /عربي|مصري/.test(card.title) ? 'مسلسلات عربية' : 'مسلسلات اجنبية']
+                    : ['افلام', /عربي|مصري/.test(card.title) ? 'افلام عربية' : 'افلام اجنبية'],
+                genres: ['دراما'],
+                year: inferredCardYear || '2026',
+                country: 'الولايات المتحدة',
+                language: 'مترجم للعربية',
+                quality: 'WEB-DL',
+                duration: '120 دقيقة',
+                imdb: cardRating?.imdb ?? 7.8,
+                votes: cardRating?.votes || '10,000',
+                poster: upgradedPoster,
+                backdrop: '',
+                poster_url: upgradedPoster,
+                backdrop_url: '',
+                poster_width: 0,
+                poster_height: 0,
+                backdrop_width: 0,
+                backdrop_height: 0,
+                image_source: 'card_fallback',
+                image_quality_status: 'missing_backdrop' as ServerImageQualityStatus,
+                tagline: card.title,
+                story: card.title,
+                sourceUrl: card.url,
+                imdbId: cardRating?.imdbId || '',
+                shortUrl: '',
+                trailerUrl: '',
+                cast: [],
+                servers: [],
+                downloads: [],
+                seasons: [],
+              };
+            })
+          );
+          finalItems.push(...resolvedChunk);
         }
       }
 
@@ -4851,6 +5425,67 @@ async function startServer() {
       return res.json({ ok: true, result });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Image resolution failed';
+      return res.status(500).json({ ok: false, error: msg });
+    }
+  });
+
+  app.post('/api/ratings/resolve', async (req, res) => {
+    try {
+      const body = (req.body || {}) as {
+        items?: ServerRatingLookupInput[];
+        id?: string;
+        title?: string;
+        englishTitle?: string;
+        year?: string;
+        kind?: string;
+        imdbId?: string;
+      };
+
+      if (Array.isArray(body.items)) {
+        const batch = body.items.slice(0, 40);
+        const results: Record<string, ServerResolvedMediaRating | null> = {};
+        const CONCURRENCY = 5;
+        for (let i = 0; i < batch.length; i += CONCURRENCY) {
+          const chunk = batch.slice(i, i + CONCURRENCY);
+          const resolvedChunk = await Promise.all(
+            chunk.map(async (it, idx) => {
+              const key = String(it?.id || `idx_${i + idx}`);
+              if (!it || (!it.title && !it.englishTitle && !it.imdbId)) {
+                return { key, res: null };
+              }
+              const r = await resolveMediaRatingServer({
+                id: key,
+                title: String(it.title || ''),
+                englishTitle: String(it.englishTitle || ''),
+                year: String(it.year || ''),
+                kind: String(it.kind || 'movie'),
+                imdbId: String(it.imdbId || ''),
+              }).catch(() => null);
+              return { key, res: r };
+            })
+          );
+          for (const entry of resolvedChunk) {
+            results[entry.key] = entry.res;
+          }
+        }
+        return res.json({ ok: true, results });
+      }
+
+      if (!body.title && !body.englishTitle && !body.imdbId) {
+        return res.status(400).json({ ok: false, error: 'title, englishTitle, or imdbId required' });
+      }
+
+      const result = await resolveMediaRatingServer({
+        id: body.id ? String(body.id) : undefined,
+        title: String(body.title || ''),
+        englishTitle: String(body.englishTitle || ''),
+        year: String(body.year || ''),
+        kind: String(body.kind || 'movie'),
+        imdbId: String(body.imdbId || ''),
+      });
+      return res.json({ ok: true, result });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Rating resolution failed';
       return res.status(500).json({ ok: false, error: msg });
     }
   });

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Wrench, X } from 'lucide-react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, doc, onSnapshot, orderBy, query, where } from 'firebase/firestore';
@@ -670,12 +670,12 @@ export default function App() {
     };
   }, [authLoading, firebaseUser, isOwnerAdmin]);
 
-  const showToast = (msg: string) => {
+  const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
     setTimeout(() => {
       setToastMessage((curr) => (curr === msg ? null : curr));
     }, 3200);
-  };
+  }, []);
 
   const pushPathIfNeeded = (targetPath: '/' | '/admin') => {
     if (typeof window === 'undefined') return;
@@ -707,10 +707,16 @@ export default function App() {
   };
 
   const openAdminPage = (tab?: AdminTab) => {
-    const moderatorPerms = loadAdminWorkspacePrefs().moderatorSubPermissions;
+    const prefs = loadAdminWorkspacePrefs();
+    const moderatorPerms = prefs.moderatorSubPermissions;
     const isOwner = adminRole === 'owner';
     const fallbackTab: AdminTab = isOwner ? 'overview' : 'catalog';
-    const desiredTab = tab || fallbackTab;
+    const storedLast = prefs.lastTab as AdminTab | undefined;
+    const desiredTab =
+      tab ||
+      (storedLast && isTabAccessible(storedLast, isOwner, moderatorPerms)
+        ? storedLast
+        : fallbackTab);
     const resolvedTab: AdminTab = isTabAccessible(desiredTab, isOwner, moderatorPerms)
       ? desiredTab
       : fallbackTab;

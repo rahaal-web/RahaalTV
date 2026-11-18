@@ -15,6 +15,7 @@ import {
   extractImdbIdFromText,
   extractJsonLdImageUrl,
   extractJsonLdNodes,
+  inferEffectiveYear,
   isJunkImageCandidate,
   isLowTrustScrapedPosterUrl,
   parseSrcsetBestUrl,
@@ -655,6 +656,7 @@ interface SubpageHints {
   watchSubpageUrl?: string;
   downloadSubpageUrl?: string;
   seasonPageUrls?: { seasonNumber: number; label: string; url: string }[];
+  hasExplicitImdbRating?: boolean;
 }
 
 function parseBrowserSeasonNumber(label: string, fallbackIdx: number): number {
@@ -1088,7 +1090,8 @@ export function parseHtmlToMediaWithHintsBrowser(
     );
     if (m) imdb = parseFloat(m[1]);
   }
-  if (!imdb || imdb > 10) imdb = 7.8;
+  const hasExplicitImdbRating = Boolean(imdb && imdb > 0 && imdb <= 10);
+  if (!hasExplicitImdbRating) imdb = 7.8;
 
   let kind: MediaKind = 'movie';
   if (/مصارعة|wwe|wrestlemania|raw|smackdown/i.test(rawTitle + ' ' + categories.join(' '))) {
@@ -1339,7 +1342,7 @@ export function parseHtmlToMediaWithHintsBrowser(
 
   // 7. Downloads & Subpage Hints
   const downloadsMap = new Map<string, DownloadMirror>();
-  const hints: SubpageHints = {};
+  const hints: SubpageHints = { hasExplicitImdbRating };
 
   const ignoredDownloadHosts =
     /facebook\.com|twitter\.com|x\.com|t\.me|telegram|whatsapp|instagram|youtube\.com|tiktok\.com|pinterest|linkedin|plus\.google\.com|google\.com\/search|sharer\.php|\/share\?/i;
@@ -2613,7 +2616,7 @@ async function scrapeFullItemInBrowser(
     // ignore
   }
 
-  const [filteredServers, fallbackTrailer, resolvedImages] = await Promise.all([
+  const [filteredServers, fallbackTrailer, resolvedImages, resolvedRating] = await Promise.all([
     verifyScrapedServersInBrowser(media.servers, mainOrigin),
     media.trailerUrl || options?.skipEpisodeCrawl
       ? Promise.resolve(media.trailerUrl)
@@ -2639,10 +2642,39 @@ async function scrapeFullItemInBrowser(
             })
           )
           .catch(() => null),
+    options?.skipEpisodeCrawl || (hints.hasExplicitImdbRating && media.imdb !== 7.8)
+      ? Promise.resolve(null)
+      : import('./mediaRatings')
+          .then(({ resolveSingleMediaRating }) =>
+            resolveSingleMediaRating({
+              title: media.title,
+              englishTitle: media.englishTitle,
+              year: media.year,
+              kind: media.kind,
+              imdbId: media.imdbId,
+            })
+          )
+          .catch(() => null),
   ]);
 
   media.servers = filteredServers;
   media.trailerUrl = fallbackTrailer || '';
+  if (resolvedRating && resolvedRating.imdb > 0) {
+    media.imdb = resolvedRating.imdb;
+    if (!media.imdbId && resolvedRating.imdbId) {
+      media.imdbId = resolvedRating.imdbId;
+    }
+    if (resolvedRating.votes) {
+      media.votes = resolvedRating.votes;
+    }
+    if (
+      (!media.year || media.year === '2026') &&
+      resolvedRating.year &&
+      /^(?:19|20)\d{2}$/.test(resolvedRating.year)
+    ) {
+      media.year = resolvedRating.year;
+    }
+  }
   if (resolvedImages) {
     if (resolvedImages.poster_url) {
       media.poster = resolvedImages.poster_url;
@@ -2926,9 +2958,10 @@ export async function scrapeSingleInBrowser(params: {
       rawHtml.match(/<meta[^>]+property=["']og:url["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
       '';
     const effectiveUrl = (url && url.trim()) || canonicalInHtml || '';
-    const extracted = parseHtmlToMediaWithHintsBrowser(rawHtml, effectiveUrl).media;
+    const parsedHtml = parseHtmlToMediaWithHintsBrowser(rawHtml, effectiveUrl);
+    const extracted = parsedHtml.media;
     extracted.servers = extracted.servers.filter((s) => s.url && !isLikelyNonVideoWebsiteUrl(s.url));
-    const [trailer, resolvedImgs] = await Promise.all([
+    const [trailer, resolvedImgs, resolvedRating] = await Promise.all([
       extracted.trailerUrl
         ? Promise.resolve(extracted.trailerUrl)
         : findTrailerInBrowser({
@@ -2951,8 +2984,37 @@ export async function scrapeSingleInBrowser(params: {
           })
         )
         .catch(() => null),
+      parsedHtml.hints.hasExplicitImdbRating && extracted.imdb !== 7.8
+        ? Promise.resolve(null)
+        : import('./mediaRatings')
+            .then(({ resolveSingleMediaRating }) =>
+              resolveSingleMediaRating({
+                title: extracted.title,
+                englishTitle: extracted.englishTitle,
+                year: extracted.year,
+                kind: extracted.kind,
+                imdbId: extracted.imdbId,
+              })
+            )
+            .catch(() => null),
     ]);
     extracted.trailerUrl = trailer || '';
+    if (resolvedRating && resolvedRating.imdb > 0) {
+      extracted.imdb = resolvedRating.imdb;
+      if (!extracted.imdbId && resolvedRating.imdbId) {
+        extracted.imdbId = resolvedRating.imdbId;
+      }
+      if (resolvedRating.votes) {
+        extracted.votes = resolvedRating.votes;
+      }
+      if (
+        (!extracted.year || extracted.year === '2026') &&
+        resolvedRating.year &&
+        /^(?:19|20)\d{2}$/.test(resolvedRating.year)
+      ) {
+        extracted.year = resolvedRating.year;
+      }
+    }
     if (resolvedImgs) {
       if (resolvedImgs.poster_url) {
         extracted.poster = resolvedImgs.poster_url;
@@ -3220,6 +3282,38 @@ export async function scrapeSiteInBrowser(params: {
     }
   }
 
+  const needsRating = finalItems
+    .map((it, idx) => ({ it, idx }))
+    .filter(({ it }) => !it.imdb || it.imdb === 7.8);
+  if (needsRating.length > 0) {
+    try {
+      const { resolveMediaRatingsBatch } = await import('./mediaRatings');
+      const resolvedMap = await resolveMediaRatingsBatch(
+        needsRating.map(({ it, idx }) => ({
+          id: String(idx),
+          title: it.title,
+          englishTitle: it.englishTitle,
+          year: it.year,
+          kind: it.kind,
+          imdbId: it.imdbId,
+        }))
+      );
+      for (const { it, idx } of needsRating) {
+        const found = resolvedMap[String(idx)];
+        if (found && found.imdb > 0) {
+          it.imdb = found.imdb;
+          if (!it.imdbId && found.imdbId) it.imdbId = found.imdbId;
+          if (found.votes) it.votes = found.votes;
+          if ((!it.year || it.year === '2026') && found.year && /^(?:19|20)\d{2}$/.test(found.year)) {
+            it.year = found.year;
+          }
+        }
+      }
+    } catch {
+      // non-fatal
+    }
+  }
+
   return {
     ok: true,
     strategy,
@@ -3234,15 +3328,16 @@ export async function scrapeSiteInBrowser(params: {
 
 function buildFallbackCardItem(card: { url: string; title: string; poster: string }): ScrapedPayload {
   const isSeries = /مسلسل|حلقات/.test(card.title);
+  const inferredYear = inferEffectiveYear(card.title).year;
   return {
     title: card.title || 'عمل مستورد',
-    englishTitle: card.title || 'Imported Title',
+    englishTitle: extractCleanEnglishTitleCandidate(card.title) || card.title || 'Imported Title',
     kind: isSeries ? 'series' : 'movie',
     categories: isSeries
       ? ['مسلسلات', /عربي|مصري/.test(card.title) ? 'مسلسلات عربية' : 'مسلسلات اجنبية']
       : ['افلام', /عربي|مصري/.test(card.title) ? 'افلام عربية' : 'افلام اجنبية'],
     genres: ['دراما'],
-    year: (card.title.match(/\b(20[1-3]\d)\b/) || [])[1] || '2026',
+    year: inferredYear || '2026',
     country: 'الولايات المتحدة',
     language: 'مترجم للعربية',
     quality: 'WEB-DL',

@@ -41,6 +41,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Star,
   StopCircle,
   Trash2,
   Tv,
@@ -135,6 +136,7 @@ import {
 import {
   bulkDeleteMediaFromFirestore,
   bulkSaveMediaToFirestore,
+  bulkUpdateMediaInFirestore,
   createAdminAccountInFirebase,
   deleteCustomFontFromFirestore,
   deleteMediaFromFirestore,
@@ -157,6 +159,11 @@ import {
   generateCleanSlug,
   resolveDisplayShortUrl,
 } from '../lib/permalink';
+import { inferEffectiveYear } from '../lib/imageMatching';
+import {
+  resolveMediaRatingsBatch,
+  resolveSingleMediaRating,
+} from '../lib/mediaRatings';
 import {
   checkServerUrlsInBrowser,
   CLOUDFLARE_WORKER_SOURCE,
@@ -658,8 +665,13 @@ export function AdminDashboardView({
   );
 
   const [activeTab, setActiveTab] = useState<AdminTab>(() => {
+    const requestedNonce = requestedTab?.nonce || 0;
     const requested = requestedTab?.tab;
-    if (requested && isTabAccessible(requested, isOwner, workspacePrefs.moderatorSubPermissions)) {
+    if (
+      requestedNonce > 0 &&
+      requested &&
+      isTabAccessible(requested, isOwner, workspacePrefs.moderatorSubPermissions)
+    ) {
       return requested;
     }
     const stored = workspacePrefs.lastTab as AdminTab;
@@ -669,6 +681,9 @@ export function AdminDashboardView({
       isTabAccessible(stored, isOwner, workspacePrefs.moderatorSubPermissions)
     ) {
       return stored;
+    }
+    if (requested && isTabAccessible(requested, isOwner, workspacePrefs.moderatorSubPermissions)) {
+      return requested;
     }
     return isOwner ? 'overview' : 'catalog';
   });
@@ -686,6 +701,10 @@ export function AdminDashboardView({
     document.documentElement.getAttribute('data-rtv-tv-mode') === 'true'
   );
   const loggedUnauthorizedRef = useRef<Set<string>>(new Set());
+  const onNotifyRef = useRef(onNotify);
+  useEffect(() => {
+    onNotifyRef.current = onNotify;
+  }, [onNotify]);
 
   const accessibleNavItems = useMemo(
     () =>
@@ -717,7 +736,7 @@ export function AdminDashboardView({
             context: { targetTab: target, role: effectiveRole || 'none' },
           });
         }
-        onNotify('ليست لديك صلاحية للوصول إلى هذا القسم.');
+        onNotifyRef.current('ليست لديك صلاحية للوصول إلى هذا القسم.');
         setActiveTab('catalog');
         setMobileDrawerOpen(false);
         return;
@@ -726,14 +745,22 @@ export function AdminDashboardView({
       setMobileDrawerOpen(false);
       updateWorkspacePrefs({ lastTab: target });
     },
-    [isOwner, workspacePrefs.moderatorSubPermissions, user?.uid, effectiveRole, onNotify, updateWorkspacePrefs]
+    [isOwner, workspacePrefs.moderatorSubPermissions, user?.uid, effectiveRole, updateWorkspacePrefs]
   );
 
+  const lastHandledNonceRef = useRef<number>(requestedTab?.nonce || 0);
+  const navigateToTabRef = useRef(navigateToTab);
   useEffect(() => {
-    if (requestedTab?.tab) {
-      navigateToTab(requestedTab.tab);
+    navigateToTabRef.current = navigateToTab;
+  }, [navigateToTab]);
+
+  useEffect(() => {
+    const nonce = requestedTab?.nonce || 0;
+    if (nonce > 0 && nonce !== lastHandledNonceRef.current && requestedTab?.tab) {
+      lastHandledNonceRef.current = nonce;
+      navigateToTabRef.current(requestedTab.tab);
     }
-  }, [requestedTab?.nonce, requestedTab?.tab, navigateToTab]);
+  }, [requestedTab?.nonce, requestedTab?.tab]);
 
   useEffect(() => {
     if (!isTabAccessible(activeTab, isOwner, workspacePrefs.moderatorSubPermissions)) {
@@ -851,6 +878,9 @@ export function AdminDashboardView({
   const [fetchingHqImages, setFetchingHqImages] = useState(false);
   const [probingEditorImages, setProbingEditorImages] = useState(false);
   const [editorImageProposal, setEditorImageProposal] = useState<ResolvedImageBundle | null>(null);
+  const [refreshingRatings, setRefreshingRatings] = useState(false);
+  const [ratingsProgress, setRatingsProgress] = useState<{ done: number; total: number } | null>(null);
+  const [fetchingEditorRating, setFetchingEditorRating] = useState(false);
 
   // Site-Wide Bulk Crawler states (Entire Website)
   const [siteScrapeMode, setSiteScrapeMode] = useState<'url' | 'html'>('url');
@@ -2645,6 +2675,129 @@ export function AdminDashboardView({
     }
   };
 
+  const default78Items = useMemo(
+    () => catalog.filter((item) => Math.abs((Number(item.imdb) || 0) - 7.8) < 0.01),
+    [catalog]
+  );
+
+  const handleFetchEditorRealRating = async () => {
+    if (!editingItem || fetchingEditorRating) return;
+    if (!editingItem.title.trim() && !editingItem.englishTitle.trim()) {
+      onNotify('أدخل عنوان العمل أولاً للبحث عن تقييمه الحقيقي');
+      return;
+    }
+    setFetchingEditorRating(true);
+    try {
+      const resolved = await resolveSingleMediaRating({
+        id: editingItem.id,
+        title: editingItem.title,
+        englishTitle: editingItem.englishTitle,
+        year: editingItem.year,
+        kind: editingItem.kind,
+      });
+      if (resolved && resolved.imdb > 0) {
+        const inferred = inferEffectiveYear(editingItem.title, editingItem.year);
+        const nextYear =
+          (!editingItem.year || editingItem.year === '2026') &&
+          (resolved.year || (inferred.explicit ? inferred.year : ''))
+            ? resolved.year || inferred.year
+            : editingItem.year;
+        setEditingItem((prev) =>
+          prev
+            ? {
+                ...prev,
+                imdb: resolved.imdb,
+                year: nextYear || prev.year,
+                votes: resolved.votes || prev.votes,
+              }
+            : prev
+        );
+        const srcLabel =
+          resolved.source === 'tmdb' ? 'TMDb' : resolved.source === 'tvmaze' ? 'TVmaze' : 'IMDb';
+        onNotify(`تم جلب التقييم الحقيقي من ${srcLabel}: ★ ${resolved.imdb}`);
+      } else {
+        onNotify('لم يُعثر على تقييم مطابق في IMDb/TMDb — يمكنك تعديله يدوياً');
+      }
+    } catch {
+      onNotify('تعذر جلب التقييم الآن');
+    } finally {
+      setFetchingEditorRating(false);
+    }
+  };
+
+  const handleRefreshRealRatings = async (mode: '7.8' | 'all' | 'selected') => {
+    if (!user || refreshingRatings) return;
+    if (!isFirestoreSeeded) {
+      onNotify('قم أولاً باستيراد المكتبة لقاعدة البيانات لتفعيل تحديث التقييمات');
+      return;
+    }
+
+    const targets =
+      mode === 'selected'
+        ? catalog.filter((item) => selectedMediaIds.includes(item.id))
+        : mode === '7.8'
+          ? default78Items
+          : catalog;
+
+    if (targets.length === 0) {
+      onNotify('لا توجد أعمال مطابقة لتحديث تقييماتها');
+      return;
+    }
+
+    setRefreshingRatings(true);
+    setRatingsProgress({ done: 0, total: targets.length });
+    try {
+      const resolvedMap = await resolveMediaRatingsBatch(
+        targets.map((item) => ({
+          id: item.id,
+          title: item.title,
+          englishTitle: item.englishTitle,
+          year: item.year,
+          kind: item.kind,
+        })),
+        (done, total) => setRatingsProgress({ done, total })
+      );
+
+      const updates: MediaItem[] = [];
+      let matchedCount = 0;
+      for (const item of targets) {
+        const found = resolvedMap[item.id];
+        if (!found || found.imdb <= 0) continue;
+        matchedCount++;
+        const inferred = inferEffectiveYear(item.title, item.year);
+        const fixedYear =
+          item.year === '2026' && (found.year || (inferred.explicit ? inferred.year : ''))
+            ? found.year || inferred.year
+            : item.year;
+
+        if (found.imdb !== item.imdb || fixedYear !== item.year || (found.votes && found.votes !== item.votes)) {
+          updates.push({
+            ...item,
+            imdb: found.imdb,
+            year: fixedYear || item.year,
+            votes: found.votes || item.votes,
+          });
+        }
+      }
+
+      if (updates.length > 0) {
+        await bulkUpdateMediaInFirestore(updates, user.uid);
+        onNotify(
+          `تم تحديث التقييم الحقيقي لـ ${updates.length} عمل بنجاح (من أصل ${targets.length} تم فحصها).`
+        );
+      } else if (matchedCount > 0) {
+        onNotify(`تقييمات الأعمال المطابقة (${matchedCount}) محدثة بالفعل.`);
+      } else {
+        onNotify('لم يُعثر على تقييمات جديدة مطابقة على IMDb/TMDb للأعمال المفحوصة.');
+      }
+    } catch (err) {
+      onNotify(formatFirestoreWriteError(err, 'تعذر حفظ التقييمات الجديدة في Firestore'));
+    } finally {
+      setRefreshingRatings(false);
+      setRatingsProgress(null);
+    }
+  };
+
   const handleProbeEditorImageDimensions = async () => {
     if (!editingItem || probingEditorImages) return;
     setProbingEditorImages(true);
@@ -3364,6 +3517,35 @@ export function AdminDashboardView({
 
           {/* Active Tab Workspace */}
           <main className="flex-1 min-w-0 w-full space-y-6">
+            {isFirestoreSeeded && default78Items.length >= 5 && (
+              <div className="rounded-2xl bg-[#1a242e] border border-[#f9c400]/35 px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-lg">
+                <div className="flex items-center gap-2.5 text-xs font-bold text-[#fde68a]">
+                  <Star className="w-4 h-4 text-[#f9c400] shrink-0" />
+                  <span>
+                    رُصد <strong className="text-white tabular-nums">{default78Items.length}</strong> عمل
+                    بتقييم افتراضي <span className="font-latin text-white">7.8</span> — يمكنك تحديثها بالتقييمات الحقيقية من{' '}
+                    <span className="font-latin text-white">IMDb / TMDb</span> بضغطة واحدة.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  disabled={refreshingRatings}
+                  onClick={() => void handleRefreshRealRatings('7.8')}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] disabled:opacity-60 px-3.5 py-2 text-xs font-black text-[#06131c] cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  {refreshingRatings ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Star className="w-3.5 h-3.5" />
+                  )}
+                  <span>
+                    {refreshingRatings && ratingsProgress
+                      ? `جاري الجلب (${ratingsProgress.done}/${ratingsProgress.total})...`
+                      : `جلب التقييمات الحقيقية الآن (${default78Items.length})`}
+                  </span>
+                </button>
+              </div>
+            )}
             <Suspense
               fallback={
                 <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-12 flex flex-col items-center justify-center gap-3 text-xs font-bold text-[#b7c9ef]">
@@ -3475,6 +3657,10 @@ export function AdminDashboardView({
                   onRequestDeleteMedia={(id) => setConfirmDeleteId(id)}
                   onNavigateTab={navigateToTab}
                   onNotify={onNotify}
+                  refreshingRatings={refreshingRatings}
+                  ratingsProgress={ratingsProgress}
+                  default78Count={default78Items.length}
+                  onRefreshRatings={(mode) => void handleRefreshRealRatings(mode)}
                 />
               )}
 
@@ -5779,9 +5965,24 @@ export function AdminDashboardView({
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-[#b7c9ef] mb-1">
-                        تقييم IMDb
-                      </label>
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <label className="block text-xs font-bold text-[#b7c9ef]">
+                          تقييم IMDb
+                        </label>
+                        <button
+                          type="button"
+                          disabled={fetchingEditorRating}
+                          onClick={() => void handleFetchEditorRealRating()}
+                          className="inline-flex items-center gap-1 rounded-lg bg-[#f9c400]/15 hover:bg-[#f9c400]/25 border border-[#f9c400]/35 px-2 py-0.5 text-[10px] font-extrabold text-[#f9c400] cursor-pointer disabled:opacity-50"
+                        >
+                          {fetchingEditorRating ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Star className="w-3 h-3" />
+                          )}
+                          <span>جلب الحقيقي</span>
+                        </button>
+                      </div>
                       <input
                         type="number"
                         step="0.1"

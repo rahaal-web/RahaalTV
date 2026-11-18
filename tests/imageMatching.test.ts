@@ -174,3 +174,35 @@ test('sequel/subtitle matching and low-trust thumbnail detection handle Dune 3, 
   );
   assert.equal(extractImdbIdFromText('no imdb id here'), '');
 });
+
+import { inferEffectiveYear } from '../src/lib/imageMatching';
+
+test('inferEffectiveYear recovers embedded release year when stored year defaulted to 2026', () => {
+  assert.deepEqual(inferEffectiveYear("فيلم It's Complicated 2009 HD مترجم", '2026'), {
+    year: '2009',
+    explicit: true,
+  });
+  assert.deepEqual(inferEffectiveYear('فيلم Mayhem 2017 BluRay', '2026'), {
+    year: '2017',
+    explicit: true,
+  });
+  assert.deepEqual(inferEffectiveYear('فيلم جديد بدون سنة', '2026'), {
+    year: '2026',
+    explicit: false,
+  });
+  assert.deepEqual(inferEffectiveYear('فيلم قديم', '2018'), {
+    year: '2018',
+    explicit: true,
+  });
+
+  const jessMismatch = scoreExternalTitleMatch({
+    queryTitle: 'فيلم Jess + Moss 2011 HD مترجم',
+    englishTitle: 'Jess',
+    expectedYear: '2011',
+    expectedYearExplicit: true,
+    candidateTitles: ['Jessabelle'],
+    candidateYear: '2014',
+  });
+  assert.equal(jessMismatch.matched, false);
+});
+

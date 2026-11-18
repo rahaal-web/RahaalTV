@@ -2401,7 +2401,7 @@ export async function scrapeSingleWithAdapterInBrowser(params: {
   }
 
   const extracted = result.media;
-  const [fallbackTrailer, resolvedImgs] = await Promise.all([
+  const [fallbackTrailer, resolvedImgs, resolvedRating] = await Promise.all([
     extracted.trailerUrl
       ? Promise.resolve(extracted.trailerUrl)
       : findTrailerInBrowser({
@@ -2424,9 +2424,38 @@ export async function scrapeSingleWithAdapterInBrowser(params: {
         })
       )
       .catch(() => null),
+    !extracted.imdb || extracted.imdb === 7.8
+      ? import('./mediaRatings')
+          .then(({ resolveSingleMediaRating }) =>
+            resolveSingleMediaRating({
+              title: extracted.title,
+              englishTitle: extracted.englishTitle,
+              year: extracted.year,
+              kind: extracted.kind,
+              imdbId: extracted.imdbId,
+            })
+          )
+          .catch(() => null)
+      : Promise.resolve(null),
   ]);
 
   extracted.trailerUrl = fallbackTrailer || '';
+  if (resolvedRating && resolvedRating.imdb > 0) {
+    extracted.imdb = resolvedRating.imdb;
+    if (!extracted.imdbId && resolvedRating.imdbId) {
+      extracted.imdbId = resolvedRating.imdbId;
+    }
+    if (resolvedRating.votes) {
+      extracted.votes = resolvedRating.votes;
+    }
+    if (
+      (!extracted.year || extracted.year === '2026') &&
+      resolvedRating.year &&
+      /^(?:19|20)\d{2}$/.test(resolvedRating.year)
+    ) {
+      extracted.year = resolvedRating.year;
+    }
+  }
   if (resolvedImgs) {
     if (resolvedImgs.poster_url) {
       extracted.poster = resolvedImgs.poster_url;

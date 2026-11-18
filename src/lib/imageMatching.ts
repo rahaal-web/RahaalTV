@@ -322,11 +322,11 @@ function stripNoiseFromTitle(raw: string): string {
  */
 export function extractCleanEnglishTitleCandidate(rawTitle: string): string {
   const input = String(rawTitle || '');
-  const segments = input.match(/[A-Za-z0-9][A-Za-z0-9\s:'’.!&\-]*/g) || [];
+  const segments = input.match(/[A-Za-z0-9][A-Za-z0-9\s:'’.!&+/,\-]*/g) || [];
   let best = '';
 
   for (const seg of segments) {
-    const cleaned = stripNoiseFromTitle(seg).replace(/^[-–:.\s]+|[-–:.\s]+$/g, '').trim();
+    const cleaned = stripNoiseFromTitle(seg).replace(/^[-–+:.,\s]+|[-–+:.,\s]+$/g, '').trim();
     if (!cleaned) continue;
     const words = cleaned
       .split(/\s+/)
@@ -618,4 +618,20 @@ export function scoreExternalTitleMatch(params: {
     score: Number(bestScore.toFixed(3)),
     reason: bestReason,
   };
+}
+
+export function inferEffectiveYear(title: string, year?: string): { year: string; explicit: boolean } {
+  const cleanYear = normalizeArabicDigitsShared(String(year || '')).trim();
+  const fromTitle = normalizeArabicDigitsShared(String(title || '')).match(/\b(19\d{2}|20[0-2]\d)\b/)?.[1] || '';
+
+  if (/^\d{4}$/.test(cleanYear) && cleanYear !== '2026') {
+    return { year: cleanYear, explicit: true };
+  }
+  if (fromTitle && fromTitle !== '2026') {
+    return { year: fromTitle, explicit: true };
+  }
+  if (/^\d{4}$/.test(cleanYear)) {
+    return { year: cleanYear, explicit: false };
+  }
+  return { year: fromTitle || '', explicit: false };
 }

@@ -11,6 +11,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Star,
   Trash2,
 } from 'lucide-react';
 import {
@@ -69,6 +70,10 @@ interface AdminCatalogPanelProps {
   onRequestDeleteMedia: (id: string) => void;
   onNavigateTab: (tab: AdminTab) => void;
   onNotify: (msg: string) => void;
+  refreshingRatings?: boolean;
+  ratingsProgress?: { done: number; total: number } | null;
+  default78Count?: number;
+  onRefreshRatings?: (mode: '7.8' | 'all' | 'selected') => void;
 }
 
 const KIND_LABELS: Record<MediaKind, string> = {
@@ -124,6 +129,10 @@ export function AdminCatalogPanel({
   onRequestDeleteMedia,
   onNavigateTab,
   onNotify,
+  refreshingRatings = false,
+  ratingsProgress = null,
+  default78Count = 0,
+  onRefreshRatings,
 }: AdminCatalogPanelProps) {
   const [page, setPage] = useState(1);
   const [showColumnMenu, setShowColumnMenu] = useState(false);
@@ -273,6 +282,45 @@ export function AdminCatalogPanel({
             )}
             <span>فحص السيرفرات</span>
           </button>
+
+          {onRefreshRatings && (
+            <button
+              type="button"
+              disabled={refreshingRatings || catalog.length === 0}
+              onClick={() =>
+                onRefreshRatings(
+                  selectedMediaIds.length > 0
+                    ? 'selected'
+                    : default78Count > 0
+                      ? '7.8'
+                      : 'all'
+                )
+              }
+              title={
+                selectedMediaIds.length > 0
+                  ? 'جلب التقييم الحقيقي من IMDb/TMDb للأعمال المحددة'
+                  : default78Count > 0
+                    ? `جلب التقييم الحقيقي للأعمال ذات التقييم الافتراضي 7.8 (${default78Count})`
+                    : 'تحديث جميع التقييمات من IMDb/TMDb'
+              }
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-[#f9c400]/20 border border-[#f9c400]/35 disabled:opacity-40 px-3.5 py-2.5 text-xs font-extrabold text-[#f9c400] cursor-pointer whitespace-nowrap shrink-0"
+            >
+              {refreshingRatings ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Star className="w-3.5 h-3.5" />
+              )}
+              <span>
+                {refreshingRatings && ratingsProgress
+                  ? `جلب التقييمات (${ratingsProgress.done}/${ratingsProgress.total})`
+                  : selectedMediaIds.length > 0
+                    ? `تقييم المحدد (${selectedMediaIds.length})`
+                    : default78Count > 0
+                      ? `تحديث التقييمات (IMDb/TMDb • ${default78Count})`
+                      : 'تحديث التقييمات (IMDb/TMDb)'}
+              </span>
+            </button>
+          )}
 
           <button
             type="button"
