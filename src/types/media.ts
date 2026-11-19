@@ -184,6 +184,15 @@ export interface HomeSectionConfig {
   layout: 'grid' | 'row';
 }
 
+export type HeroTextAlign = 'right' | 'center' | 'left';
+export type HeroInfoPosition =
+  | 'bottom-right'
+  | 'bottom-center'
+  | 'bottom-left'
+  | 'middle-right'
+  | 'middle-center'
+  | 'middle-left';
+
 export interface HomeLayoutConfig {
   showHero: boolean;
   heroMode: HomeHeroMode;
@@ -201,6 +210,23 @@ export interface HomeLayoutConfig {
   heroPauseOnHover?: boolean;
   heroMaxSlides?: number;
   heroSlideIds?: string[];
+  // Dedicated Hero Slider Customization controls
+  heroShowDescription?: boolean;
+  heroTitleSizePx?: number;
+  heroDescriptionSizePx?: number;
+  heroDescriptionLines?: 1 | 2 | 3 | 4 | 5;
+  heroTextAlign?: HeroTextAlign;
+  heroInfoPosition?: HeroInfoPosition;
+  heroTextMaxWidthPx?: number;
+  heroShowBadge?: boolean;
+  heroShowRating?: boolean;
+  heroShowYear?: boolean;
+  heroShowDuration?: boolean;
+  heroShowGenres?: boolean;
+  heroShowQuality?: boolean;
+  heroShowWatchBtn?: boolean;
+  heroShowDetailsBtn?: boolean;
+  heroShowWatchlistBtn?: boolean;
   showQuickFilters: boolean;
   showCategoryBar: boolean;
   showFullLibrary: boolean;
@@ -208,6 +234,33 @@ export interface HomeLayoutConfig {
   cardsPerRow: 4 | 5 | 6;
   cardStyle: 'clean' | 'classic';
   sections: HomeSectionConfig[];
+}
+
+export type LogoDisplayMode = 'image_and_text' | 'image_only' | 'text_only' | 'hidden';
+export type LogoPlacement = 'before_text' | 'after_text' | 'above_text';
+export type HeaderLogoAlign = 'start' | 'center';
+export type FaviconMode = 'default' | 'custom' | 'none';
+
+export interface WebsiteBrandingConfig {
+  // Logo settings
+  logoMode: LogoDisplayMode;
+  logoUrl: string;
+  logoWidthPx: number;
+  logoHeightPx: number;
+  logoPlacement: LogoPlacement;
+  headerAlign: HeaderLogoAlign;
+  logoTextGapPx: number;
+  // Site name settings
+  siteName: string;
+  siteNameColor: string;
+  siteNameFont: string;
+  siteNameSizePx: number;
+  siteNameWeight: 400 | 500 | 600 | 700 | 800 | 900;
+  siteNameLetterSpacingPx: number;
+  // Favicon settings
+  faviconMode: FaviconMode;
+  faviconUrl: string;
+  faviconMimeType?: string;
 }
 
 export type CustomFontSlot = 'arabic' | 'english';
@@ -307,6 +360,7 @@ export interface SiteSettings {
   homeConfig?: HomeLayoutConfig;
   typography?: TypographyConfig;
   popupShield?: PopupShieldConfig;
+  branding?: WebsiteBrandingConfig;
 }
 
 export interface UserProfileRecord {

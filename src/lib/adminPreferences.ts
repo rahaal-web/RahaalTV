@@ -59,6 +59,8 @@ export interface AdminWorkspacePrefs {
   lastTab: string;
   sidebarCollapsed: boolean;
   collapsedGroups: Record<string, boolean>;
+  openGroupIds: string[];
+  accordionMultiOpen: boolean;
   catalogTable: CatalogTablePrefs;
   moderatorSubPermissions: ModeratorSubPermissions;
 }
@@ -98,6 +100,8 @@ export const DEFAULT_ADMIN_WORKSPACE_PREFS: AdminWorkspacePrefs = {
   lastTab: 'overview',
   sidebarCollapsed: false,
   collapsedGroups: {},
+  openGroupIds: [],
+  accordionMultiOpen: true,
   catalogTable: DEFAULT_CATALOG_TABLE_PREFS,
   moderatorSubPermissions: DEFAULT_MODERATOR_SUB_PERMS,
 };
@@ -115,6 +119,10 @@ export function loadAdminWorkspacePrefs(): AdminWorkspacePrefs {
         parsed.collapsedGroups && typeof parsed.collapsedGroups === 'object'
           ? parsed.collapsedGroups
           : {},
+      openGroupIds: Array.isArray(parsed.openGroupIds)
+        ? parsed.openGroupIds.filter((g): g is string => typeof g === 'string' && Boolean(g))
+        : [],
+      accordionMultiOpen: parsed.accordionMultiOpen ?? true,
       catalogTable: {
         visibleColumns: {
           ...DEFAULT_CATALOG_TABLE_PREFS.visibleColumns,

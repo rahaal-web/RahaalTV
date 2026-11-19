@@ -40,6 +40,7 @@ interface HomeBuilderPanelProps {
   onSaveHomeConfig: (next: HomeLayoutConfig) => Promise<void>;
   onPreviewHome: () => void;
   onOpenTypographyTab?: () => void;
+  onOpenSliderCustomization?: () => void;
   onNotify: (msg: string) => void;
 }
 
@@ -65,6 +66,7 @@ export function HomeBuilderPanel({
   onSaveHomeConfig,
   onPreviewHome,
   onOpenTypographyTab,
+  onOpenSliderCustomization,
   onNotify,
 }: HomeBuilderPanelProps) {
   const cfg = useMemo(() => normalizeHomeConfig(homeConfig), [homeConfig]);
@@ -223,7 +225,7 @@ export function HomeBuilderPanel({
       {/* Top Action Header */}
       <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#D92321]/15 border border-[#D92321]/35 text-[#D92321]">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl rtv-admin-accent-soft border border-white/15 rtv-admin-accent-text">
             <SlidersHorizontal className="w-5 h-5" />
           </div>
           <div>
@@ -237,13 +239,24 @@ export function HomeBuilderPanel({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          {onOpenSliderCustomization && (
+            <button
+              type="button"
+              onClick={onOpenSliderCustomization}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/15 px-4 py-2.5 text-xs font-bold text-white cursor-pointer"
+            >
+              <Monitor className="w-4 h-4 rtv-admin-accent-text" />
+              <span>تخصيص عناصر السلايدر الرئيسي</span>
+            </button>
+          )}
+
           {onOpenTypographyTab && (
             <button
               type="button"
               onClick={onOpenTypographyTab}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-[#f9c400]/35 px-4 py-2.5 text-xs font-bold text-[#f9c400] cursor-pointer"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/15 px-4 py-2.5 text-xs font-bold text-white cursor-pointer"
             >
-              <Type className="w-4 h-4" />
+              <Type className="w-4 h-4 rtv-admin-accent-text" />
               <span>الخطوط وحجم النصوص</span>
             </button>
           )}
@@ -253,7 +266,7 @@ export function HomeBuilderPanel({
             onClick={onPreviewHome}
             className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 px-4 py-2.5 text-xs font-bold text-white cursor-pointer"
           >
-            <Eye className="w-4 h-4 text-[#f9c400]" />
+            <Eye className="w-4 h-4 rtv-admin-accent-text" />
             <span>معاينة الرئيسية</span>
           </button>
 
@@ -313,22 +326,33 @@ export function HomeBuilderPanel({
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
         {/* Hero Slider Full Controller */}
         <div className="xl:col-span-7 rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 space-y-4">
-          <div className="flex items-center justify-between border-b border-white/10 pb-3">
+          <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-3">
             <div className="flex items-center gap-2">
-              <Monitor className="w-5 h-5 text-[#D92321]" />
+              <Monitor className="w-5 h-5 rtv-admin-accent-text" />
               <h3 className="font-display text-base font-extrabold text-white">
                 التحكم الكامل في السلايدر الرئيسي (Hero Slider)
               </h3>
             </div>
-            <label className="inline-flex items-center gap-2 text-xs font-bold text-white cursor-pointer">
-              <input
-                type="checkbox"
-                checked={cfg.showHero}
-                onChange={(e) => updateCfg({ showHero: e.target.checked })}
-                className="h-4 w-4 accent-[#D92321]"
-              />
-              <span>إظهار السلايدر</span>
-            </label>
+            <div className="flex items-center gap-3">
+              {onOpenSliderCustomization && (
+                <button
+                  type="button"
+                  onClick={onOpenSliderCustomization}
+                  className="rounded-lg rtv-admin-accent-soft border border-white/15 px-2.5 py-1 text-[11px] font-extrabold rtv-admin-accent-text hover:opacity-90 cursor-pointer"
+                >
+                  إعدادات إظهار/إخفاء الوصف والعناصر ↗
+                </button>
+              )}
+              <label className="inline-flex items-center gap-2 text-xs font-bold text-white cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={cfg.showHero}
+                  onChange={(e) => updateCfg({ showHero: e.target.checked })}
+                  className="h-4 w-4 accent-sky-500"
+                />
+                <span>إظهار السلايدر</span>
+              </label>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -345,7 +369,7 @@ export function HomeBuilderPanel({
                 onClick={() => updateCfg({ heroMode: mode.id })}
                 className={`rounded-xl border px-3 py-2.5 text-xs font-extrabold transition-colors cursor-pointer ${
                   cfg.heroMode === mode.id
-                    ? 'bg-[#D92321] border-[#D92321] text-white'
+                    ? 'rtv-admin-accent-bg border-transparent text-white'
                     : 'bg-[#1a242e] border-white/10 text-[#b7c9ef] hover:text-white'
                 }`}
               >

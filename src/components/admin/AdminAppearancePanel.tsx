@@ -1,6 +1,8 @@
 import { ChangeEvent, ReactNode, useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
+  Coffee,
+  Contrast,
   Eye,
   FileUp,
   Layers,
@@ -16,10 +18,12 @@ import {
 } from 'lucide-react';
 import {
   ADMIN_ARABIC_FONT_PRESETS,
+  ADMIN_EYE_COMFORT_PRESETS,
   AdminAppearanceConfig,
   AdminColorMode,
   AdminFontWeight,
   AdminTableDensity,
+  applyEyeComfortPresetToConfig,
   buildAdminAppearanceCssVars,
   buildAdminFontFromUrl,
   DEFAULT_ADMIN_APPEARANCE,
@@ -56,6 +60,13 @@ const DENSITY_OPTIONS: Array<{ value: AdminTableDensity; label: string; desc: st
   { value: 'comfortable', label: 'مريح (Comfortable)', desc: 'تباعد واسع وواضح' },
 ];
 
+const MODE_ICONS: Record<AdminColorMode, ReactNode> = {
+  dark: <Moon className="w-4 h-4 text-sky-400" />,
+  light: <Sun className="w-4 h-4 text-indigo-500" />,
+  soft_gray: <Contrast className="w-4 h-4 text-cyan-400" />,
+  comfortable_eye: <Coffee className="w-4 h-4 text-teal-400" />,
+};
+
 export function AdminAppearancePanel({
   appearance,
   navLayout,
@@ -71,12 +82,10 @@ export function AdminAppearancePanel({
   const [uploadingFont, setUploadingFont] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Sync external updates when user resets or remote Firestore snapshot changes
   useEffect(() => {
     setDraft(normalizeAdminAppearance(appearance));
   }, [appearance]);
 
-  // Load preview font stylesheet dynamically BEFORE applying globally to dashboard
   useEffect(() => {
     ensureAdminFontResources(draft, 'preview');
   }, [draft]);
@@ -93,8 +102,14 @@ export function AdminAppearancePanel({
     [navLayout]
   );
 
+  const activePreset = ADMIN_EYE_COMFORT_PRESETS[draft.colorMode] || ADMIN_EYE_COMFORT_PRESETS.dark;
+
   const updateDraft = (patch: Partial<AdminAppearanceConfig>) => {
     setDraft((prev) => normalizeAdminAppearance({ ...prev, ...patch }));
+  };
+
+  const handleSelectMode = (mode: AdminColorMode) => {
+    setDraft((prev) => applyEyeComfortPresetToConfig(prev, mode));
   };
 
   const handleApplyAndSave = async (targetConfig?: AdminAppearanceConfig) => {
@@ -105,8 +120,8 @@ export function AdminAppearancePanel({
       const syncedCloud = await syncAdminAppearanceToFirestore(saved, actorUid);
       onNotify(
         syncedCloud
-          ? 'تم تطبيق وحفظ مظهر لوحة الإدارة ومزامنته سحابياً بنجاح (معزول عن واجهة الموقع).'
-          : 'تم تطبيق وحفظ مظهر لوحة الإدارة على هذا الجهاز بنجاح (معزول عن واجهة الموقع).'
+          ? 'تم تطبيق وحفظ نظام راحة العين ومظهر لوحة الإدارة ومزامنته سحابياً.'
+          : 'تم تطبيق وحفظ نظام راحة العين ومظهر لوحة الإدارة على هذا الجهاز.'
       );
     } finally {
       setSaving(false);
@@ -129,7 +144,7 @@ export function AdminAppearancePanel({
     try {
       const customFont = await readAdminCustomFontFile(file);
       updateDraft({ fontFamily: 'custom', customFont });
-      onNotify(`تم تحميل الخط "${customFont.fileName}" للمعاينة — اضغط تطبيق وحفظ لتفعيله في اللوحة.`);
+      onNotify(`تم تحميل الخط "${customFont.fileName}" للمعاينة — اضغط تطبيق وحفظ لتفعيله.`);
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'تعذر قراءة ملف الخط');
     } finally {
@@ -147,6 +162,121 @@ export function AdminAppearancePanel({
       onNotify(err instanceof Error ? err.message : 'رابط غير صالح');
     }
   };
+
+  const colorPickers: Array<{
+    key: keyof Pick<
+      AdminAppearanceConfig,
+      | 'pageBgColor'
+      | 'cardBgColor'
+      | 'sidebarBgColor'
+      | 'primaryTextColor'
+      | 'secondaryTextColor'
+      | 'accentColor'
+    >;
+    label: string;
+    hint: string;
+    presetValue: string;
+  }> = [
+    {
+      key: 'pageBgColor',
+      label: 'لون خلفية الصفحة',
+      hint: 'الخلفية العامة لمساحة العمل',
+      presetValue: activePreset.pageBgColor,
+    },
+    {
+      key: 'cardBgColor',
+      label: 'لون البطاقات واللوحات',
+      hint: 'خلفية البطاقات والجداول والحاويات',
+      presetValue: activePreset.cardBgColor,
+    },
+    {
+      key: 'sidebarBgColor',
+      label: 'لون القائمة الجانبية',
+      hint: 'شريط التنقل الجانبي في اللوحة',
+      presetValue: activePreset.sidebarBgColor,
+    },
+    {
+      key: 'primaryTextColor',
+      label: 'لون النصوص الرئيسية',
+      hint: 'العناوين والنصوص الأساسية',
+      presetValue: activePreset.primaryTextColor,
+    },
+    {
+      key: 'secondaryTextColor',
+      label: 'لون النصوص الثانوية',
+      hint: 'الشروحات والملاحظات والوصف',
+      presetValue: activePreset.secondaryTextColor,
+    },
+    {
+      key: 'accentColor',
+      label: 'لون التمييز الهادئ',
+      hint: 'الروابط النشطة والأزرار المختارة (بعيداً عن الأحمر/الأصفر الصارخ)',
+      presetValue: activePreset.accentColor,
+    },
+  ];
+
+  const eyeSliders: Array<{
+    key: keyof Pick<
+      AdminAppearanceConfig,
+      | 'contrastLevel'
+      | 'brightnessLevel'
+      | 'shadowIntensity'
+      | 'borderContrast'
+      | 'elementSpacingPx'
+    >;
+    label: string;
+    hint: string;
+    unit: string;
+    min: number;
+    max: number;
+    def: number;
+  }> = [
+    {
+      key: 'contrastLevel',
+      label: 'مستوى التباين',
+      hint: 'تخفيف أو رفع وضوح الفوارق بين النصوص والخلفيات',
+      unit: '%',
+      min: 80,
+      max: 115,
+      def: activePreset.contrastLevel,
+    },
+    {
+      key: 'brightnessLevel',
+      label: 'درجة سطوع الألوان',
+      hint: 'تقليل السطوع المجهد للعين أثناء العمل الليلي',
+      unit: '%',
+      min: 80,
+      max: 110,
+      def: activePreset.brightnessLevel,
+    },
+    {
+      key: 'shadowIntensity',
+      label: 'كثافة الظلال',
+      hint: 'درجة بروز البطاقات بظلال ناعمة',
+      unit: '%',
+      min: 0,
+      max: 100,
+      def: activePreset.shadowIntensity,
+    },
+    {
+      key: 'borderContrast',
+      label: 'حدة الحدود والفواصل',
+      hint: 'وضوح خطوط الفصل بين البطاقات والخلايا',
+      unit: '%',
+      min: 0,
+      max: 100,
+      def: activePreset.borderContrast,
+    },
+    {
+      key: 'elementSpacingPx',
+      label: 'المسافات بين العناصر',
+      hint: 'الفراغ المريح بين الأقسام والبطاقات',
+      unit: 'px',
+      min: 8,
+      max: 28,
+      def: activePreset.elementSpacingPx,
+    },
+  ];
 
   const sizeControls: Array<{
     key: keyof Pick<
@@ -307,10 +437,294 @@ export function AdminAppearancePanel({
     },
   ];
 
-  const isPreviewLight = draft.colorMode === 'light';
-
   const renderSection = (subId: string) => {
     switch (subId) {
+      case 'eye_comfort_modes':
+        return (
+          <div
+            key="eye_comfort_modes"
+            className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 space-y-4"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+              <div className="flex items-center gap-2">
+                <Eye className="w-5 h-5 rtv-admin-accent-text" />
+                <h3 className="font-display text-base font-extrabold text-white">
+                  1. أوضاع راحة العين للوحة الإدارة (Eye Comfort Modes)
+                </h3>
+              </div>
+              <span className="text-[11px] font-bold text-[#b7c9ef]">
+                ألوان هادئة بدون بياض ساطع أو أحمر صارخ
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5">
+              {(Object.keys(ADMIN_EYE_COMFORT_PRESETS) as AdminColorMode[]).map((modeId) => {
+                const preset = ADMIN_EYE_COMFORT_PRESETS[modeId];
+                const active = draft.colorMode === modeId;
+                return (
+                  <button
+                    key={modeId}
+                    type="button"
+                    onClick={() => handleSelectMode(modeId)}
+                    className={`rounded-2xl border p-4 text-right transition-all cursor-pointer flex flex-col justify-between gap-3 ${
+                      active
+                        ? 'rtv-admin-accent-soft ring-2 ring-[var(--rtv-admin-accent)]'
+                        : 'bg-[#1a242e]/65 border-white/10 hover:border-white/25'
+                    }`}
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-[#0c1821] border border-white/10">
+                          {MODE_ICONS[modeId]}
+                        </span>
+                        {/* Miniature Swatch Bar */}
+                        <div className="flex items-center gap-1 rounded-lg bg-black/20 p-1">
+                          <span
+                            className="h-3.5 w-3.5 rounded-full border border-white/20"
+                            style={{ backgroundColor: preset.pageBgColor }}
+                            title="خلفية الصفحة"
+                          />
+                          <span
+                            className="h-3.5 w-3.5 rounded-full border border-white/20"
+                            style={{ backgroundColor: preset.cardBgColor }}
+                            title="البطاقات"
+                          />
+                          <span
+                            className="h-3.5 w-3.5 rounded-full border border-white/20"
+                            style={{ backgroundColor: preset.accentColor }}
+                            title="لون التمييز"
+                          />
+                        </div>
+                      </div>
+                      <p className="text-xs font-extrabold text-white">{preset.label}</p>
+                      <p className="text-[11px] text-[#b7c9ef] leading-relaxed">{preset.desc}</p>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] font-bold">
+                      <span className={active ? 'rtv-admin-accent-text' : 'text-[#b7c9ef]'}>
+                        {active ? 'محدد حالياً' : 'انقر لتفعيل الوضع'}
+                      </span>
+                      <span className="font-latin text-[#b7c9ef]">
+                        {preset.brightnessLevel}% / {preset.contrastLevel}%
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+
+      case 'palette_controls':
+        return (
+          <div
+            key="palette_controls"
+            className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 space-y-4"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+              <div className="flex items-center gap-2">
+                <Palette className="w-5 h-5 text-sky-400" />
+                <h3 className="font-display text-base font-extrabold text-white">
+                  2. تخصيص الألوان الدقيقة للوحة (الخلفية، البطاقات، القائمة، النصوص)
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleSelectMode(draft.colorMode)}
+                className="rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 px-3 py-1.5 text-[11px] font-bold text-[#b7c9ef] hover:text-white cursor-pointer"
+              >
+                إعادة ألوان الوضع الحالي
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {colorPickers.map((cp) => {
+                const val = draft[cp.key];
+                return (
+                  <div
+                    key={cp.key}
+                    className="rounded-2xl bg-[#1a242e]/80 border border-white/[0.08] p-4 flex items-center justify-between gap-3"
+                  >
+                    <div className="min-w-0 space-y-0.5">
+                      <p className="text-xs font-extrabold text-white">{cp.label}</p>
+                      <p className="text-[11px] text-[#b7c9ef] truncate">{cp.hint}</p>
+                      <div className="flex items-center gap-2 pt-1">
+                        <span className="font-latin text-[11px] font-bold text-[#b7c9ef] uppercase">
+                          {val}
+                        </span>
+                        {val !== cp.presetValue && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateDraft({ [cp.key]: cp.presetValue } as Partial<AdminAppearanceConfig>)
+                            }
+                            className="text-[10px] font-bold rtv-admin-accent-text hover:underline cursor-pointer"
+                          >
+                            افتراضي
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <input
+                      type="color"
+                      aria-label={cp.label}
+                      value={val}
+                      onChange={(e) =>
+                        updateDraft({ [cp.key]: e.target.value } as Partial<AdminAppearanceConfig>)
+                      }
+                      className="h-10 w-12 rounded-xl border border-white/15 bg-transparent cursor-pointer shrink-0 p-0.5"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+
+      case 'contrast_spacing':
+        return (
+          <div
+            key="contrast_spacing"
+            className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 space-y-5"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+              <div className="flex items-center gap-2">
+                <SlidersHorizontal className="w-5 h-5 text-emerald-400" />
+                <h3 className="font-display text-base font-extrabold text-white">
+                  3. التباين، السطوع، الظلال، الحدود، التخطيط، وكثافة الجداول
+                </h3>
+              </div>
+              <span className="text-[11px] font-bold text-[#b7c9ef]">
+                تحكم متكامل لتقليل الإجهاد البصري
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {eyeSliders.map((ctrl) => {
+                const val = draft[ctrl.key];
+                return (
+                  <div
+                    key={ctrl.key}
+                    className="rounded-2xl bg-[#1a242e]/80 border border-white/[0.07] p-4 space-y-2.5"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-extrabold text-white">{ctrl.label}</p>
+                        <p className="text-[11px] text-[#b7c9ef] mt-0.5">{ctrl.hint}</p>
+                      </div>
+                      <span className="font-latin shrink-0 rounded-lg bg-[#0c1821] border border-white/10 px-2.5 py-1 text-xs font-black rtv-admin-accent-text tabular-nums">
+                        {val}
+                        {ctrl.unit}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="font-latin text-[10px] text-[#b7c9ef] w-7">{ctrl.min}</span>
+                      <input
+                        type="range"
+                        min={ctrl.min}
+                        max={ctrl.max}
+                        step={1}
+                        value={val}
+                        onChange={(e) =>
+                          updateDraft({
+                            [ctrl.key]: Number(e.target.value),
+                          } as Partial<AdminAppearanceConfig>)
+                        }
+                        className="flex-1 accent-[var(--rtv-admin-accent)] cursor-pointer"
+                      />
+                      <span className="font-latin text-[10px] text-[#b7c9ef] w-7 text-left">
+                        {ctrl.max}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateDraft({ [ctrl.key]: ctrl.def } as Partial<AdminAppearanceConfig>)
+                        }
+                        className="rounded-lg bg-[#0c1821] hover:bg-white/10 border border-white/10 px-2 py-1 text-[10px] font-bold text-[#b7c9ef] hover:text-white cursor-pointer"
+                      >
+                        افتراضي
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              <div className="rounded-2xl bg-[#1a242e]/80 border border-white/[0.07] p-4 space-y-3">
+                <p className="text-xs font-extrabold text-white">كثافة الجداول (Table Density)</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {DENSITY_OPTIONS.map((opt) => {
+                    const active = draft.tableDensity === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => updateDraft({ tableDensity: opt.value })}
+                        className={`rounded-xl border p-2 text-center transition-all cursor-pointer ${
+                          active
+                            ? 'rtv-admin-accent-bg border-transparent shadow'
+                            : 'bg-[#0c1821] border-white/10 text-[#b7c9ef] hover:text-white'
+                        }`}
+                      >
+                        <p className="text-[11px] font-extrabold">{opt.label.split(' ')[0]}</p>
+                        <p className="text-[9px] opacity-80 mt-0.5">{opt.desc}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-white/10">
+              {layoutSliders.map((ctrl) => {
+                const val = draft[ctrl.key];
+                return (
+                  <div
+                    key={ctrl.key}
+                    className="rounded-2xl bg-[#1a242e]/80 border border-white/[0.07] p-4 space-y-2.5"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-extrabold text-white">{ctrl.label}</p>
+                        <p className="text-[11px] text-[#b7c9ef] mt-0.5">{ctrl.hint}</p>
+                      </div>
+                      <span className="font-latin shrink-0 rounded-lg bg-[#0c1821] border border-white/10 px-2.5 py-1 text-xs font-black rtv-admin-accent-text tabular-nums">
+                        {val}px
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="font-latin text-[10px] text-[#b7c9ef] w-6">{ctrl.min}</span>
+                      <input
+                        type="range"
+                        min={ctrl.min}
+                        max={ctrl.max}
+                        step={1}
+                        value={val}
+                        onChange={(e) =>
+                          updateDraft({
+                            [ctrl.key]: Number(e.target.value),
+                          } as Partial<AdminAppearanceConfig>)
+                        }
+                        className="flex-1 accent-[var(--rtv-admin-accent)] cursor-pointer"
+                      />
+                      <span className="font-latin text-[10px] text-[#b7c9ef] w-6 text-left">
+                        {ctrl.max}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateDraft({ [ctrl.key]: ctrl.def } as Partial<AdminAppearanceConfig>)
+                        }
+                        className="rounded-lg bg-[#0c1821] hover:bg-white/10 border border-white/10 px-2 py-1 text-[10px] font-bold text-[#b7c9ef] hover:text-white cursor-pointer"
+                      >
+                        افتراضي
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+
       case 'font_family':
         return (
           <div
@@ -319,12 +733,12 @@ export function AdminAppearancePanel({
           >
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
               <div className="flex items-center gap-2">
-                <Type className="w-5 h-5 text-[#D92321]" />
+                <Type className="w-5 h-5 rtv-admin-accent-text" />
                 <h3 className="font-display text-base font-extrabold text-white">
-                  1. خط لوحة الإدارة (معاينة قبل التطبيق)
+                  4. خط ووزن نصوص لوحة الإدارة
                 </h3>
               </div>
-              <span className="rounded-lg bg-[#D92321]/15 border border-[#D92321]/35 px-2.5 py-0.5 text-[11px] font-bold text-white">
+              <span className="rounded-lg rtv-admin-accent-soft border px-2.5 py-0.5 text-[11px] font-bold text-white">
                 {draft.fontFamily === 'custom' && draft.customFont
                   ? draft.customFont.fileName
                   : draft.fontFamily}
@@ -346,7 +760,7 @@ export function AdminAppearancePanel({
                     }
                     updateDraft({ fontFamily: val });
                   }}
-                  className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs font-bold text-white focus:border-[#D92321] focus:outline-none"
+                  className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs font-bold text-white focus:outline-none"
                 >
                   {ADMIN_ARABIC_FONT_PRESETS.map((preset) => (
                     <option key={preset.id} value={preset.id}>
@@ -358,20 +772,26 @@ export function AdminAppearancePanel({
                   )}
                 </select>
 
-                {/* Instant Font Specimen Before Applying */}
-                <div
-                  style={{ fontFamily: previewFontStack, fontWeight: draft.fontWeight }}
-                  className="rounded-2xl bg-[#1a242e]/80 border border-white/10 p-4 space-y-1.5"
-                >
-                  <span className="text-[10px] font-bold text-[#f9c400]">
-                    معاينة الخط المختار قبل التطبيق:
-                  </span>
-                  <p className="text-base font-extrabold text-white">
-                    إدارة منصة RahaL TV — لوحة تحكم سريعة وواضحة 2026
-                  </p>
-                  <p className="text-xs text-[#b7c9ef]">
-                    الأرقام والبيانات: <span className="tabular-nums">12,480 مشاهدة · IMDb 8.9 · 1080p</span>
-                  </p>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                  {WEIGHT_OPTIONS.map((w) => {
+                    const active = draft.fontWeight === w.value;
+                    return (
+                      <button
+                        key={w.value}
+                        type="button"
+                        onClick={() => updateDraft({ fontWeight: w.value })}
+                        style={{ fontFamily: previewFontStack, fontWeight: w.value }}
+                        className={`rounded-xl border p-2 text-center transition-all cursor-pointer ${
+                          active
+                            ? 'rtv-admin-accent-bg border-transparent shadow'
+                            : 'bg-[#1a242e]/80 border-white/10 text-[#b7c9ef] hover:text-white'
+                        }`}
+                      >
+                        <p className="text-[11px] font-bold">{w.desc}</p>
+                        <p className="font-latin text-[10px] opacity-80">{w.value}</p>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -379,14 +799,14 @@ export function AdminAppearancePanel({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <p className="text-xs font-extrabold text-white flex items-center gap-1.5">
-                      <FileUp className="w-4 h-4 text-[#f9c400]" />
+                      <FileUp className="w-4 h-4 rtv-admin-accent-text" />
                       <span>خط مخصص للوحة الإدارة (رفع ملف أو رابط)</span>
                     </p>
                     <p className="text-[11px] text-[#b7c9ef] mt-0.5">
                       يدعم .woff2 / .woff / .ttf / .otf أو رابط Google Fonts CSS
                     </p>
                   </div>
-                  <label className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#f40612] px-3.5 py-2 text-xs font-extrabold text-white shadow cursor-pointer shrink-0">
+                  <label className="inline-flex items-center gap-1.5 rounded-xl rtv-admin-accent-bg px-3.5 py-2 text-xs font-extrabold shadow cursor-pointer shrink-0">
                     <FileUp className="w-3.5 h-3.5" />
                     <span>{uploadingFont ? 'جاري التحميل...' : 'رفع خط'}</span>
                     <input
@@ -400,12 +820,12 @@ export function AdminAppearancePanel({
                 </div>
 
                 {draft.customFont && (
-                  <div className="flex items-center justify-between gap-2 rounded-xl bg-[#0c1821] border border-[#4CAF50]/35 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2 rounded-xl bg-[#0c1821] border border-emerald-500/35 px-3 py-2">
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-white truncate">
                         {draft.customFont.fileName}
                       </p>
-                      <p className="font-latin text-[10px] text-[#4CAF50] uppercase">
+                      <p className="font-latin text-[10px] text-emerald-400 uppercase">
                         {draft.customFont.format}
                       </p>
                     </div>
@@ -414,7 +834,7 @@ export function AdminAppearancePanel({
                         <button
                           type="button"
                           onClick={() => updateDraft({ fontFamily: 'custom' })}
-                          className="rounded-lg bg-[#4CAF50] px-2.5 py-1 text-[10px] font-extrabold text-white cursor-pointer"
+                          className="rounded-lg bg-emerald-600 px-2.5 py-1 text-[10px] font-extrabold text-white cursor-pointer"
                         >
                           تحديد
                         </button>
@@ -446,7 +866,7 @@ export function AdminAppearancePanel({
                     value={urlInput}
                     onChange={(e) => setUrlInput(e.target.value)}
                     placeholder="https://fonts.googleapis.com/css2?family=... أو .woff2"
-                    className="flex-1 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-[11px] text-white focus:border-[#D92321] focus:outline-none font-latin"
+                    className="flex-1 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-[11px] text-white focus:outline-none font-latin"
                   />
                   <button
                     type="button"
@@ -454,7 +874,7 @@ export function AdminAppearancePanel({
                     onClick={handleApplyUrlFont}
                     className="inline-flex items-center gap-1 rounded-xl bg-[#0c1821] hover:bg-white/10 disabled:opacity-40 border border-white/15 px-3 py-2 text-[11px] font-bold text-white cursor-pointer shrink-0"
                   >
-                    <Link2 className="w-3.5 h-3.5 text-[#f9c400]" />
+                    <Link2 className="w-3.5 h-3.5 rtv-admin-accent-text" />
                     <span>معاينة الرابط</span>
                   </button>
                 </div>
@@ -471,9 +891,9 @@ export function AdminAppearancePanel({
           >
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
               <div className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-[#f9c400]" />
+                <Sparkles className="w-5 h-5 rtv-admin-accent-text" />
                 <h3 className="font-display text-base font-extrabold text-white">
-                  2. أحجام الخطوط التفصيلية ( بالـ px )
+                  5. أحجام الخطوط التفصيلية (بالـ px)
                 </h3>
               </div>
               <span className="text-[11px] font-bold text-[#b7c9ef]">
@@ -494,7 +914,7 @@ export function AdminAppearancePanel({
                         <p className="text-xs font-extrabold text-white">{ctrl.label}</p>
                         <p className="text-[11px] text-[#b7c9ef] mt-0.5">{ctrl.hint}</p>
                       </div>
-                      <span className="font-latin shrink-0 rounded-lg bg-[#0c1821] border border-white/10 px-2.5 py-1 text-xs font-black text-[#f9c400] tabular-nums">
+                      <span className="font-latin shrink-0 rounded-lg bg-[#0c1821] border border-white/10 px-2.5 py-1 text-xs font-black rtv-admin-accent-text tabular-nums">
                         {val}px
                       </span>
                     </div>
@@ -512,195 +932,7 @@ export function AdminAppearancePanel({
                             [ctrl.key]: Number(e.target.value),
                           } as Partial<AdminAppearanceConfig>)
                         }
-                        className="flex-1 accent-[#D92321] cursor-pointer"
-                      />
-                      <span className="font-latin text-[10px] text-[#b7c9ef] w-6 text-left">
-                        {ctrl.max}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          updateDraft({ [ctrl.key]: ctrl.def } as Partial<AdminAppearanceConfig>)
-                        }
-                        className="rounded-lg bg-[#0c1821] hover:bg-white/10 border border-white/10 px-2 py-1 text-[10px] font-bold text-[#b7c9ef] hover:text-white cursor-pointer"
-                      >
-                        افتراضي
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-
-      case 'font_weight':
-        return (
-          <div
-            key="font_weight"
-            className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 space-y-4"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
-              <div className="flex items-center gap-2">
-                <SlidersHorizontal className="w-5 h-5 text-[#4CAF50]" />
-                <h3 className="font-display text-base font-extrabold text-white">
-                  3. وزن الخط العام للوحة الإدارة
-                </h3>
-              </div>
-              <span className="font-latin text-xs font-bold text-[#f9c400]">
-                {draft.fontWeight}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-              {WEIGHT_OPTIONS.map((w) => {
-                const active = draft.fontWeight === w.value;
-                return (
-                  <button
-                    key={w.value}
-                    type="button"
-                    onClick={() => updateDraft({ fontWeight: w.value })}
-                    style={{ fontFamily: previewFontStack, fontWeight: w.value }}
-                    className={`rounded-2xl border p-3.5 text-center transition-all cursor-pointer ${
-                      active
-                        ? 'bg-[#D92321] border-[#D92321] text-white shadow-lg'
-                        : 'bg-[#1a242e]/80 border-white/10 text-[#b7c9ef] hover:text-white hover:border-white/25'
-                    }`}
-                  >
-                    <p className="text-xs font-bold">{w.desc}</p>
-                    <p className="font-latin text-[11px] opacity-85 mt-1">{w.label}</p>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        );
-
-      case 'layout_theme':
-        return (
-          <div
-            key="layout_theme"
-            className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 space-y-5"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
-              <div className="flex items-center gap-2">
-                <Layers className="w-5 h-5 text-sky-400" />
-                <h3 className="font-display text-base font-extrabold text-white">
-                  4. المظهر (داكن / فاتح) وإعدادات التخطيط والبطاقات
-                </h3>
-              </div>
-              <span className="text-[11px] font-bold text-[#b7c9ef]">
-                لا يؤثر على ألوان أو مظهر الموقع العام للزوار
-              </span>
-            </div>
-
-            {/* Color Mode & Table Density Row */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="rounded-2xl bg-[#1a242e]/80 border border-white/[0.07] p-4 space-y-3">
-                <p className="text-xs font-extrabold text-white">وضع ألوان لوحة الإدارة</p>
-                <div className="grid grid-cols-2 gap-2.5">
-                  {(
-                    [
-                      {
-                        id: 'dark',
-                        label: 'الوضع الداكن',
-                        desc: 'ليلي مريح للإدارة',
-                        icon: <Moon className="w-4 h-4 text-[#f9c400]" />,
-                      },
-                      {
-                        id: 'light',
-                        label: 'الوضع الفاتح',
-                        desc: 'نهاري عالي الوضوح',
-                        icon: <Sun className="w-4 h-4 text-amber-400" />,
-                      },
-                    ] as Array<{
-                      id: AdminColorMode;
-                      label: string;
-                      desc: string;
-                      icon: ReactNode;
-                    }>
-                  ).map((mode) => {
-                    const active = draft.colorMode === mode.id;
-                    return (
-                      <button
-                        key={mode.id}
-                        type="button"
-                        onClick={() => updateDraft({ colorMode: mode.id })}
-                        className={`flex items-center gap-2.5 rounded-xl border p-3 text-right transition-all cursor-pointer ${
-                          active
-                            ? 'bg-[#D92321] border-[#D92321] text-white shadow-md'
-                            : 'bg-[#0c1821] border-white/10 text-[#b7c9ef] hover:text-white'
-                        }`}
-                      >
-                        {mode.icon}
-                        <div>
-                          <p className="text-xs font-extrabold">{mode.label}</p>
-                          <p className="text-[10px] opacity-80">{mode.desc}</p>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="rounded-2xl bg-[#1a242e]/80 border border-white/[0.07] p-4 space-y-3">
-                <p className="text-xs font-extrabold text-white">كثافة الجداول (Table Density)</p>
-                <div className="grid grid-cols-3 gap-2">
-                  {DENSITY_OPTIONS.map((opt) => {
-                    const active = draft.tableDensity === opt.value;
-                    return (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        onClick={() => updateDraft({ tableDensity: opt.value })}
-                        className={`rounded-xl border p-2.5 text-center transition-all cursor-pointer ${
-                          active
-                            ? 'bg-[#4CAF50] border-[#4CAF50] text-white shadow-md'
-                            : 'bg-[#0c1821] border-white/10 text-[#b7c9ef] hover:text-white'
-                        }`}
-                      >
-                        <p className="text-[11px] font-extrabold">{opt.label.split(' ')[0]}</p>
-                        <p className="text-[10px] opacity-80 mt-0.5">{opt.desc}</p>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            {/* Layout Dimension Sliders */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {layoutSliders.map((ctrl) => {
-                const val = draft[ctrl.key];
-                return (
-                  <div
-                    key={ctrl.key}
-                    className="rounded-2xl bg-[#1a242e]/80 border border-white/[0.07] p-4 space-y-2.5"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <p className="text-xs font-extrabold text-white">{ctrl.label}</p>
-                        <p className="text-[11px] text-[#b7c9ef] mt-0.5">{ctrl.hint}</p>
-                      </div>
-                      <span className="font-latin shrink-0 rounded-lg bg-[#0c1821] border border-white/10 px-2.5 py-1 text-xs font-black text-[#f9c400] tabular-nums">
-                        {val}px
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-3">
-                      <span className="font-latin text-[10px] text-[#b7c9ef] w-6">{ctrl.min}</span>
-                      <input
-                        type="range"
-                        min={ctrl.min}
-                        max={ctrl.max}
-                        step={1}
-                        value={val}
-                        onChange={(e) =>
-                          updateDraft({
-                            [ctrl.key]: Number(e.target.value),
-                          } as Partial<AdminAppearanceConfig>)
-                        }
-                        className="flex-1 accent-[#D92321] cursor-pointer"
+                        className="flex-1 accent-[var(--rtv-admin-accent)] cursor-pointer"
                       />
                       <span className="font-latin text-[10px] text-[#b7c9ef] w-6 text-left">
                         {ctrl.max}
@@ -731,17 +963,16 @@ export function AdminAppearancePanel({
           >
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
               <div className="flex items-center gap-2">
-                <Eye className="w-5 h-5 text-[#f9c400]" />
+                <Eye className="w-5 h-5 rtv-admin-accent-text" />
                 <h3 className="font-display text-base font-extrabold text-white">
-                  5. المعاينة الحية لمظهر لوحة الإدارة (فورية بدون إعادة تحميل)
+                  6. المعاينة الحية لمظهر لوحة الإدارة والراحة البصرية
                 </h3>
               </div>
-              <span className="text-[11px] font-bold text-[#4CAF50]">
+              <span className="text-[11px] font-bold text-emerald-400">
                 {isDirty ? 'معاينة تعديلات غير محفوظة بعد' : 'مطابق للمظهر النشط حالياً'}
               </span>
             </div>
 
-            {/* Scoped Preview Box */}
             <div
               data-admin-theme={draft.colorMode}
               style={{
@@ -749,29 +980,34 @@ export function AdminAppearancePanel({
                 fontFamily: previewFontStack,
                 fontWeight: draft.fontWeight,
                 borderRadius: `${draft.borderRadiusPx}px`,
+                backgroundColor: draft.pageBgColor,
+                color: draft.primaryTextColor,
+                borderColor: previewCssVars['--rtv-admin-border'],
+                filter: `contrast(${draft.contrastLevel}%) brightness(${draft.brightnessLevel}%)`,
               }}
-              className={`rtv-admin-preview border p-5 transition-all space-y-5 ${
-                isPreviewLight
-                  ? 'bg-[#f1f5f9] border-slate-300 text-slate-900'
-                  : 'bg-[#06131c] border-white/15 text-white'
-              }`}
+              className="rtv-admin-preview border p-5 transition-all"
             >
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+              <div
+                className="grid grid-cols-1 lg:grid-cols-12 items-start"
+                style={{ gap: `${draft.elementSpacingPx}px` }}
+              >
                 {/* Mini Sidebar Preview */}
                 <div
                   style={{
                     borderRadius: `${draft.borderRadiusPx}px`,
                     padding: `${Math.max(10, Math.round(draft.cardPaddingPx * 0.65))}px`,
+                    backgroundColor: draft.sidebarBgColor,
+                    borderColor: previewCssVars['--rtv-admin-border'],
+                    boxShadow: previewCssVars['--rtv-admin-shadow'],
                   }}
-                  className={`lg:col-span-4 border space-y-2 ${
-                    isPreviewLight
-                      ? 'bg-white border-slate-200'
-                      : 'bg-[#0c1821] border-white/10'
-                  }`}
+                  className="lg:col-span-4 border space-y-2"
                 >
                   <p
-                    style={{ fontSize: `${draft.secondaryTextPx}px` }}
-                    className={`font-bold ${isPreviewLight ? 'text-slate-500' : 'text-[#b7c9ef]'}`}
+                    style={{
+                      fontSize: `${draft.secondaryTextPx}px`,
+                      color: draft.secondaryTextColor,
+                    }}
+                    className="font-bold"
                   >
                     معاينة القائمة الجانبية ({draft.sidebarWidthPx}px)
                   </p>
@@ -789,14 +1025,15 @@ export function AdminAppearancePanel({
                           style={{
                             fontSize: `${draft.sidebarItemPx}px`,
                             borderRadius: `${Math.min(draft.borderRadiusPx, 14)}px`,
+                            backgroundColor:
+                              i === 0
+                                ? previewCssVars['--rtv-admin-accent-soft']
+                                : previewCssVars['--rtv-admin-surface-2'],
+                            color: i === 0 ? draft.accentColor : draft.secondaryTextColor,
+                            borderRight:
+                              i === 0 ? `3px solid ${draft.accentColor}` : '3px solid transparent',
                           }}
-                          className={`flex items-center gap-2 px-3 py-2 font-bold ${
-                            i === 0
-                              ? 'bg-[#D92321] text-white'
-                              : isPreviewLight
-                                ? 'bg-slate-100 text-slate-700'
-                                : 'bg-[#1a242e] text-[#b7c9ef]'
-                          }`}
+                          className="flex items-center gap-2 px-3 py-2 font-bold"
                         >
                           <Layers
                             style={{
@@ -816,183 +1053,76 @@ export function AdminAppearancePanel({
                   style={{
                     borderRadius: `${draft.borderRadiusPx}px`,
                     padding: `${draft.cardPaddingPx}px`,
+                    backgroundColor: draft.cardBgColor,
+                    borderColor: previewCssVars['--rtv-admin-border'],
+                    boxShadow: previewCssVars['--rtv-admin-shadow'],
                   }}
-                  className={`lg:col-span-8 border space-y-4 ${
-                    isPreviewLight
-                      ? 'bg-white border-slate-200'
-                      : 'bg-[#0c1821] border-white/10'
-                  }`}
+                  className="lg:col-span-8 border space-y-4"
                 >
                   <div className="space-y-1">
                     <div
-                      style={{ fontSize: `${draft.headingMainPx}px` }}
+                      style={{ fontSize: `${draft.headingMainPx}px`, color: draft.primaryTextColor }}
                       className="font-extrabold leading-snug"
                     >
                       عنوان رئيسي: مركز إدارة محتوى RahaL TV
                     </div>
                     <div
-                      style={{ fontSize: `${draft.headingSectionPx}px` }}
-                      className={`font-bold ${isPreviewLight ? 'text-slate-800' : 'text-[#f9c400]'}`}
+                      style={{ fontSize: `${draft.headingSectionPx}px`, color: draft.accentColor }}
+                      className="font-bold"
                     >
-                      عنوان فرعي: إعدادات البطاقات والجداول والحقول
+                      وضع المعاينة: {activePreset.shortLabel} — تباين مريح للقراءة
                     </div>
-                    <p style={{ fontSize: `${draft.bodyTextPx}px` }} className="leading-relaxed">
-                      هذا نص عادي يوضح وضوح القراءة داخل لوحة الإدارة بالخط المختار ({draft.fontFamily}
-                      ) ووزن الخط ({draft.fontWeight}).
+                    <p
+                      style={{ fontSize: `${draft.bodyTextPx}px`, color: draft.primaryTextColor }}
+                      className="leading-relaxed"
+                    >
+                      هذا نص تجريبي يوضح وضوح القراءة وتوازن الألوان داخل لوحة الإدارة بالخط (
+                      {draft.fontFamily}) ووزن الخط ({draft.fontWeight}).
                     </p>
                     <p
-                      style={{ fontSize: `${draft.secondaryTextPx}px` }}
-                      className={isPreviewLight ? 'text-slate-500' : 'text-[#b7c9ef]'}
+                      style={{
+                        fontSize: `${draft.secondaryTextPx}px`,
+                        color: draft.secondaryTextColor,
+                      }}
                     >
-                      نص فرعي ووصفي: آخر مزامنة سحابية ناجحة منذ دقيقتين — استدارة الحواف{' '}
-                      {draft.borderRadiusPx}px.
+                      نص ثانوي: التباين {draft.contrastLevel}% · السطوع {draft.brightnessLevel}% ·
+                      المسافة بين العناصر {draft.elementSpacingPx}px.
                     </p>
                   </div>
 
-                  {/* Card Title + Input + Button */}
-                  <div
-                    style={{
-                      borderRadius: `${Math.min(draft.borderRadiusPx, 18)}px`,
-                    }}
-                    className={`border p-3.5 space-y-3 ${
-                      isPreviewLight
-                        ? 'bg-slate-50 border-slate-200'
-                        : 'bg-[#1a242e]/80 border-white/10'
-                    }`}
-                  >
-                    <div
-                      style={{ fontSize: `${draft.cardTitlePx}px` }}
-                      className="font-extrabold"
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <input
+                      type="text"
+                      readOnly
+                      value="حقل إدخال مريح للعين — ابحث عن عمل..."
+                      style={{
+                        fontSize: `${draft.inputTextPx}px`,
+                        borderRadius: `${Math.min(draft.borderRadiusPx, 14)}px`,
+                        backgroundColor: previewCssVars['--rtv-admin-surface-2'],
+                        borderColor: previewCssVars['--rtv-admin-border'],
+                        color: draft.primaryTextColor,
+                      }}
+                      className="flex-1 min-w-[200px] border px-3.5 py-2"
+                    />
+                    <button
+                      type="button"
+                      style={{
+                        fontSize: `${draft.buttonTextPx}px`,
+                        minHeight: `${draft.buttonHeightPx}px`,
+                        borderRadius: `${Math.min(draft.borderRadiusPx, 14)}px`,
+                        backgroundColor: draft.accentColor,
+                        color: '#ffffff',
+                      }}
+                      className="rtv-admin-fixed-btn inline-flex items-center gap-1.5 px-4 font-extrabold shadow cursor-default"
                     >
-                      عنوان البطاقة التجريبية ({draft.cardTitlePx}px)
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2.5">
-                      <input
-                        type="text"
-                        readOnly
-                        value="حقل إدخال تجريبي — ابحث عن فيلم أو مسلسل..."
+                      <CheckCircle2
                         style={{
-                          fontSize: `${draft.inputTextPx}px`,
-                          borderRadius: `${Math.min(draft.borderRadiusPx, 14)}px`,
+                          width: `${draft.iconSizePx}px`,
+                          height: `${draft.iconSizePx}px`,
                         }}
-                        className={`flex-1 min-w-[200px] border px-3.5 py-2 ${
-                          isPreviewLight
-                            ? 'bg-white border-slate-300 text-slate-900'
-                            : 'bg-[#0c1821] border-white/15 text-white'
-                        }`}
                       />
-                      <button
-                        type="button"
-                        style={{
-                          fontSize: `${draft.buttonTextPx}px`,
-                          minHeight: `${draft.buttonHeightPx}px`,
-                          borderRadius: `${Math.min(draft.borderRadiusPx, 14)}px`,
-                        }}
-                        className="rtv-admin-fixed-btn inline-flex items-center gap-1.5 bg-[#D92321] px-4 font-extrabold text-white shadow cursor-default"
-                      >
-                        <CheckCircle2
-                          style={{
-                            width: `${draft.iconSizePx}px`,
-                            height: `${draft.iconSizePx}px`,
-                          }}
-                        />
-                        <span>زر تجريبي ({draft.buttonHeightPx}px)</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Sample Table */}
-                  <div
-                    style={{ borderRadius: `${Math.min(draft.borderRadiusPx, 16)}px` }}
-                    className={`overflow-hidden border ${
-                      isPreviewLight ? 'border-slate-200' : 'border-white/10'
-                    }`}
-                  >
-                    <table className="w-full text-right">
-                      <thead
-                        className={
-                          isPreviewLight
-                            ? 'bg-slate-100 text-slate-700'
-                            : 'bg-[#1a242e] text-[#b7c9ef]'
-                        }
-                      >
-                        <tr>
-                          {['العنوان', 'النوع', 'الجودة', 'الحالة'].map((h) => (
-                            <th
-                              key={h}
-                              style={{
-                                fontSize: `${draft.tableTextPx}px`,
-                                paddingTop: previewCssVars['--rtv-admin-table-py'],
-                                paddingBottom: previewCssVars['--rtv-admin-table-py'],
-                                paddingInline: previewCssVars['--rtv-admin-table-px'],
-                              }}
-                              className="font-extrabold"
-                            >
-                              {h}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody
-                        className={
-                          isPreviewLight
-                            ? 'divide-y divide-slate-200 bg-white'
-                            : 'divide-y divide-white/10 bg-[#0c1821]'
-                        }
-                      >
-                        {[
-                          { title: 'فيلم الأكشن السريع 2026', type: 'فيلم', q: '4K UHD', st: 'منشور' },
-                          { title: 'مسلسل رمضان الحصري', type: 'مسلسل', q: '1080p', st: 'مثبت' },
-                        ].map((row) => (
-                          <tr key={row.title}>
-                            <td
-                              style={{
-                                fontSize: `${draft.tableTextPx}px`,
-                                paddingTop: previewCssVars['--rtv-admin-table-py'],
-                                paddingBottom: previewCssVars['--rtv-admin-table-py'],
-                                paddingInline: previewCssVars['--rtv-admin-table-px'],
-                              }}
-                              className="font-bold"
-                            >
-                              {row.title}
-                            </td>
-                            <td
-                              style={{
-                                fontSize: `${draft.tableTextPx}px`,
-                                paddingTop: previewCssVars['--rtv-admin-table-py'],
-                                paddingBottom: previewCssVars['--rtv-admin-table-py'],
-                                paddingInline: previewCssVars['--rtv-admin-table-px'],
-                              }}
-                            >
-                              {row.type}
-                            </td>
-                            <td
-                              style={{
-                                fontSize: `${draft.tableTextPx}px`,
-                                paddingTop: previewCssVars['--rtv-admin-table-py'],
-                                paddingBottom: previewCssVars['--rtv-admin-table-py'],
-                                paddingInline: previewCssVars['--rtv-admin-table-px'],
-                              }}
-                              className="font-latin"
-                            >
-                              {row.q}
-                            </td>
-                            <td
-                              style={{
-                                fontSize: `${draft.tableTextPx}px`,
-                                paddingTop: previewCssVars['--rtv-admin-table-py'],
-                                paddingBottom: previewCssVars['--rtv-admin-table-py'],
-                                paddingInline: previewCssVars['--rtv-admin-table-px'],
-                              }}
-                              className="text-[#4CAF50] font-bold"
-                            >
-                              {row.st}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                      <span>زر أساسي ({draft.buttonHeightPx}px)</span>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -1004,28 +1134,27 @@ export function AdminAppearancePanel({
 
   return (
     <div className="space-y-6">
-      {/* Header Bar */}
       <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
         <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#D92321]/15 border border-[#D92321]/35 text-[#D92321]">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl rtv-admin-accent-soft border rtv-admin-accent-text">
             <Palette className="w-5 h-5" />
           </div>
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="font-display text-lg sm:text-xl font-extrabold text-white">
-                تخصيص مظهر لوحة الإدارة
+                نظام راحة العين ومظهر لوحة الإدارة
               </h2>
               <span className="rounded-lg bg-sky-500/15 border border-sky-400/35 px-2.5 py-0.5 text-[10px] font-extrabold text-sky-300">
                 خاص بلوحة الإدارة فقط
               </span>
             </div>
             <p className="text-xs text-[#b7c9ef] mt-1">
-              تحكم كامل في خطوط وأحجام وأوزان لوحة الإدارة، المظهر الداكن والفاتح، عرض القائمة، وكثافة الجداول دون أي تأثير على الموقع العام.{' '}
+              تحكم شامل بأوضاع راحة العين الأربعة، الألوان الدقيقة، التباين والسطوع، الخطوط وأحجامها بدون أي تأثير على واجهة الزوار.{' '}
               {onOpenSiteTypography && (
                 <button
                   type="button"
                   onClick={onOpenSiteTypography}
-                  className="font-extrabold text-[#f9c400] underline underline-offset-2 hover:text-white cursor-pointer"
+                  className="font-extrabold rtv-admin-accent-text underline underline-offset-2 hover:opacity-80 cursor-pointer"
                 >
                   الانتقال إلى خطوط الموقع العام
                 </button>
@@ -1068,7 +1197,6 @@ export function AdminAppearancePanel({
         </div>
       </div>
 
-      {/* Render Sub-sections in Configured Order */}
       {orderedSubSections.map((sub) => renderSection(sub.id))}
     </div>
   );

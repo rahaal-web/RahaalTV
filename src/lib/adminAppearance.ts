@@ -7,7 +7,101 @@ export const ADMIN_APPEARANCE_STORAGE_KEY = 'rahaltv_admin_appearance_v1';
 
 export type AdminFontWeight = 300 | 400 | 500 | 600 | 700;
 export type AdminTableDensity = 'compact' | 'normal' | 'comfortable';
-export type AdminColorMode = 'dark' | 'light';
+export type AdminColorMode = 'dark' | 'light' | 'soft_gray' | 'comfortable_eye';
+
+export interface AdminEyeComfortPreset {
+  id: AdminColorMode;
+  label: string;
+  shortLabel: string;
+  desc: string;
+  isLight: boolean;
+  pageBgColor: string;
+  cardBgColor: string;
+  sidebarBgColor: string;
+  primaryTextColor: string;
+  secondaryTextColor: string;
+  accentColor: string;
+  contrastLevel: number;
+  brightnessLevel: number;
+  shadowIntensity: number;
+  borderContrast: number;
+  elementSpacingPx: number;
+}
+
+export const ADMIN_EYE_COMFORT_PRESETS: Record<AdminColorMode, AdminEyeComfortPreset> = {
+  dark: {
+    id: 'dark',
+    label: 'الوضع الداكن الهادئ (Dark Mode)',
+    shortLabel: 'Dark Mode',
+    desc: 'خلفية كحلية داكنة منخفضة السطوع تقلل إجهاد العين في الإضاءة الضعيفة.',
+    isLight: false,
+    pageBgColor: '#0b111c',
+    cardBgColor: '#121a28',
+    sidebarBgColor: '#0e1522',
+    primaryTextColor: '#e8edf5',
+    secondaryTextColor: '#94a3b8',
+    accentColor: '#3b82f6',
+    contrastLevel: 100,
+    brightnessLevel: 100,
+    shadowIntensity: 35,
+    borderContrast: 45,
+    elementSpacingPx: 16,
+  },
+  light: {
+    id: 'light',
+    label: 'الوضع النهاري المتوازن (Light Mode)',
+    shortLabel: 'Light Mode',
+    desc: 'درجات أردواز فاتحة هادئة بدون بياض فاقع مزعج للعين.',
+    isLight: true,
+    pageBgColor: '#eef2f6',
+    cardBgColor: '#ffffff',
+    sidebarBgColor: '#f8fafc',
+    primaryTextColor: '#0f172a',
+    secondaryTextColor: '#475569',
+    accentColor: '#4f46e5',
+    contrastLevel: 100,
+    brightnessLevel: 98,
+    shadowIntensity: 20,
+    borderContrast: 50,
+    elementSpacingPx: 16,
+  },
+  soft_gray: {
+    id: 'soft_gray',
+    label: 'الوضع الرمادي الناعم (Soft Gray Mode)',
+    shortLabel: 'Soft Gray',
+    desc: 'تباين لطيف بدرجات رمادية حيادية يمنع التوهج ويحافظ على وضوح النصوص.',
+    isLight: false,
+    pageBgColor: '#262b33',
+    cardBgColor: '#2f3640',
+    sidebarBgColor: '#20252c',
+    primaryTextColor: '#e5e9f0',
+    secondaryTextColor: '#a5b0c0',
+    accentColor: '#0284c7',
+    contrastLevel: 97,
+    brightnessLevel: 98,
+    shadowIntensity: 25,
+    borderContrast: 40,
+    elementSpacingPx: 16,
+  },
+  comfortable_eye: {
+    id: 'comfortable_eye',
+    label: 'وضع راحة العين الدافئ (Comfortable Eye)',
+    shortLabel: 'Comfortable Eye',
+    desc: 'أطياف دافئة خفيفة تخفف الضوء الأزرق لجلسات العمل الطويلة.',
+    isLight: false,
+    pageBgColor: '#191815',
+    cardBgColor: '#23211d',
+    sidebarBgColor: '#151411',
+    primaryTextColor: '#e9e3d5',
+    secondaryTextColor: '#aca494',
+    accentColor: '#0d9488',
+    contrastLevel: 95,
+    brightnessLevel: 95,
+    shadowIntensity: 20,
+    borderContrast: 38,
+    elementSpacingPx: 18,
+  },
+};
 
 export interface AdminFontPreset {
   id: string;
@@ -99,7 +193,21 @@ export interface AdminAppearanceConfig {
   cardPaddingPx: number;
   cardTitlePx: number;
   colorMode: AdminColorMode;
+  // Eye Comfort & Fine Palette controls (total keys = 31 <= Firestore limit)
+  pageBgColor: string;
+  cardBgColor: string;
+  sidebarBgColor: string;
+  primaryTextColor: string;
+  secondaryTextColor: string;
+  accentColor: string;
+  contrastLevel: number;
+  brightnessLevel: number;
+  shadowIntensity: number;
+  borderContrast: number;
+  elementSpacingPx: number;
 }
+
+const DARK_PRESET = ADMIN_EYE_COMFORT_PRESETS.dark;
 
 export const DEFAULT_ADMIN_APPEARANCE: AdminAppearanceConfig = {
   fontFamily: 'Tajawal',
@@ -122,12 +230,75 @@ export const DEFAULT_ADMIN_APPEARANCE: AdminAppearanceConfig = {
   cardPaddingPx: 24,
   cardTitlePx: 15,
   colorMode: 'dark',
+  pageBgColor: DARK_PRESET.pageBgColor,
+  cardBgColor: DARK_PRESET.cardBgColor,
+  sidebarBgColor: DARK_PRESET.sidebarBgColor,
+  primaryTextColor: DARK_PRESET.primaryTextColor,
+  secondaryTextColor: DARK_PRESET.secondaryTextColor,
+  accentColor: DARK_PRESET.accentColor,
+  contrastLevel: DARK_PRESET.contrastLevel,
+  brightnessLevel: DARK_PRESET.brightnessLevel,
+  shadowIntensity: DARK_PRESET.shadowIntensity,
+  borderContrast: DARK_PRESET.borderContrast,
+  elementSpacingPx: DARK_PRESET.elementSpacingPx,
 };
 
 function clampInt(val: unknown, min: number, max: number, fallback: number): number {
   const num = Number(val);
   if (!Number.isFinite(num)) return fallback;
   return Math.min(max, Math.max(min, Math.round(num)));
+}
+
+function normalizeHex(val: unknown, fallback: string): string {
+  if (typeof val !== 'string') return fallback;
+  const trimmed = val.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) return trimmed.toLowerCase();
+  if (/^#[0-9a-fA-F]{3}$/.test(trimmed)) {
+    const [, r, g, b] = trimmed.split('');
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+  }
+  return fallback;
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const clean = normalizeHex(hex, '#3b82f6').slice(1);
+  return {
+    r: parseInt(clean.slice(0, 2), 16),
+    g: parseInt(clean.slice(2, 4), 16),
+    b: parseInt(clean.slice(4, 6), 16),
+  };
+}
+
+function mixHex(hexA: string, hexB: string, weightB: number): string {
+  const a = hexToRgb(hexA);
+  const b = hexToRgb(hexB);
+  const w = Math.min(1, Math.max(0, weightB));
+  const r = Math.round(a.r * (1 - w) + b.r * w);
+  const g = Math.round(a.g * (1 - w) + b.g * w);
+  const bl = Math.round(a.b * (1 - w) + b.b * w);
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${bl.toString(16).padStart(2, '0')}`;
+}
+
+export function applyEyeComfortPresetToConfig(
+  base: Partial<AdminAppearanceConfig>,
+  mode: AdminColorMode
+): AdminAppearanceConfig {
+  const preset = ADMIN_EYE_COMFORT_PRESETS[mode] || ADMIN_EYE_COMFORT_PRESETS.dark;
+  return normalizeAdminAppearance({
+    ...base,
+    colorMode: mode,
+    pageBgColor: preset.pageBgColor,
+    cardBgColor: preset.cardBgColor,
+    sidebarBgColor: preset.sidebarBgColor,
+    primaryTextColor: preset.primaryTextColor,
+    secondaryTextColor: preset.secondaryTextColor,
+    accentColor: preset.accentColor,
+    contrastLevel: preset.contrastLevel,
+    brightnessLevel: preset.brightnessLevel,
+    shadowIntensity: preset.shadowIntensity,
+    borderContrast: preset.borderContrast,
+    elementSpacingPx: preset.elementSpacingPx,
+  });
 }
 
 function normalizeCustomFont(raw: unknown): CustomFontRecord | null {
@@ -188,10 +359,12 @@ export function normalizeAdminAppearance(
       ? raw.tableDensity
       : DEFAULT_ADMIN_APPEARANCE.tableDensity;
 
-  const colorMode: AdminColorMode =
-    raw.colorMode === 'light' || raw.colorMode === 'dark'
-      ? raw.colorMode
-      : DEFAULT_ADMIN_APPEARANCE.colorMode;
+  const validColorModes: AdminColorMode[] = ['dark', 'light', 'soft_gray', 'comfortable_eye'];
+  const colorMode: AdminColorMode = validColorModes.includes(raw.colorMode as AdminColorMode)
+    ? (raw.colorMode as AdminColorMode)
+    : DEFAULT_ADMIN_APPEARANCE.colorMode;
+
+  const preset = ADMIN_EYE_COMFORT_PRESETS[colorMode];
 
   return {
     fontFamily,
@@ -229,6 +402,17 @@ export function normalizeAdminAppearance(
     cardPaddingPx: clampInt(raw.cardPaddingPx, 12, 32, DEFAULT_ADMIN_APPEARANCE.cardPaddingPx),
     cardTitlePx: clampInt(raw.cardTitlePx, 13, 22, DEFAULT_ADMIN_APPEARANCE.cardTitlePx),
     colorMode,
+    pageBgColor: normalizeHex(raw.pageBgColor, preset.pageBgColor),
+    cardBgColor: normalizeHex(raw.cardBgColor, preset.cardBgColor),
+    sidebarBgColor: normalizeHex(raw.sidebarBgColor, preset.sidebarBgColor),
+    primaryTextColor: normalizeHex(raw.primaryTextColor, preset.primaryTextColor),
+    secondaryTextColor: normalizeHex(raw.secondaryTextColor, preset.secondaryTextColor),
+    accentColor: normalizeHex(raw.accentColor, preset.accentColor),
+    contrastLevel: clampInt(raw.contrastLevel, 80, 115, preset.contrastLevel),
+    brightnessLevel: clampInt(raw.brightnessLevel, 80, 110, preset.brightnessLevel),
+    shadowIntensity: clampInt(raw.shadowIntensity, 0, 100, preset.shadowIntensity),
+    borderContrast: clampInt(raw.borderContrast, 0, 100, preset.borderContrast),
+    elementSpacingPx: clampInt(raw.elementSpacingPx, 8, 28, preset.elementSpacingPx),
   };
 }
 
@@ -311,7 +495,6 @@ export function ensureAdminFontResources(
       ? 'rahaltv-admin-preview-custom-font-css'
       : 'rahaltv-admin-custom-font-css';
 
-  // 1. Google Fonts Link (includes weights 300..700 so Light/Regular/Medium/SemiBold/Bold render cleanly)
   const preset = ADMIN_ARABIC_FONT_PRESETS.find((p) => p.id === cfg.fontFamily);
   let googleLink = document.getElementById(googleLinkId) as HTMLLinkElement | null;
   if (preset?.googleSpec) {
@@ -329,7 +512,6 @@ export function ensureAdminFontResources(
     googleLink.remove();
   }
 
-  // 2. External CSS font link or @font-face
   let extCssEl = document.getElementById(customCssLinkId) as HTMLLinkElement | null;
   let customStyleEl = document.getElementById(customStyleId) as HTMLStyleElement | null;
   const cf = cfg.customFont;
@@ -377,6 +559,22 @@ export function buildAdminAppearanceCssVars(
     comfortable: { py: '15px', px: '18px' },
   };
   const pads = densityPads[cfg.tableDensity];
+  const isLight = ADMIN_EYE_COMFORT_PRESETS[cfg.colorMode]?.isLight || false;
+  const accentRgb = hexToRgb(cfg.accentColor);
+  const surface2 = isLight
+    ? mixHex(cfg.cardBgColor, '#e2e8f0', 0.45)
+    : mixHex(cfg.cardBgColor, '#ffffff', 0.05);
+  const borderAlpha = isLight
+    ? (0.06 + (cfg.borderContrast / 100) * 0.16).toFixed(2)
+    : (0.04 + (cfg.borderContrast / 100) * 0.16).toFixed(2);
+  const borderColor = isLight
+    ? `rgba(15, 23, 42, ${borderAlpha})`
+    : `rgba(255, 255, 255, ${borderAlpha})`;
+  const shadowAlpha = ((cfg.shadowIntensity / 100) * (isLight ? 0.14 : 0.42)).toFixed(2);
+  const shadowValue =
+    cfg.shadowIntensity <= 2
+      ? 'none'
+      : `0 10px 28px -10px rgba(0, 0, 0, ${shadowAlpha})`;
 
   return {
     '--rtv-admin-font-family': resolveAdminFontStack(cfg),
@@ -398,6 +596,21 @@ export function buildAdminAppearanceCssVars(
     '--rtv-admin-radius': `${cfg.borderRadiusPx}px`,
     '--rtv-admin-card-padding': `${cfg.cardPaddingPx}px`,
     '--rtv-admin-card-title-size': `${cfg.cardTitlePx}px`,
+    // Eye comfort palette tokens
+    '--rtv-admin-bg': cfg.pageBgColor,
+    '--rtv-admin-surface': cfg.cardBgColor,
+    '--rtv-admin-surface-2': surface2,
+    '--rtv-admin-sidebar-bg': cfg.sidebarBgColor,
+    '--rtv-admin-text': cfg.primaryTextColor,
+    '--rtv-admin-text-muted': cfg.secondaryTextColor,
+    '--rtv-admin-accent': cfg.accentColor,
+    '--rtv-admin-accent-soft': `rgba(${accentRgb.r}, ${accentRgb.g}, ${accentRgb.b}, 0.14)`,
+    '--rtv-admin-accent-border': `rgba(${accentRgb.r}, ${accentRgb.g}, ${accentRgb.b}, 0.36)`,
+    '--rtv-admin-border': borderColor,
+    '--rtv-admin-shadow': shadowValue,
+    '--rtv-admin-contrast': `${cfg.contrastLevel}%`,
+    '--rtv-admin-brightness': `${cfg.brightnessLevel}%`,
+    '--rtv-admin-gap': `${cfg.elementSpacingPx}px`,
   };
 }
 

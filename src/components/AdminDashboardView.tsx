@@ -1,36 +1,57 @@
 import { CSSProperties, FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Activity,
   AlertTriangle,
+  ArchiveRestore,
   ArrowDown,
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  BadgeCheck,
+  BarChart3,
   Bell,
+  BellRing,
   CheckCircle2,
+  CheckSquare,
   ChevronDown,
   ChevronLeft,
+  Clapperboard,
   Code2,
   Command,
   Copy,
   Database,
   Download,
+  DownloadCloud,
   Edit3,
   ExternalLink,
   Eye,
+  FileText,
   Film,
+  FolderKanban,
+  Gauge,
   Globe,
+  GripVertical,
+  HardDrive,
+  HeartPulse,
   Image as ImageIcon,
+  Inbox,
   Layers,
   LayoutDashboard,
+  LayoutTemplate,
   Link2,
+  ListOrdered,
   Loader2,
   Lock,
   LogOut,
   Menu,
+  MessageSquare,
   MessageSquarePlus,
+  MonitorPlay,
   Palette,
   PanelRightClose,
   PanelRightOpen,
+  Pin,
+  PinOff,
   Play,
   Plus,
   RefreshCw,
@@ -39,13 +60,18 @@ import {
   Search,
   Server,
   Settings,
+  Shield,
   ShieldCheck,
+  Sliders,
   SlidersHorizontal,
+  Smartphone,
   Sparkles,
   Star,
   StopCircle,
+  Tags,
   Trash2,
   Tv,
+  Type,
   Users,
   Wand2,
   Wrench,
@@ -132,6 +158,14 @@ const AdminAppearancePanel = lazy(() =>
 );
 const AdminNavOrderPanel = lazy(() =>
   import('./admin/AdminNavOrderPanel').then((m) => ({ default: m.AdminNavOrderPanel }))
+);
+const WebsiteBrandingPanel = lazy(() =>
+  import('./admin/WebsiteBrandingPanel').then((m) => ({ default: m.WebsiteBrandingPanel }))
+);
+const SliderCustomizationPanel = lazy(() =>
+  import('./admin/SliderCustomizationPanel').then((m) => ({
+    default: m.SliderCustomizationPanel,
+  }))
 );
 
 import {
@@ -264,10 +298,24 @@ import {
 import {
   AdminNavLayoutConfig,
   loadAdminNavLayout,
+  moveGroupInLayout,
+  moveItemInLayout,
+  reorderPinnedTabsInLayout,
+  resetAdminNavLayout,
   resolveSidebarGroupsForRender,
+  saveAdminNavLayout,
   subscribeAdminNavLayout,
   subscribeAdminNavLayoutFromFirestore,
+  syncAdminNavLayoutToFirestore,
+  togglePinnedTabInLayout,
 } from '../lib/adminNavLayout';
+import {
+  applyWebsiteFaviconToDocument,
+  ensureWebsiteBrandingFontLoaded,
+  loadStoredWebsiteBranding,
+  normalizeWebsiteBranding,
+  saveStoredWebsiteBranding,
+} from '../lib/websiteBranding';
 import {
   AdminPrivilegeRole,
   AdminRoleRecord,
@@ -289,7 +337,61 @@ import {
   TypographyConfig,
   UserProfileRecord,
   VisitorRequest,
+  WebsiteBrandingConfig,
 } from '../types/media';
+
+const ADMIN_SIDEBAR_ICON_MAP: Record<string, typeof LayoutDashboard> = {
+  Activity,
+  ArchiveRestore,
+  BadgeCheck,
+  BarChart3,
+  BellRing,
+  CheckSquare,
+  Clapperboard,
+  Database,
+  DownloadCloud,
+  Eye,
+  FileText,
+  Film,
+  FolderKanban,
+  Gauge,
+  Globe,
+  HardDrive,
+  HeartPulse,
+  ImageIcon,
+  Inbox,
+  Layers,
+  LayoutDashboard,
+  LayoutTemplate,
+  Link2,
+  ListOrdered,
+  Lock,
+  MessageSquare,
+  MonitorPlay,
+  Palette,
+  Server,
+  Settings,
+  Shield,
+  ShieldCheck,
+  Sliders,
+  SlidersHorizontal,
+  Smartphone,
+  Sparkles,
+  Tags,
+  Tv,
+  Type,
+  Users,
+  Wrench,
+};
+
+function renderAdminSidebarIcon(
+  iconName: string | undefined,
+  className = 'w-4 h-4 shrink-0',
+  color?: string
+) {
+  const IconComp = (iconName && ADMIN_SIDEBAR_ICON_MAP[iconName]) || FolderKanban;
+  return <IconComp className={className} style={color ? { color } : undefined} />;
+}
 
 const MODERATOR_PERM_LABELS: {
   key: keyof ModeratorSubPermissions;
@@ -819,10 +921,65 @@ export function AdminDashboardView({
     const layoutGrp = adminNavLayout.groups.find((g) =>
       g.items.some((entry) => entry.id === base.item.id)
     );
+    const canonicalGrp = ADMIN_NAV_GROUPS.find((g) => g.id === (layoutGrp?.id || base.group.id));
     return layoutGrp
-      ? { group: { ...base.group, label: layoutGrp.label }, item: base.item }
+      ? {
+          group: {
+            ...base.group,
+            id: layoutGrp.id as typeof base.group.id,
+            label: layoutGrp.label,
+            accentColor: canonicalGrp?.accentColor || base.group.accentColor,
+            iconName: canonicalGrp?.iconName || base.group.iconName,
+          },
+          item: base.item,
+        }
       : base;
   }, [activeTab, adminNavLayout]);
+
+  const [sidebarSearchQuery, setSidebarSearchQuery] = useState('');
+  const [sidebarReorderMode, setSidebarReorderMode] = useState(false);
+  const [draggedSidebarGroupId, setDraggedSidebarGroupId] = useState<string | null>(null);
+  const [draggedSidebarItemId, setDraggedSidebarItemId] = useState<AdminTab | null>(null);
+  const [draggedPinnedTabId, setDraggedPinnedTabId] = useState<AdminTab | null>(null);
+
+  const [openGroupIds, setOpenGroupIds] = useState<string[]>(() => {
+    if (Array.isArray(workspacePrefs.openGroupIds) && workspacePrefs.openGroupIds.length > 0) {
+      return workspacePrefs.openGroupIds;
+    }
+    const initMeta = findAdminNavItem(activeTab);
+    return [initMeta?.group.id || ADMIN_NAV_GROUPS[0].id];
+  });
+
+  const toggleSidebarGroup = useCallback(
+    (groupId: string) => {
+      setOpenGroupIds((prev) => {
+        const isOpen = prev.includes(groupId);
+        let next: string[];
+        if (isOpen) {
+          next = prev.filter((id) => id !== groupId);
+        } else if (workspacePrefs.accordionMultiOpen) {
+          next = [...prev, groupId];
+        } else {
+          next = [groupId];
+        }
+        updateWorkspacePrefs({ openGroupIds: next });
+        return next;
+      });
+    },
+    [workspacePrefs.accordionMultiOpen, updateWorkspacePrefs]
+  );
+
+  const persistSidebarLayoutUpdate = useCallback(
+    (nextLayout: AdminNavLayoutConfig, notifyText?: string) => {
+      const saved = saveAdminNavLayout(nextLayout);
+      setAdminNavLayout(saved);
+      if (isOwner && activeActorUid) {
+        void syncAdminNavLayoutToFirestore(saved, activeActorUid);
+      }
+      if (notifyText) onNotifyRef.current(notifyText);
+    },
+    [isOwner, activeActorUid]
+  );
 
   const navigateToTab = useCallback(
     (target: AdminTab) => {
@@ -845,8 +1002,29 @@ export function AdminDashboardView({
       setActiveTab(target);
       setMobileDrawerOpen(false);
       updateWorkspacePrefs({ lastTab: target });
+      const targetLayoutGroup = adminNavLayout.groups.find((g) =>
+        g.items.some((entry) => entry.id === target)
+      );
+      const targetGroupId =
+        targetLayoutGroup?.id || findAdminNavItem(target)?.group.id || '';
+      if (targetGroupId) {
+        setOpenGroupIds((prev) => {
+          if (prev.includes(targetGroupId)) return prev;
+          const next = workspacePrefs.accordionMultiOpen ? [...prev, targetGroupId] : [targetGroupId];
+          updateWorkspacePrefs({ openGroupIds: next });
+          return next;
+        });
+      }
     },
-    [isOwner, workspacePrefs.moderatorSubPermissions, activeActorUid, effectiveRole, updateWorkspacePrefs]
+    [
+      isOwner,
+      workspacePrefs.moderatorSubPermissions,
+      workspacePrefs.accordionMultiOpen,
+      adminNavLayout.groups,
+      activeActorUid,
+      effectiveRole,
+      updateWorkspacePrefs,
+    ]
   );
 
   const lastHandledNonceRef = useRef<number>(requestedTab?.nonce || 0);
@@ -1077,6 +1255,10 @@ export function AdminDashboardView({
     popupShield: normalizePopupShieldConfig(
       siteSettings.popupShield || loadStoredPopupShieldConfig()
     ),
+    branding: normalizeWebsiteBranding(
+      siteSettings.branding || loadStoredWebsiteBranding(siteSettings.siteName),
+      siteSettings.siteName
+    ),
   }));
   const [customApiUrl, setCustomApiUrl] = useState<string>(() => getCustomApiBaseUrl());
   const [testingProxy, setTestingProxy] = useState(false);
@@ -1092,6 +1274,10 @@ export function AdminDashboardView({
       typography: normalizeTypographyConfig(siteSettings.typography || loadStoredTypographyConfig()),
       popupShield: normalizePopupShieldConfig(
         siteSettings.popupShield || loadStoredPopupShieldConfig()
+      ),
+      branding: normalizeWebsiteBranding(
+        siteSettings.branding || loadStoredWebsiteBranding(siteSettings.siteName),
+        siteSettings.siteName
       ),
     });
   }, [siteSettings]);
@@ -1118,6 +1304,17 @@ export function AdminDashboardView({
         settingsForm.popupShield || siteSettings.popupShield || loadStoredPopupShieldConfig()
       ),
     [settingsForm.popupShield, siteSettings.popupShield]
+  );
+
+  const activeBranding = useMemo(
+    () =>
+      normalizeWebsiteBranding(
+        settingsForm.branding ||
+          siteSettings.branding ||
+          loadStoredWebsiteBranding(settingsForm.siteName || siteSettings.siteName),
+        settingsForm.siteName || siteSettings.siteName
+      ),
+    [settingsForm.branding, settingsForm.siteName, siteSettings.branding, siteSettings.siteName]
   );
 
   const effectiveCustomFonts = useMemo(
@@ -2320,6 +2517,15 @@ export function AdminDashboardView({
       const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
       const normalizedTypography = saveStoredTypographyConfig(activeTypography);
       const normalizedShield = saveStoredPopupShieldConfig(activePopupShield);
+      const normalizedBranding = saveStoredWebsiteBranding(
+        normalizeWebsiteBranding(
+          {
+            ...activeBranding,
+            siteName: settingsForm.siteName.trim() || activeBranding.siteName,
+          },
+          settingsForm.siteName
+        )
+      );
       onPopupShieldChange?.(normalizedShield);
       const res = await saveSiteSettingsToFirestore(
         {
@@ -2328,16 +2534,63 @@ export function AdminDashboardView({
           homeConfig: normalizedHome,
           typography: normalizedTypography,
           popupShield: normalizedShield,
+          branding: normalizedBranding,
         },
         activeActorUid
       );
       onNotify(
         res?.syncedHomeToCloud === false
           ? 'تم حفظ الإعدادات الأساسية في Firestore وحفظ التخصيصات محلياً (حدث قواعد Firestore للمزامنة السحابية)'
-          : 'تم حفظ الإعدادات وتخصيص الرئيسية والخطوط ودرع النوافذ وثيم المشغّل بنجاح'
+          : 'تم حفظ الإعدادات وتخصيص الرئيسية والهوية والخطوط ودرع النوافذ وثيم المشغّل بنجاح'
       );
     } catch {
       onNotify('تعذر حفظ الإعدادات');
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleSaveWebsiteBranding = async (nextBranding: WebsiteBrandingConfig) => {
+    const cleanBranding = saveStoredWebsiteBranding(
+      normalizeWebsiteBranding(nextBranding, nextBranding.siteName || settingsForm.siteName)
+    );
+    const nextSiteName = cleanBranding.siteName || settingsForm.siteName;
+    setSettingsForm((prev) => ({
+      ...prev,
+      siteName: nextSiteName,
+      branding: cleanBranding,
+    }));
+    applyWebsiteFaviconToDocument(cleanBranding);
+    ensureWebsiteBrandingFontLoaded(cleanBranding.siteNameFont);
+    if (!hasActor) {
+      onNotify('تم تطبيق إعدادات هوية الموقع محلياً — سجّل الدخول كمشرف لمزامنتها للجميع');
+      return;
+    }
+    setBusyAction(true);
+    try {
+      const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
+      const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
+      const normalizedTypography = saveStoredTypographyConfig(activeTypography);
+      const normalizedShield = saveStoredPopupShieldConfig(activePopupShield);
+      const res = await saveSiteSettingsToFirestore(
+        {
+          ...settingsForm,
+          siteName: nextSiteName,
+          playerTheme: normalizedTheme,
+          homeConfig: normalizedHome,
+          typography: normalizedTypography,
+          popupShield: normalizedShield,
+          branding: cleanBranding,
+        },
+        activeActorUid
+      );
+      onNotify(
+        res?.syncedHomeToCloud === false
+          ? 'تم تطبيق هوية الموقع محلياً — يرجى نشر تحديث firestore.rules لمزامنة الهوية السحابية لكل الزوار'
+          : 'تم حفظ هوية الموقع والشعار والأيقونة ومزامنتها لجميع الزوار بنجاح!'
+      );
+    } catch {
+      onNotify('تم تطبيق الهوية محلياً — تعذرت المزامنة مع Firestore');
     } finally {
       setBusyAction(false);
     }
@@ -2355,6 +2608,7 @@ export function AdminDashboardView({
       const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
       const normalizedTypography = saveStoredTypographyConfig(activeTypography);
       const normalizedShield = saveStoredPopupShieldConfig(activePopupShield);
+      const normalizedBranding = saveStoredWebsiteBranding(activeBranding);
       const res = await saveSiteSettingsToFirestore(
         {
           ...settingsForm,
@@ -2362,6 +2616,7 @@ export function AdminDashboardView({
           homeConfig: cleanHome,
           typography: normalizedTypography,
           popupShield: normalizedShield,
+          branding: normalizedBranding,
         },
         activeActorUid
       );
@@ -2390,6 +2645,7 @@ export function AdminDashboardView({
       const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
       const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
       const normalizedShield = saveStoredPopupShieldConfig(activePopupShield);
+      const normalizedBranding = saveStoredWebsiteBranding(activeBranding);
       const res = await saveSiteSettingsToFirestore(
         {
           ...settingsForm,
@@ -2397,6 +2653,7 @@ export function AdminDashboardView({
           homeConfig: normalizedHome,
           typography: cleanTypography,
           popupShield: normalizedShield,
+          branding: normalizedBranding,
         },
         activeActorUid
       );
@@ -2425,6 +2682,7 @@ export function AdminDashboardView({
       const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
       const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
       const normalizedTypography = saveStoredTypographyConfig(activeTypography);
+      const normalizedBranding = saveStoredWebsiteBranding(activeBranding);
       const res = await saveSiteSettingsToFirestore(
         {
           ...settingsForm,
@@ -2432,6 +2690,7 @@ export function AdminDashboardView({
           homeConfig: normalizedHome,
           typography: normalizedTypography,
           popupShield: cleanShield,
+          branding: normalizedBranding,
         },
         activeActorUid
       );
@@ -2471,6 +2730,7 @@ export function AdminDashboardView({
       const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
       const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
       const normalizedShield = saveStoredPopupShieldConfig(activePopupShield);
+      const normalizedBranding = saveStoredWebsiteBranding(activeBranding);
       await saveSiteSettingsToFirestore(
         {
           ...settingsForm,
@@ -2478,6 +2738,7 @@ export function AdminDashboardView({
           homeConfig: normalizedHome,
           typography: nextTypo,
           popupShield: normalizedShield,
+          branding: normalizedBranding,
         },
         activeActorUid
       );
@@ -2525,6 +2786,7 @@ export function AdminDashboardView({
       const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
       const normalizedTypography = saveStoredTypographyConfig(activeTypography);
       const normalizedShield = saveStoredPopupShieldConfig(activePopupShield);
+      const normalizedBranding = saveStoredWebsiteBranding(activeBranding);
       await saveSiteSettingsToFirestore(
         {
           ...settingsForm,
@@ -2532,6 +2794,7 @@ export function AdminDashboardView({
           homeConfig: normalizedHome,
           typography: normalizedTypography,
           popupShield: normalizedShield,
+          branding: normalizedBranding,
         },
         activeActorUid
       );
@@ -3376,122 +3639,486 @@ export function AdminDashboardView({
   }
 
   /* ---------------- Standalone Authenticated /admin Dashboard ---------------- */
-  const renderSidebarNavContent = (collapsed: boolean) => (
-    <nav aria-label="أقسام لوحة التحكم" className="space-y-3">
-      {resolvedSidebarGroups.map((group) => {
-        const isGroupCollapsed = Boolean(workspacePrefs.collapsedGroups[group.id]);
+  const handleSelectSidebarTab = (tabId: AdminTab) => {
+    navigateToTab(tabId);
+    if (
+      tabId === 'settings' ||
+      tabId === 'home_builder' ||
+      tabId === 'typography' ||
+      tabId === 'popup_shield' ||
+      tabId === 'player_theme' ||
+      tabId === 'website_branding' ||
+      tabId === 'slider_customization'
+    ) {
+      setSettingsForm({
+        ...siteSettings,
+        playerTheme: normalizePlayerTheme(
+          siteSettings.playerTheme || loadStoredPlayerTheme()
+        ),
+        homeConfig: normalizeHomeConfig(
+          siteSettings.homeConfig || loadStoredHomeConfig()
+        ),
+        typography: normalizeTypographyConfig(
+          siteSettings.typography || loadStoredTypographyConfig()
+        ),
+        popupShield: normalizePopupShieldConfig(
+          siteSettings.popupShield || loadStoredPopupShieldConfig()
+        ),
+        branding: normalizeWebsiteBranding(
+          siteSettings.branding || loadStoredWebsiteBranding(siteSettings.siteName),
+          siteSettings.siteName
+        ),
+      });
+    }
+  };
 
-        return (
-          <div key={group.id} className="space-y-1">
-            {!collapsed && (
+  const renderSidebarNavContent = (collapsed: boolean) => {
+    const normalizedQuery = sidebarSearchQuery.trim().toLowerCase();
+    const isSearching = normalizedQuery.length > 0;
+
+    const pinnedEntries = (adminNavLayout.pinnedTabs || [])
+      .filter((tabId) => isTabAccessible(tabId, isOwner, workspacePrefs.moderatorSubPermissions))
+      .map((tabId) => {
+        const found = findAdminNavItem(tabId);
+        if (!found) return null;
+        const grpMeta = resolvedSidebarGroups.find((g) => g.items.some((i) => i.id === tabId));
+        return {
+          item: found.item,
+          accentColor: grpMeta?.accentColor || found.group.accentColor,
+        };
+      })
+      .filter(
+        (entry): entry is { item: NonNullable<ReturnType<typeof findAdminNavItem>>['item']; accentColor: string } =>
+          Boolean(entry)
+      );
+
+    const visibleGroups = resolvedSidebarGroups
+      .map((group) => {
+        if (!isSearching) return group;
+        const groupMatched = group.label.toLowerCase().includes(normalizedQuery);
+        const filteredItems = groupMatched
+          ? group.items
+          : group.items.filter(
+              (item) =>
+                item.label.toLowerCase().includes(normalizedQuery) ||
+                item.shortLabel.toLowerCase().includes(normalizedQuery) ||
+                item.description.toLowerCase().includes(normalizedQuery) ||
+                item.id.toLowerCase().includes(normalizedQuery) ||
+                item.keywords.some((kw) => kw.toLowerCase().includes(normalizedQuery))
+            );
+        if (filteredItems.length === 0) return null;
+        return { ...group, items: filteredItems };
+      })
+      .filter((g): g is NonNullable<typeof g> => Boolean(g));
+
+    const getBadgeInfo = (
+      tabId: AdminTab
+    ): { text: string; tone: 'alert' | 'warn' | 'calm' } | null => {
+      if (tabId === 'catalog') return { text: String(catalog.length), tone: 'calm' };
+      if (tabId === 'notifications' && totalBellBadgeCount > 0) {
+        return { text: String(totalBellBadgeCount), tone: 'alert' };
+      }
+      if (tabId === 'requests' && pendingRequestsCount > 0) {
+        return { text: String(pendingRequestsCount), tone: 'calm' };
+      }
+      if (tabId === 'crawl_operations' && runningCrawlCount > 0) {
+        return { text: String(runningCrawlCount), tone: 'calm' };
+      }
+      if (tabId === 'scraper_adapters' && scraperAdapters.length > 0) {
+        return { text: String(scraperAdapters.length), tone: 'calm' };
+      }
+      if (tabId === 'popup_shield' && activePopupShield.enabled) {
+        return { text: 'نشط', tone: 'calm' };
+      }
+      if (tabId === 'database_manager' && dbConnectionStatus && dbConnectionStatus !== 'connected') {
+        return {
+          text: dbConnectionStatus === 'connecting' ? 'جارٍ' : 'تنبيه',
+          tone: dbConnectionStatus === 'connecting' ? 'calm' : 'warn',
+        };
+      }
+      return null;
+    };
+
+    return (
+      <nav aria-label="أقسام لوحة التحكم" className="space-y-3">
+        {/* Sidebar Quick Search & Layout Controls */}
+        {!collapsed && (
+          <div className="space-y-2 pb-1 border-b border-white/[0.08]">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-[#b7c9ef] absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="search"
+                value={sidebarSearchQuery}
+                onChange={(e) => setSidebarSearchQuery(e.target.value)}
+                placeholder="بحث داخل القائمة..."
+                aria-label="بحث داخل القائمة الجانبية"
+                className="w-full rounded-xl bg-[#1a242e] border border-white/10 pr-8 pl-7 py-1.5 text-[11px] font-bold text-white placeholder:text-[#b7c9ef]/60 focus:outline-none"
+              />
+              {sidebarSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSidebarSearchQuery('')}
+                  aria-label="مسح البحث"
+                  className="absolute left-2 top-1/2 -translate-y-1/2 text-[#b7c9ef] hover:text-white cursor-pointer"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-1 text-[10px]">
               <button
                 type="button"
-                onClick={() =>
+                onClick={() => {
+                  const nextMulti = !workspacePrefs.accordionMultiOpen;
+                  const nextOpen = nextMulti ? openGroupIds : [currentNavMeta.group.id];
+                  setOpenGroupIds(nextOpen);
                   updateWorkspacePrefs({
-                    collapsedGroups: {
-                      ...workspacePrefs.collapsedGroups,
-                      [group.id]: !isGroupCollapsed,
-                    },
-                  })
+                    accordionMultiOpen: nextMulti,
+                    openGroupIds: nextOpen,
+                  });
+                }}
+                title={
+                  workspacePrefs.accordionMultiOpen
+                    ? 'السماح بفتح أكثر من مجموعة معاً'
+                    : 'فتح مجموعة واحدة فقط عند الضغط'
                 }
-                aria-expanded={!isGroupCollapsed}
-                className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-[11px] font-black text-[#b7c9ef]/75 hover:text-white cursor-pointer"
+                className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 font-bold border cursor-pointer transition-colors ${
+                  workspacePrefs.accordionMultiOpen
+                    ? 'rtv-admin-accent-soft border-white/15 rtv-admin-accent-text'
+                    : 'bg-[#1a242e]/70 border-white/10 text-[#b7c9ef] hover:text-white'
+                }`}
               >
-                <span className="truncate">{group.label}</span>
-                <ChevronDown
-                  className={`w-3.5 h-3.5 shrink-0 transition-transform ${
-                    isGroupCollapsed ? 'rotate-90' : ''
-                  }`}
-                />
+                <Layers className="w-3 h-3" />
+                <span>{workspacePrefs.accordionMultiOpen ? 'فتح متعدد' : 'مجموعة واحدة'}</span>
               </button>
+
+              {isOwner && (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setSidebarReorderMode((v) => !v)}
+                    title="تفعيل إعادة الترتيب بالسحب والإفلات"
+                    className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 font-bold border cursor-pointer transition-colors ${
+                      sidebarReorderMode
+                        ? 'rtv-admin-accent-bg border-transparent text-white'
+                        : 'bg-[#1a242e]/70 border-white/10 text-[#b7c9ef] hover:text-white'
+                    }`}
+                  >
+                    <GripVertical className="w-3 h-3" />
+                    <span>{sidebarReorderMode ? 'إنهاء السحب' : 'ترتيب'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const reset = resetAdminNavLayout();
+                      setAdminNavLayout(reset);
+                      const targetGrp = findAdminNavItem(activeTab)?.group.id || ADMIN_NAV_GROUPS[0].id;
+                      setOpenGroupIds([targetGrp]);
+                      updateWorkspacePrefs({ openGroupIds: [targetGrp] });
+                      if (activeActorUid) {
+                        void syncAdminNavLayoutToFirestore(reset, activeActorUid);
+                      }
+                      onNotifyRef.current('تمت استعادة الترتيب الافتراضي للقائمة الجانبية');
+                    }}
+                    title="استعادة الترتيب الافتراضي"
+                    className="inline-flex items-center gap-1 rounded-lg bg-[#1a242e]/70 hover:bg-white/10 border border-white/10 px-2 py-1 font-bold text-[#b7c9ef] hover:text-white cursor-pointer"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>افتراضي</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Pinned Favorite Sections */}
+        {!isSearching && pinnedEntries.length > 0 && (
+          <div className="space-y-1.5 pb-2 border-b border-white/[0.08]">
+            {!collapsed && (
+              <div className="flex items-center justify-between px-2 text-[10px] font-black text-[#b7c9ef]/80">
+                <span className="inline-flex items-center gap-1">
+                  <Pin className="w-3 h-3 rtv-admin-accent-text" />
+                  <span>الأقسام المثبتة ({pinnedEntries.length})</span>
+                </span>
+              </div>
             )}
-
-            {(!isGroupCollapsed || collapsed) && (
-              <div className="rtv-admin-sidebar-list">
-                {group.items.map((item) => {
-                  const active = activeTab === item.id;
-                  let badgeText: string | undefined;
-                  if (item.id === 'catalog') badgeText = String(catalog.length);
-                  else if (item.id === 'notifications' && totalBellBadgeCount > 0)
-                    badgeText = String(totalBellBadgeCount);
-                  else if (item.id === 'requests' && pendingRequestsCount > 0)
-                    badgeText = String(pendingRequestsCount);
-                  else if (item.id === 'crawl_operations' && runningCrawlCount > 0)
-                    badgeText = String(runningCrawlCount);
-                  else if (item.id === 'scraper_adapters' && scraperAdapters.length > 0)
-                    badgeText = String(scraperAdapters.length);
-                  else if (item.id === 'popup_shield')
-                    badgeText = activePopupShield.enabled ? 'نشط' : undefined;
-                  else if (
-                    item.id === 'database_manager' &&
-                    dbConnectionStatus &&
-                    dbConnectionStatus !== 'connected'
-                  )
-                    badgeText = dbConnectionStatus === 'connecting' ? 'جارٍ' : 'تنبيه';
-
-                  return (
+            <div className="space-y-1">
+              {pinnedEntries.map(({ item, accentColor }, idx) => {
+                const active = activeTab === item.id;
+                return (
+                  <div
+                    key={`pinned-${item.id}`}
+                    draggable={!collapsed && isOwner}
+                    onDragStart={() => setDraggedPinnedTabId(item.id)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={() => {
+                      if (!draggedPinnedTabId || draggedPinnedTabId === item.id) return;
+                      const fromIdx = (adminNavLayout.pinnedTabs || []).indexOf(draggedPinnedTabId);
+                      const toIdx = idx;
+                      if (fromIdx !== -1) {
+                        persistSidebarLayoutUpdate(
+                          reorderPinnedTabsInLayout(adminNavLayout, fromIdx, toIdx)
+                        );
+                      }
+                      setDraggedPinnedTabId(null);
+                    }}
+                    onDragEnd={() => setDraggedPinnedTabId(null)}
+                    className="group relative flex items-center"
+                  >
                     <button
-                      key={item.id}
                       type="button"
-                      title={collapsed ? item.label : item.description}
-                      onClick={() => {
-                        navigateToTab(item.id);
-                        if (
-                          item.id === 'settings' ||
-                          item.id === 'home_builder' ||
-                          item.id === 'typography' ||
-                          item.id === 'popup_shield' ||
-                          item.id === 'player_theme'
-                        ) {
-                          setSettingsForm({
-                            ...siteSettings,
-                            playerTheme: normalizePlayerTheme(
-                              siteSettings.playerTheme || loadStoredPlayerTheme()
-                            ),
-                            homeConfig: normalizeHomeConfig(
-                              siteSettings.homeConfig || loadStoredHomeConfig()
-                            ),
-                            typography: normalizeTypographyConfig(
-                              siteSettings.typography || loadStoredTypographyConfig()
-                            ),
-                            popupShield: normalizePopupShieldConfig(
-                              siteSettings.popupShield || loadStoredPopupShieldConfig()
-                            ),
-                          });
-                        }
-                      }}
-                      className={`rtv-admin-sidebar-item flex w-full items-center ${
-                        collapsed ? 'justify-center px-2' : 'justify-between px-3.5'
-                      } gap-2 rounded-xl py-2.5 text-xs font-bold transition-colors cursor-pointer ${
+                      title={collapsed ? `مثبت: ${item.label}` : item.description}
+                      onClick={() => handleSelectSidebarTab(item.id)}
+                      style={
                         active
-                          ? 'bg-[#D92321] text-white shadow-md'
+                          ? {
+                              backgroundColor: `color-mix(in srgb, ${accentColor} 16%, transparent)`,
+                              borderInlineStartColor: accentColor,
+                            }
+                          : undefined
+                      }
+                      className={`rtv-admin-sidebar-item flex w-full items-center ${
+                        collapsed ? 'justify-center px-2' : 'justify-between px-3'
+                      } gap-2 rounded-xl py-2 text-xs font-bold transition-colors cursor-pointer ${
+                        active
+                          ? 'text-white border-r-[3px] shadow-sm'
                           : 'text-[#b7c9ef] hover:bg-[#1a242e] hover:text-white'
                       }`}
                     >
-                      <span className="truncate">
-                        {collapsed ? item.shortLabel.slice(0, 6) : item.label}
+                      <span className="flex items-center gap-2 min-w-0">
+                        {renderAdminSidebarIcon(
+                          item.iconName,
+                          'w-4 h-4 shrink-0',
+                          active ? accentColor : undefined
+                        )}
+                        {!collapsed && <span className="truncate">{item.shortLabel}</span>}
                       </span>
-                      {!collapsed && badgeText && (
-                        <span
-                          className={`rounded-md px-1.5 py-0.5 text-[10px] font-black tabular-nums shrink-0 ${
-                            active
-                              ? 'bg-white/20 text-white'
-                              : 'bg-[#f9c400] text-[#06131c]'
-                          }`}
-                        >
-                          {badgeText}
-                        </span>
-                      )}
                     </button>
-                  );
-                })}
-              </div>
-            )}
+                    {!collapsed && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          persistSidebarLayoutUpdate(
+                            togglePinnedTabInLayout(adminNavLayout, item.id)
+                          )
+                        }
+                        title="إلغاء التثبيت"
+                        aria-label={`إلغاء تثبيت ${item.label}`}
+                        className="absolute left-1.5 inline-flex h-6 w-6 items-center justify-center rounded-md text-[#b7c9ef]/60 hover:text-white hover:bg-white/10 opacity-70 group-hover:opacity-100 cursor-pointer"
+                      >
+                        <PinOff className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        );
-      })}
-    </nav>
-  );
+        )}
+
+        {/* Accordion Groups */}
+        {visibleGroups.length === 0 ? (
+          <div className="rounded-xl bg-[#1a242e]/60 p-3 text-center text-[11px] font-bold text-[#b7c9ef]">
+            لا توجد أقسام مطابقة للبحث
+          </div>
+        ) : (
+          visibleGroups.map((group) => {
+            const groupOpen = isSearching || openGroupIds.includes(group.id);
+            const hasActiveChild = group.items.some((i) => i.id === activeTab);
+
+            return (
+              <div
+                key={group.id}
+                onDragOver={(e) => {
+                  if (!collapsed && isOwner && (draggedSidebarGroupId || draggedSidebarItemId)) {
+                    e.preventDefault();
+                  }
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (!isOwner) return;
+                  if (draggedSidebarGroupId && draggedSidebarGroupId !== group.id) {
+                    const fromIdx = adminNavLayout.groups.findIndex(
+                      (g) => g.id === draggedSidebarGroupId
+                    );
+                    const toIdx = adminNavLayout.groups.findIndex((g) => g.id === group.id);
+                    if (fromIdx !== -1 && toIdx !== -1) {
+                      persistSidebarLayoutUpdate(moveGroupInLayout(adminNavLayout, fromIdx, toIdx));
+                    }
+                    setDraggedSidebarGroupId(null);
+                  } else if (draggedSidebarItemId) {
+                    persistSidebarLayoutUpdate(moveItemInLayout(adminNavLayout, draggedSidebarItemId, group.id));
+                    setDraggedSidebarItemId(null);
+                  }
+                }}
+                className="space-y-1 rounded-2xl transition-colors"
+              >
+                {!collapsed && (
+                  <div
+                    draggable={isOwner}
+                    onDragStart={() => setDraggedSidebarGroupId(group.id)}
+                    onDragEnd={() => setDraggedSidebarGroupId(null)}
+                    className={`flex items-center gap-1 rounded-xl px-2 py-1.5 transition-colors ${
+                      hasActiveChild ? 'bg-white/[0.04]' : 'hover:bg-white/[0.03]'
+                    }`}
+                  >
+                    {sidebarReorderMode && isOwner && (
+                      <GripVertical className="w-3.5 h-3.5 shrink-0 text-[#b7c9ef]/60 cursor-grab" />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => toggleSidebarGroup(group.id)}
+                      aria-expanded={groupOpen}
+                      className="flex flex-1 min-w-0 items-center justify-between gap-2 text-[11px] font-extrabold text-white/90 hover:text-white cursor-pointer"
+                    >
+                      <span className="flex items-center gap-2 min-w-0">
+                        <span
+                          className="h-2.5 w-2.5 rounded-full shrink-0"
+                          style={{ backgroundColor: group.accentColor }}
+                        />
+                        {renderAdminSidebarIcon(group.iconName, 'w-3.5 h-3.5 shrink-0', group.accentColor)}
+                        <span className="truncate">{group.label}</span>
+                      </span>
+                      <span className="flex items-center gap-1 shrink-0">
+                        <span className="font-latin text-[10px] font-bold text-[#b7c9ef]/70">
+                          {group.items.length}
+                        </span>
+                        <ChevronDown
+                          className={`w-3.5 h-3.5 transition-transform text-[#b7c9ef]/80 ${
+                            groupOpen ? '' : 'rotate-90'
+                          }`}
+                        />
+                      </span>
+                    </button>
+                  </div>
+                )}
+
+                {(groupOpen || collapsed) && (
+                  <div className="rtv-admin-sidebar-list space-y-1">
+                    {group.items.map((item) => {
+                      const active = activeTab === item.id;
+                      const badge = getBadgeInfo(item.id);
+                      const isPinned = (adminNavLayout.pinnedTabs || []).includes(item.id);
+
+                      return (
+                        <div
+                          key={item.id}
+                          draggable={!collapsed && isOwner}
+                          onDragStart={(e) => {
+                            e.stopPropagation();
+                            setDraggedSidebarItemId(item.id);
+                          }}
+                          onDragOver={(e) => {
+                            if (!collapsed && isOwner && draggedSidebarItemId) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                            }
+                          }}
+                          onDrop={(e) => {
+                            if (!isOwner || !draggedSidebarItemId || draggedSidebarItemId === item.id) return;
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const targetLayoutGrp = adminNavLayout.groups.find((g) => g.id === group.id);
+                            const targetIdx = targetLayoutGrp
+                              ? targetLayoutGrp.items.findIndex((entry) => entry.id === item.id)
+                              : undefined;
+                            persistSidebarLayoutUpdate(
+                              moveItemInLayout(
+                                adminNavLayout,
+                                draggedSidebarItemId,
+                                group.id,
+                                targetIdx !== undefined && targetIdx >= 0 ? targetIdx : undefined
+                              )
+                            );
+                            setDraggedSidebarItemId(null);
+                          }}
+                          onDragEnd={() => setDraggedSidebarItemId(null)}
+                          className="group/item relative flex items-center"
+                        >
+                          <button
+                            type="button"
+                            title={collapsed ? item.label : item.description}
+                            onClick={() => handleSelectSidebarTab(item.id)}
+                            style={
+                              active
+                                ? {
+                                    backgroundColor: `color-mix(in srgb, ${group.accentColor} 16%, transparent)`,
+                                    borderInlineStartColor: group.accentColor,
+                                  }
+                                : undefined
+                            }
+                            className={`rtv-admin-sidebar-item flex w-full items-center ${
+                              collapsed ? 'justify-center px-2' : 'justify-between px-3'
+                            } gap-2 rounded-xl py-2.5 text-xs font-bold transition-colors cursor-pointer ${
+                              active
+                                ? 'text-white border-r-[3px] shadow-sm'
+                                : 'text-[#b7c9ef] hover:bg-[#1a242e] hover:text-white'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2 min-w-0">
+                              {sidebarReorderMode && !collapsed && isOwner && (
+                                <GripVertical className="w-3 h-3 shrink-0 text-[#b7c9ef]/50 cursor-grab" />
+                              )}
+                              {renderAdminSidebarIcon(
+                                item.iconName,
+                                'w-4 h-4 shrink-0',
+                                active ? group.accentColor : undefined
+                              )}
+                              {!collapsed && <span className="truncate">{item.label}</span>}
+                            </span>
+                            {!collapsed && (
+                              <span className="flex items-center gap-1 shrink-0">
+                                {badge && (
+                                  <span
+                                    className={`rounded-md px-1.5 py-0.5 text-[10px] font-black tabular-nums ${
+                                      badge.tone === 'alert'
+                                        ? 'bg-[#D92321] text-white'
+                                        : badge.tone === 'warn'
+                                          ? 'bg-amber-500/20 border border-amber-400/40 text-amber-200'
+                                          : 'bg-white/10 text-white/90'
+                                    }`}
+                                  >
+                                    {badge.text}
+                                  </span>
+                                )}
+                                {isOwner && (
+                                  <span
+                                    role="button"
+                                    tabIndex={-1}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      persistSidebarLayoutUpdate(
+                                        togglePinnedTabInLayout(adminNavLayout, item.id)
+                                      );
+                                    }}
+                                    title={isPinned ? 'إلغاء التثبيت' : 'تثبيت في الأعلى'}
+                                    className={`inline-flex h-5 w-5 items-center justify-center rounded-md transition-opacity ${
+                                      isPinned
+                                        ? 'opacity-100 rtv-admin-accent-text'
+                                        : 'opacity-0 group-hover/item:opacity-80 hover:opacity-100 text-[#b7c9ef]'
+                                    }`}
+                                  >
+                                    <Pin className="w-3 h-3" />
+                                  </span>
+                                )}
+                              </span>
+                            )}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </nav>
+    );
+  };
 
   return (
     <div
@@ -3501,7 +4128,7 @@ export function AdminDashboardView({
       className="rtv-admin-root min-h-screen bg-[#06131c] text-white flex flex-col"
     >
       {/* Dedicated Standalone Admin Top Bar */}
-      <header className="sticky top-0 z-40 border-b border-white/10 bg-[#0c1821]/95 backdrop-blur-md">
+      <header className="rtv-admin-tone-target sticky top-0 z-40 border-b border-white/10 bg-[#0c1821]/95 backdrop-blur-md">
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-3">
           <div className="flex items-center gap-3 min-w-0">
             <button
@@ -3531,22 +4158,22 @@ export function AdminDashboardView({
               )}
             </button>
 
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#D92321] text-white shadow-lg shrink-0">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl rtv-admin-accent-bg text-white shadow-lg shrink-0">
               <LayoutDashboard className="w-5 h-5" />
             </div>
 
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="font-display text-base sm:text-lg font-extrabold text-white whitespace-nowrap">
-                  إدارة RahaL TV
+                  إدارة {activeBranding.siteName || settingsForm.siteName || 'RahaL TV'}
                 </h1>
-                <span className="font-latin rounded-lg bg-[#f9c400]/15 border border-[#f9c400]/30 px-2 py-0.5 text-[10px] font-black text-[#f9c400]">
+                <span className="font-latin rounded-lg rtv-admin-accent-soft border border-white/15 px-2 py-0.5 text-[10px] font-black rtv-admin-accent-text">
                   /admin
                 </span>
                 <span
                   className={`inline-flex items-center gap-1 rounded-lg px-2 py-0.5 text-[10px] font-extrabold border ${
                     isOwner
-                      ? 'bg-[#f9c400]/15 border-[#f9c400]/35 text-[#f9c400]'
+                      ? 'rtv-admin-accent-soft border-white/15 rtv-admin-accent-text'
                       : 'bg-sky-500/15 border-sky-400/35 text-sky-300'
                   }`}
                 >
@@ -3563,7 +4190,13 @@ export function AdminDashboardView({
 
               {/* Breadcrumb */}
               <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-[#b7c9ef] mt-0.5">
-                <span className="text-[#b7c9ef]/70">{currentNavMeta.group.label}</span>
+                <span className="inline-flex items-center gap-1 text-[#b7c9ef]/80">
+                  <span
+                    className="h-2 w-2 rounded-full inline-block"
+                    style={{ backgroundColor: currentNavMeta.group.accentColor }}
+                  />
+                  <span>{currentNavMeta.group.label}</span>
+                </span>
                 <ChevronLeft className="w-3 h-3 text-[#b7c9ef]/50" />
                 <span className="font-extrabold text-white">{currentNavMeta.item.label}</span>
               </div>
@@ -3577,9 +4210,9 @@ export function AdminDashboardView({
               onClick={() => setCommandPaletteOpen(true)}
               className="inline-flex items-center gap-2 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 px-3 py-2 text-xs font-bold text-[#b7c9ef] hover:text-white cursor-pointer whitespace-nowrap shrink-0"
             >
-              <Command className="w-3.5 h-3.5 text-[#f9c400]" />
+              <Command className="w-3.5 h-3.5 rtv-admin-accent-text" />
               <span className="hidden md:inline">بحث وانتقال سريع</span>
-              <span className="hidden lg:inline font-latin rounded bg-[#0c1821] px-1.5 py-0.5 text-[10px] text-[#f9c400]">
+              <span className="hidden lg:inline font-latin rounded bg-[#0c1821] px-1.5 py-0.5 text-[10px] rtv-admin-accent-text">
                 Ctrl+K
               </span>
             </button>
@@ -3591,13 +4224,13 @@ export function AdminDashboardView({
               aria-label="مركز الإشعارات والتنبيهات"
               className={`relative inline-flex h-9 w-9 items-center justify-center rounded-xl border cursor-pointer shrink-0 ${
                 activeTab === 'notifications'
-                  ? 'bg-[#D92321] border-[#D92321] text-white'
+                  ? 'rtv-admin-accent-bg border-transparent text-white'
                   : 'bg-[#1a242e] border-white/10 text-[#b7c9ef] hover:text-white'
               }`}
             >
               <Bell className="w-4 h-4" />
               {totalBellBadgeCount > 0 && (
-                <span className="absolute -top-1.5 -left-1.5 inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-[#f9c400] px-1 text-[10px] font-black text-[#06131c] tabular-nums">
+                <span className="absolute -top-1.5 -left-1.5 inline-flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-[#D92321] px-1 text-[10px] font-black text-white tabular-nums">
                   {totalBellBadgeCount}
                 </span>
               )}
@@ -3606,7 +4239,7 @@ export function AdminDashboardView({
             <button
               type="button"
               onClick={openEditorForNew}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-3.5 py-2 text-xs font-extrabold text-white shadow-md cursor-pointer whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1.5 rounded-xl rtv-admin-accent-bg hover:opacity-90 px-3.5 py-2 text-xs font-extrabold text-white shadow-md cursor-pointer whitespace-nowrap shrink-0"
             >
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">إضافة عمل جديد</span>
@@ -3665,7 +4298,7 @@ export function AdminDashboardView({
             className="fixed inset-0 bg-black/75 backdrop-blur-sm"
             onClick={() => setMobileDrawerOpen(false)}
           />
-          <aside className="relative z-10 w-80 max-w-[85vw] h-full bg-[#0c1821] border-l border-white/10 p-4 overflow-y-auto space-y-4 shadow-2xl">
+          <aside className="rtv-admin-sidebar-shell relative z-10 w-80 max-w-[85vw] h-full bg-[#0c1821] border-l border-white/10 p-4 overflow-y-auto space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
               <span className="font-display text-sm font-extrabold text-white">أقسام RahaL TV</span>
               <button
@@ -3684,10 +4317,10 @@ export function AdminDashboardView({
 
       {/* Main Split Workspace */}
       <div className="mx-auto w-full max-w-[1600px] flex-1 px-4 sm:px-6 py-6">
-        <div className="flex flex-col lg:flex-row gap-6 items-start">
+        <div className="rtv-admin-stack flex flex-col lg:flex-row gap-6 items-start">
           {/* Desktop 9-Group Collapsible Sidebar */}
           <aside
-            className={`hidden lg:block shrink-0 rounded-3xl bg-[#0c1821] border border-white/[0.08] p-3 lg:sticky lg:top-20 max-h-[calc(100vh-6rem)] overflow-y-auto transition-all ${
+            className={`rtv-admin-sidebar-shell rtv-admin-tone-target hidden lg:block shrink-0 rounded-3xl bg-[#0c1821] border border-white/[0.08] p-3 lg:sticky lg:top-20 max-h-[calc(100vh-6rem)] overflow-y-auto transition-all ${
               workspacePrefs.sidebarCollapsed ? 'w-24' : 'rtv-admin-sidebar-expanded'
             }`}
           >
@@ -3695,7 +4328,7 @@ export function AdminDashboardView({
           </aside>
 
           {/* Active Tab Workspace */}
-          <main className="flex-1 min-w-0 w-full space-y-6">
+          <main className="rtv-admin-tone-target flex-1 min-w-0 w-full space-y-6">
             {dbConnectionStatus && dbConnectionStatus !== 'connected' && (() => {
               const activeFirebaseConfig = getActiveFirebaseConfig();
               const dbReg = loadDatabaseRegistry();
@@ -4088,6 +4721,26 @@ export function AdminDashboardView({
               )}
 
               {/* GROUP 5: DESIGN & DEVICE MODES */}
+              {isOwner && activeTab === 'website_branding' && (
+                <WebsiteBrandingPanel
+                  branding={activeBranding}
+                  siteNameFallback={settingsForm.siteName}
+                  busy={busyAction}
+                  onSaveBranding={handleSaveWebsiteBranding}
+                  onNotify={onNotify}
+                />
+              )}
+
+              {isOwner && activeTab === 'slider_customization' && (
+                <SliderCustomizationPanel
+                  homeConfig={activeHomeConfig}
+                  catalog={catalog}
+                  busy={busyAction}
+                  onSaveHomeConfig={handleSaveHomeConfig}
+                  onNotify={onNotify}
+                />
+              )}
+
               {isOwner && activeTab === 'home_builder' && (
                 <HomeBuilderPanel
                   catalog={catalog}
@@ -4103,6 +4756,7 @@ export function AdminDashboardView({
                   onSaveHomeConfig={handleSaveHomeConfig}
                   onPreviewHome={onExitDashboard}
                   onOpenTypographyTab={() => navigateToTab('typography')}
+                  onOpenSliderCustomization={() => navigateToTab('slider_customization')}
                   onNotify={onNotify}
                 />
               )}
@@ -5752,9 +6406,16 @@ export function AdminDashboardView({
                       required
                       value={settingsForm.siteName}
                       onChange={(e) =>
-                        setSettingsForm({ ...settingsForm, siteName: e.target.value })
+                        setSettingsForm({
+                          ...settingsForm,
+                          siteName: e.target.value,
+                          branding: {
+                            ...activeBranding,
+                            siteName: e.target.value,
+                          },
+                        })
                       }
-                      className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
+                      className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:outline-none"
                     />
                   </div>
 

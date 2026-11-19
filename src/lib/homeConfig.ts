@@ -1,11 +1,13 @@
 import {
+  HeroInfoPosition,
+  HeroTextAlign,
   HomeHeroMode,
   HomeLayoutConfig,
   HomeSectionConfig,
   HomeSectionSource,
   MediaItem,
 } from '../types/media';
-import { matchesCategoryFilter } from './mediaFilters';
+import { matchesCategoryFilter } from './categoryMatcher';
 
 export const HOME_CONFIG_STORAGE_KEY = 'rahaltv_home_config_v1';
 
@@ -56,6 +58,22 @@ export const DEFAULT_HOME_CONFIG: HomeLayoutConfig = {
   heroPauseOnHover: true,
   heroMaxSlides: 8,
   heroSlideIds: [],
+  heroShowDescription: true,
+  heroTitleSizePx: 26,
+  heroDescriptionSizePx: 13,
+  heroDescriptionLines: 2,
+  heroTextAlign: 'right',
+  heroInfoPosition: 'bottom-right',
+  heroTextMaxWidthPx: 540,
+  heroShowBadge: true,
+  heroShowRating: true,
+  heroShowYear: true,
+  heroShowDuration: true,
+  heroShowGenres: false,
+  heroShowQuality: true,
+  heroShowWatchBtn: true,
+  heroShowDetailsBtn: true,
+  heroShowWatchlistBtn: true,
   showQuickFilters: true,
   showCategoryBar: false,
   showFullLibrary: false,
@@ -66,6 +84,15 @@ export const DEFAULT_HOME_CONFIG: HomeLayoutConfig = {
 };
 
 const VALID_HERO_MODES: HomeHeroMode[] = ['auto', 'manual', 'brand'];
+const VALID_HERO_ALIGNS: HeroTextAlign[] = ['right', 'center', 'left'];
+const VALID_HERO_POSITIONS: HeroInfoPosition[] = [
+  'bottom-right',
+  'bottom-center',
+  'bottom-left',
+  'middle-right',
+  'middle-center',
+  'middle-left',
+];
 const VALID_SOURCES: HomeSectionSource[] = [
   'latest',
   'movies',
@@ -163,6 +190,38 @@ export function normalizeHomeConfig(
       ).slice(0, 12)
     : [];
 
+  const titleSizeNum = Number(raw.heroTitleSizePx);
+  const heroTitleSizePx = Number.isFinite(titleSizeNum)
+    ? Math.min(54, Math.max(16, Math.round(titleSizeNum)))
+    : DEFAULT_HOME_CONFIG.heroTitleSizePx!;
+
+  const descSizeNum = Number(raw.heroDescriptionSizePx);
+  const heroDescriptionSizePx = Number.isFinite(descSizeNum)
+    ? Math.min(22, Math.max(11, Math.round(descSizeNum)))
+    : DEFAULT_HOME_CONFIG.heroDescriptionSizePx!;
+
+  const descLinesNum = Number(raw.heroDescriptionLines);
+  const heroDescriptionLines = (
+    Number.isFinite(descLinesNum)
+      ? Math.min(5, Math.max(1, Math.round(descLinesNum)))
+      : DEFAULT_HOME_CONFIG.heroDescriptionLines!
+  ) as 1 | 2 | 3 | 4 | 5;
+
+  const heroTextAlign: HeroTextAlign = VALID_HERO_ALIGNS.includes(raw.heroTextAlign as HeroTextAlign)
+    ? (raw.heroTextAlign as HeroTextAlign)
+    : DEFAULT_HOME_CONFIG.heroTextAlign!;
+
+  const heroInfoPosition: HeroInfoPosition = VALID_HERO_POSITIONS.includes(
+    raw.heroInfoPosition as HeroInfoPosition
+  )
+    ? (raw.heroInfoPosition as HeroInfoPosition)
+    : DEFAULT_HOME_CONFIG.heroInfoPosition!;
+
+  const maxWidthNum = Number(raw.heroTextMaxWidthPx);
+  const heroTextMaxWidthPx = Number.isFinite(maxWidthNum)
+    ? Math.min(860, Math.max(320, Math.round(maxWidthNum)))
+    : DEFAULT_HOME_CONFIG.heroTextMaxWidthPx!;
+
   return {
     showHero: raw.showHero ?? true,
     heroMode,
@@ -188,6 +247,22 @@ export function normalizeHomeConfig(
     heroPauseOnHover: raw.heroPauseOnHover ?? true,
     heroMaxSlides,
     heroSlideIds,
+    heroShowDescription: raw.heroShowDescription ?? true,
+    heroTitleSizePx,
+    heroDescriptionSizePx,
+    heroDescriptionLines,
+    heroTextAlign,
+    heroInfoPosition,
+    heroTextMaxWidthPx,
+    heroShowBadge: raw.heroShowBadge ?? true,
+    heroShowRating: raw.heroShowRating ?? true,
+    heroShowYear: raw.heroShowYear ?? true,
+    heroShowDuration: raw.heroShowDuration ?? true,
+    heroShowGenres: raw.heroShowGenres ?? false,
+    heroShowQuality: raw.heroShowQuality ?? true,
+    heroShowWatchBtn: raw.heroShowWatchBtn ?? true,
+    heroShowDetailsBtn: raw.heroShowDetailsBtn ?? true,
+    heroShowWatchlistBtn: raw.heroShowWatchlistBtn ?? true,
     showQuickFilters: raw.showQuickFilters ?? true,
     showCategoryBar: raw.showCategoryBar ?? false,
     showFullLibrary: raw.showFullLibrary ?? false,

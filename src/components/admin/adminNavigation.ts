@@ -1,4 +1,4 @@
-// Exact 9-group RTL Admin Navigation Architecture & Permission Mapping.
+// Exact 9-group RTL Admin Navigation Architecture, Group Accent Colors, Icons & Permission Mapping.
 
 import type { ModeratorSubPermissions } from '../../lib/adminPreferences';
 
@@ -18,6 +18,8 @@ export type AdminTab =
   | 'site_scraper'
   | 'scraper_adapters'
   | 'crawl_operations'
+  | 'website_branding'
+  | 'slider_customization'
   | 'home_builder'
   | 'typography'
   | 'admin_appearance'
@@ -51,6 +53,7 @@ export interface AdminNavItem {
   shortLabel: string;
   description: string;
   keywords: string[];
+  iconName: string;
   ownerOnly?: boolean;
   moderatorPermKey?: keyof ModeratorSubPermissions;
 }
@@ -58,6 +61,8 @@ export interface AdminNavItem {
 export interface AdminNavGroup {
   id: AdminNavGroupId;
   label: string;
+  accentColor: string;
+  iconName: string;
   items: AdminNavItem[];
 }
 
@@ -65,6 +70,8 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
   {
     id: 'dashboard',
     label: 'لوحة القيادة والتحليلات',
+    accentColor: '#3b82f6', // Calm Azure Blue
+    iconName: 'LayoutDashboard',
     items: [
       {
         id: 'overview',
@@ -73,6 +80,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'نظرة عامة',
         description: 'مؤشرات الأداء اليومية، صحة المحتوى، وتنبيهات النظام السريعة',
         keywords: ['overview', 'dashboard', 'نظرة', 'احصائيات', 'لوحة'],
+        iconName: 'Gauge',
         ownerOnly: true,
       },
       {
@@ -82,6 +90,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'الإشعارات',
         description: 'تنبيهات الطلبات المعلّقة، السيرفرات المعطلة، مهام الجلب، وأخطاء النظام',
         keywords: ['notifications', 'alerts', 'اشعارات', 'تنبيهات', 'تحذيرات'],
+        iconName: 'BellRing',
       },
       {
         id: 'analytics',
@@ -90,6 +99,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'التحليلات',
         description: 'أعلى الأعمال مشاهدة وتقييماً وتوزيع التصنيفات والجودات',
         keywords: ['analytics', 'views', 'ratings', 'تحليلات', 'مشاهدات', 'تقييمات'],
+        iconName: 'BarChart3',
         moderatorPermKey: 'allowAnalyticsRead',
       },
     ],
@@ -97,6 +107,8 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
   {
     id: 'content',
     label: 'إدارة المحتوى والكتالوج',
+    accentColor: '#10b981', // Calm Emerald
+    iconName: 'Film',
     items: [
       {
         id: 'catalog',
@@ -105,6 +117,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'الكتالوج',
         description: 'إضافة، تعديل، تثبيت، وفرز كافة الأعمال والحلقات',
         keywords: ['catalog', 'movies', 'series', 'افلام', 'مسلسلات', 'كتالوج'],
+        iconName: 'Clapperboard',
       },
       {
         id: 'categories',
@@ -113,6 +126,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'التصنيفات',
         description: 'إحصائيات الأقسام والأنواع والجودات والدمج أو إعادة التسمية الجماعية',
         keywords: ['categories', 'genres', 'tags', 'تصنيفات', 'اقسام', 'انواع'],
+        iconName: 'Tags',
         moderatorPermKey: 'allowBulkEditor',
       },
       {
@@ -122,6 +136,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'تعديل جماعي',
         description: 'تحديد عدة أعمال وتعديل الجودة/القسم/التصنيف/الحالة دفعة واحدة مع تراجع فوري',
         keywords: ['bulk', 'edit', 'batch', 'تعديل جماعي', 'تحديث'],
+        iconName: 'Layers',
         moderatorPermKey: 'allowBulkEditor',
       },
       {
@@ -131,6 +146,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'الصور',
         description: 'فحص ومعالجة البوسترات وخلفيات العرض بدقة عالية',
         keywords: ['images', 'posters', 'backdrops', 'صور', 'بوسترات'],
+        iconName: 'ImageIcon',
       },
       {
         id: 'content_audit',
@@ -139,6 +155,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'فحص المحتوى',
         description: 'كشف التكرارات، الحلقات الناقصة، السيرفرات المفقودة والبيانات غير المكتملة',
         keywords: ['audit', 'duplicates', 'gaps', 'فحص', 'تكرار', 'ناقص'],
+        iconName: 'CheckSquare',
         moderatorPermKey: 'allowContentAudit',
       },
     ],
@@ -146,6 +163,8 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
   {
     id: 'player_servers',
     label: 'المشاهدة والسيرفرات والحماية',
+    accentColor: '#0ea5e9', // Calm Sky
+    iconName: 'Tv',
     items: [
       {
         id: 'watch_servers',
@@ -154,6 +173,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'السيرفرات',
         description: 'جرد النطاقات، فحص الروابط المعطلة جماعياً، وكشف الروابط المشبوهة',
         keywords: ['servers', 'health', 'links', 'سيرفرات', 'روابط', 'مشاهدة'],
+        iconName: 'Server',
         moderatorPermKey: 'allowWatchServers',
       },
       {
@@ -163,6 +183,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'مظهر المشغل',
         description: 'ألوان إطار المشاهدة، الحواف، التوهج، واسم العلامة التجارية',
         keywords: ['player', 'theme', 'colors', 'مشغل', 'ثيم', 'الوان'],
+        iconName: 'MonitorPlay',
         ownerOnly: true,
       },
       {
@@ -172,6 +193,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'درع الإعلانات',
         description: 'قواعد عزل الإطارات (Sandbox) وحماية المشاهد من النوافذ المنبثقة',
         keywords: ['shield', 'popup', 'sandbox', 'درع', 'نوافذ', 'اعلانات'],
+        iconName: 'ShieldCheck',
         ownerOnly: true,
       },
     ],
@@ -179,6 +201,8 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
   {
     id: 'crawlers',
     label: 'أدوات الجلب والاستيراد',
+    accentColor: '#8b5cf6', // Calm Violet
+    iconName: 'DownloadCloud',
     items: [
       {
         id: 'scraper',
@@ -187,6 +211,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'جلب عمل',
         description: 'استيراد فيلم أو مسلسل من رابط مباشر أو مصدر HTML',
         keywords: ['scraper', 'single', 'import', 'جلب', 'استيراد', 'رابط'],
+        iconName: 'Link2',
       },
       {
         id: 'site_scraper',
@@ -195,6 +220,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'جلب موقع',
         description: 'مسح أقسام كاملة وجلب قائمة أعمال ونشرها دفعة واحدة',
         keywords: ['crawler', 'site', 'bulk import', 'جلب موقع', 'زاحف'],
+        iconName: 'Globe',
         moderatorPermKey: 'allowSiteScraper',
       },
       {
@@ -204,6 +230,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'المحولات',
         description: 'إنشاء وتخصيص قواعد استخراج المواقع الخارجية (Adapters)',
         keywords: ['adapters', 'builder', 'sources', 'مصادر', 'محولات'],
+        iconName: 'Wrench',
         moderatorPermKey: 'allowAdapters',
       },
       {
@@ -213,6 +240,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'المهام الحية',
         description: 'متابعة مهام الجلب الجارية وإيقافها ومراجعة سجل العمليات السابقة',
         keywords: ['tasks', 'jobs', 'queue', 'cancel', 'عمليات', 'مهام'],
+        iconName: 'Activity',
         moderatorPermKey: 'allowCrawlOperations',
       },
       {
@@ -222,21 +250,45 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'المساعد الذكي',
         description: 'تعديل ذكي بالأوامر العربية للمحتوى والسيرفرات',
         keywords: ['ai', 'assistant', 'smart', 'مساعد', 'ذكي'],
+        iconName: 'Sparkles',
         ownerOnly: true,
       },
     ],
   },
   {
     id: 'design',
-    label: 'التصميم والواجهة والأجهزة',
+    label: 'التصميم والهوية والأجهزة',
+    accentColor: '#14b8a6', // Calm Teal
+    iconName: 'Palette',
     items: [
+      {
+        id: 'website_branding',
+        groupId: 'design',
+        label: 'إعدادات هوية الموقع (Website Branding)',
+        shortLabel: 'هوية الموقع',
+        description: 'إدارة الشعار، اسم الموقع وخطه ولونه، وأيقونة المتصفح Favicon مع معاينة فورية',
+        keywords: ['branding', 'logo', 'favicon', 'identity', 'site name', 'هوية', 'لوجو', 'شعار', 'اسم الموقع', 'ايقونة'],
+        iconName: 'BadgeCheck',
+        ownerOnly: true,
+      },
+      {
+        id: 'slider_customization',
+        groupId: 'design',
+        label: 'إعدادات السلايدر الرئيسي',
+        shortLabel: 'تخصيص السلايدر',
+        description: 'التحكم الدقيق في إظهار/إخفاء الوصف، أحجام الخطوط، التموضع، وشارات وأزرار السلايدر',
+        keywords: ['slider', 'hero', 'description', 'heroShowDescription', 'سلايدر', 'وصف', 'عرض', 'واجهة'],
+        iconName: 'SlidersHorizontal',
+        ownerOnly: true,
+      },
       {
         id: 'home_builder',
         groupId: 'design',
-        label: 'الصفحة الرئيسية والسلايدر',
+        label: 'الصفحة الرئيسية والأقسام',
         shortLabel: 'الرئيسية',
-        description: 'ترتيب أقسام الرئيسية وإعدادات السلايدر السينمائي',
-        keywords: ['home', 'hero', 'slider', 'sections', 'رئيسية', 'سلايدر'],
+        description: 'ترتيب أقسام الرئيسية ووضع البطل واختيار شرائح العرض',
+        keywords: ['home', 'hero', 'slider', 'sections', 'رئيسية', 'اقسام'],
+        iconName: 'LayoutTemplate',
         ownerOnly: true,
       },
       {
@@ -246,15 +298,17 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'خطوط الموقع',
         description: 'تخصيص الخطوط العربية واللاتينية وأحجام العناوين لواجهة الموقع فقط',
         keywords: ['typography', 'fonts', 'size', 'خطوط', 'نصوص', 'موقع'],
+        iconName: 'Type',
         ownerOnly: true,
       },
       {
         id: 'admin_appearance',
         groupId: 'design',
-        label: 'تخصيص مظهر لوحة الإدارة',
+        label: 'راحة العين ومظهر لوحة الإدارة',
         shortLabel: 'مظهر الإدارة',
-        description: 'خطوط وأحجام وأوزان لوحة الإدارة، المظهر الداكن والفاتح، وكثافة البطاقات والجداول',
-        keywords: ['admin', 'appearance', 'theme', 'fonts', 'light', 'dark', 'مظهر', 'لوحة', 'خطوط'],
+        description: 'أوضاع Dark/Light/Soft Gray/Comfortable Eye، الألوان، التباين، والخطوط للوحة الإدارة فقط',
+        keywords: ['admin', 'appearance', 'theme', 'eye comfort', 'soft gray', 'fonts', 'مظهر', 'راحة العين'],
+        iconName: 'Eye',
         ownerOnly: true,
       },
       {
@@ -262,8 +316,9 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         groupId: 'design',
         label: 'ترتيب أقسام لوحة الإدارة',
         shortLabel: 'ترتيب الأقسام',
-        description: 'سحب وإفلات لإعادة ترتيب أقسام الإدارة، إنشاء مجموعات جديدة، وإخفاء أو إظهار العناصر',
+        description: 'سحب وإفلات لإعادة ترتيب أقسام الإدارة، تثبيت المفضلة، إنشاء مجموعات جديدة، وإخفاء العناصر',
         keywords: ['navigation', 'order', 'sidebar', 'groups', 'ترتيب', 'اقسام', 'قائمة'],
+        iconName: 'ListOrdered',
         ownerOnly: true,
       },
       {
@@ -273,6 +328,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'أوضاع العرض',
         description: 'تفعيل وضع Android TV / Google TV، وضع الأجهزة الضعيفة، وتشخيص المتصفح',
         keywords: ['tv', 'mobile', 'android', 'dpad', 'compat', 'تلفاز', 'موبايل', 'توافق'],
+        iconName: 'Smartphone',
         ownerOnly: true,
       },
     ],
@@ -280,6 +336,8 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
   {
     id: 'community',
     label: 'الجمهور والطلبات',
+    accentColor: '#f59e0b', // Muted Amber (icon/dot accent only)
+    iconName: 'MessageSquare',
     items: [
       {
         id: 'requests',
@@ -288,6 +346,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'الطلبات',
         description: 'مراجعة واعتماد وتنفيذ طلبات الأفلام والمسلسلات',
         keywords: ['requests', 'visitors', 'طلبات', 'زوار'],
+        iconName: 'Inbox',
         ownerOnly: true,
       },
     ],
@@ -295,6 +354,8 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
   {
     id: 'security',
     label: 'الأمان والصلاحيات والسجلات',
+    accentColor: '#6366f1', // Calm Indigo
+    iconName: 'Shield',
     items: [
       {
         id: 'users',
@@ -303,6 +364,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'الصلاحيات',
         description: 'إدارة حسابات المشرفين ومصفوفة الصلاحيات الدقيقة وقائمة الأعضاء',
         keywords: ['users', 'admins', 'rbac', 'roles', 'مشرفين', 'اعضاء', 'صلاحيات'],
+        iconName: 'Users',
         ownerOnly: true,
       },
       {
@@ -312,6 +374,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'قواعد Firestore',
         description: 'معاينة ونسخ قواعد أمان قاعدة البيانات والتحقق من النشر',
         keywords: ['firestore', 'rules', 'security', 'قواعد', 'امان'],
+        iconName: 'Lock',
         ownerOnly: true,
       },
       {
@@ -321,6 +384,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'السجلات',
         description: 'سجل عمليات الإدارة السحابي + أخطاء المتصفح والعميل المسجلة',
         keywords: ['logs', 'audit', 'errors', 'سجل', 'نشاطات', 'اخطاء'],
+        iconName: 'FileText',
         ownerOnly: true,
       },
     ],
@@ -328,6 +392,8 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
   {
     id: 'system',
     label: 'قواعد البيانات وصحة النظام',
+    accentColor: '#06b6d4', // Calm Cyan
+    iconName: 'Database',
     items: [
       {
         id: 'database_manager',
@@ -336,6 +402,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'قواعد البيانات',
         description: 'إضافة وتبديل واختبار قواعد البيانات، مخزن الأسرار الآمن، الترحيل، والحماية من الانقطاع',
         keywords: ['database', 'firestore', 'realtime', 'connection', 'secrets', 'vault', 'migration', 'قواعد', 'بيانات', 'اتصال', 'تبديل'],
+        iconName: 'HardDrive',
         ownerOnly: true,
       },
       {
@@ -345,6 +412,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'صحة النظام',
         description: 'فحص فوري لـ Firebase Auth و Firestore و Worker والخادم والقدرات',
         keywords: ['health', 'diagnostics', 'firebase', 'worker', 'صحة', 'فحص', 'اتصال'],
+        iconName: 'HeartPulse',
         ownerOnly: true,
       },
       {
@@ -354,6 +422,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'النسخ الاحتياطي',
         description: 'تصدير JSON موثّق ببصمة FNV-1a ومعاينة الفروقات قبل الاستعادة',
         keywords: ['backup', 'restore', 'export', 'import', 'نسخ', 'استعادة'],
+        iconName: 'ArchiveRestore',
         ownerOnly: true,
       },
     ],
@@ -361,6 +430,8 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
   {
     id: 'settings_group',
     label: 'الإعدادات العامة',
+    accentColor: '#64748b', // Calm Slate
+    iconName: 'Settings',
     items: [
       {
         id: 'settings',
@@ -369,6 +440,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         shortLabel: 'الإعدادات',
         description: 'اسم الموقع، شريط الأخبار، وضع الصيانة، وبروكسي Cloudflare Worker',
         keywords: ['settings', 'maintenance', 'worker', 'proxy', 'اعدادات', 'صيانة'],
+        iconName: 'Sliders',
         ownerOnly: true,
       },
     ],

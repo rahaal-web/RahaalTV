@@ -519,7 +519,13 @@ export function HomeView({
               }
             }}
           >
-            <div className="relative min-h-[430px] sm:min-h-[470px] max-md:landscape:min-h-[330px] md:min-h-[600px] lg:min-h-[660px] flex flex-col justify-end">
+            <div
+              className={`relative min-h-[430px] sm:min-h-[470px] max-md:landscape:min-h-[330px] md:min-h-[600px] lg:min-h-[660px] flex flex-col ${
+                (homeConfig.heroInfoPosition || 'bottom-right').startsWith('middle-')
+                  ? 'md:justify-center justify-end'
+                  : 'justify-end'
+              }`}
+            >
               {/* Background Visual Layer */}
               <img
                 key={activeHero.id}
@@ -564,38 +570,67 @@ export function HomeView({
                     {heroTitle}
                   </h1>
 
-                  <div className="flex items-center gap-2 text-xs font-bold text-[#e5e5e5] tabular-nums">
-                    <span className="inline-flex items-center gap-1 text-[#f9c400] font-extrabold font-latin">
-                      <Star className="w-3.5 h-3.5 fill-current" />
-                      <span>{Number(activeHero.imdb || 7.5).toFixed(1)}</span>
-                    </span>
-                    <span aria-hidden="true" className="text-white/30">•</span>
-                    <span className="font-latin text-white/90">{activeHero.year || '2026'}</span>
-                    <span aria-hidden="true" className="text-white/30">•</span>
-                    <span className="font-latin text-white/95 truncate">{activeHero.quality || 'WEB-DL'}</span>
+                  {(homeConfig.heroShowRating ||
+                    homeConfig.heroShowYear ||
+                    homeConfig.heroShowQuality) && (
+                    <div className="flex items-center gap-2 text-xs font-bold text-[#e5e5e5] tabular-nums">
+                      {homeConfig.heroShowRating && (
+                        <span className="inline-flex items-center gap-1 text-[#f9c400] font-extrabold font-latin">
+                          <Star className="w-3.5 h-3.5 fill-current" />
+                          <span>{Number(activeHero.imdb || 7.5).toFixed(1)}</span>
+                        </span>
+                      )}
+                      {homeConfig.heroShowRating && homeConfig.heroShowYear && (
+                        <span aria-hidden="true" className="text-white/30">•</span>
+                      )}
+                      {homeConfig.heroShowYear && (
+                        <span className="font-latin text-white/90">{activeHero.year || '2026'}</span>
+                      )}
+                      {(homeConfig.heroShowRating || homeConfig.heroShowYear) &&
+                        homeConfig.heroShowQuality && (
+                          <span aria-hidden="true" className="text-white/30">•</span>
+                        )}
+                      {homeConfig.heroShowQuality && (
+                        <span className="font-latin text-white/95 truncate">
+                          {activeHero.quality || 'WEB-DL'}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Primary Actions on Mobile */}
+                {(homeConfig.heroShowWatchBtn || homeConfig.heroShowDetailsBtn) && (
+                  <div
+                    className={`grid gap-2.5 pt-0.5 ${
+                      homeConfig.heroShowWatchBtn && homeConfig.heroShowDetailsBtn
+                        ? 'grid-cols-2'
+                        : 'grid-cols-1'
+                    }`}
+                  >
+                    {homeConfig.heroShowWatchBtn && (
+                      <button
+                        type="button"
+                        onClick={() => onPlayNow(activeHero)}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#E50914] hover:bg-[#f40612] active:scale-[0.98] min-h-[44px] px-4 py-2.5 text-xs sm:text-sm font-extrabold text-white transition-all cursor-pointer"
+                      >
+                        <Play className="w-4 h-4 fill-current shrink-0" />
+                        <span className="truncate">{homeConfig.heroPrimaryCta || 'مشاهدة الآن'}</span>
+                      </button>
+                    )}
+
+                    {homeConfig.heroShowDetailsBtn && (
+                      <button
+                        type="button"
+                        onClick={() => onSelectMedia(activeHero)}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#181818]/85 hover:bg-[#262626] active:scale-[0.98] border border-white/15 min-h-[44px] px-4 py-2.5 text-xs sm:text-sm font-bold text-white backdrop-blur-md transition-all cursor-pointer"
+                      >
+                        <Info className="w-4 h-4 shrink-0" />
+                        <span>التفاصيل</span>
+                      </button>
+                    )}
                   </div>
-                </div>
-
-                {/* Two Primary Actions Only: Watch Now + Details */}
-                <div className="grid grid-cols-2 gap-2.5 pt-0.5">
-                  <button
-                    type="button"
-                    onClick={() => onPlayNow(activeHero)}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#E50914] hover:bg-[#f40612] active:scale-[0.98] min-h-[44px] px-4 py-2.5 text-xs sm:text-sm font-extrabold text-white transition-all cursor-pointer"
-                  >
-                    <Play className="w-4 h-4 fill-current shrink-0" />
-                    <span className="truncate">{homeConfig.heroPrimaryCta || 'مشاهدة الآن'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => onSelectMedia(activeHero)}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#181818]/85 hover:bg-[#262626] active:scale-[0.98] border border-white/15 min-h-[44px] px-4 py-2.5 text-xs sm:text-sm font-bold text-white backdrop-blur-md transition-all cursor-pointer"
-                  >
-                    <Info className="w-4 h-4 shrink-0" />
-                    <span>التفاصيل</span>
-                  </button>
-                </div>
+                )}
 
                 {/* Sleek Pagination Dots + Discreet Prev/Next Controls */}
                 {heroSlides.length > 1 && (
@@ -660,119 +695,224 @@ export function HomeView({
                 )}
               </div>
 
-              {/* Desktop & Tablet Foreground (>= 768px — Preserved Untouched) */}
-              <div className="hidden md:flex relative z-10 mx-auto w-full max-w-[1440px] px-4 sm:px-6 lg:px-10 pt-28 pb-6 sm:pb-8 flex-col gap-6 sm:gap-7">
-                {/* Main Info (Right Side in RTL) + Arrows & Progress (Left Side) */}
-                <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
-                  <div className="max-w-lg space-y-3 text-right drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)]">
-                    {/* Compact Status Badge */}
-                    <div>
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-[#E50914] px-3 py-1 text-[11px] font-extrabold text-white shadow-[0_6px_18px_rgba(229,9,20,0.45)]">
-                        <Flame className="w-3.5 h-3.5 fill-current" />
-                        <span>{homeConfig.heroBadgeText || 'الأكثر مشاهدة'}</span>
-                      </span>
-                    </div>
+              {/* Desktop & Tablet Foreground (>= 768px — Controlled via Slider Customization) */}
+              {(() => {
+                const pos = homeConfig.heroInfoPosition || 'bottom-right';
+                const align = homeConfig.heroTextAlign || 'right';
+                const isCenterPos = pos.endsWith('-center');
+                const isLeftPos = pos.endsWith('-left');
+                const justifyContentClass =
+                  align === 'center'
+                    ? 'justify-center'
+                    : align === 'left'
+                      ? 'justify-end'
+                      : 'justify-start';
+                const textAlignClass =
+                  align === 'center'
+                    ? 'text-center'
+                    : align === 'left'
+                      ? 'text-left'
+                      : 'text-right';
 
-                    {/* Balanced Compact Headline */}
-                    <h1
-                      style={{ fontSize: 'var(--rtv-hero-title-size, 22px)' }}
-                      className="font-display font-extrabold text-white leading-[1.3] line-clamp-2"
+                const metaChips: ReactNode[] = [];
+                if (homeConfig.heroShowDuration && activeHero.duration) {
+                  metaChips.push(
+                    <span key="dur" className="inline-flex items-center gap-1 text-white/90">
+                      <Clock className="w-3.5 h-3.5 text-white/75" />
+                      <span>{activeHero.duration}</span>
+                    </span>
+                  );
+                }
+                if (homeConfig.heroShowQuality) {
+                  metaChips.push(
+                    <span key="qual" className="font-latin text-white">
+                      {activeHero.quality || 'WEB-DL'}
+                    </span>
+                  );
+                }
+                if (homeConfig.heroShowYear) {
+                  metaChips.push(
+                    <span key="year" className="font-latin">
+                      {activeHero.year || '2026'}
+                    </span>
+                  );
+                }
+                if (homeConfig.heroShowRating) {
+                  metaChips.push(
+                    <span
+                      key="imdb"
+                      className="inline-flex items-center gap-1 text-[#f9c400] font-extrabold font-latin"
                     >
-                      {heroTitle}
-                    </h1>
+                      <Star className="w-3.5 h-3.5 fill-current" />
+                      {Number(activeHero.imdb || 7.5).toFixed(1)}
+                    </span>
+                  );
+                }
 
-                    {/* Single Compact Metadata Line */}
-                    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs font-bold text-[#d4d4d4] tabular-nums">
-                      {activeHero.duration && (
-                        <>
-                          <span className="inline-flex items-center gap-1 text-white/90">
-                            <Clock className="w-3.5 h-3.5 text-white/75" />
-                            <span>{activeHero.duration}</span>
-                          </span>
-                          <span aria-hidden="true" className="text-white/25">|</span>
-                        </>
-                      )}
-                      <span className="font-latin text-white">{activeHero.quality || 'WEB-DL'}</span>
-                      <span aria-hidden="true" className="text-white/25">|</span>
-                      <span className="font-latin">{activeHero.year || '2026'}</span>
-                      <span aria-hidden="true" className="text-white/25">|</span>
-                      <span className="inline-flex items-center gap-1 text-[#f9c400] font-extrabold font-latin">
-                        <Star className="w-3.5 h-3.5 fill-current" />
-                        {Number(activeHero.imdb || 7.5).toFixed(1)}
-                      </span>
-                    </div>
-
-                    {/* Concise 2-Line Story */}
-                    <p className="text-xs sm:text-[13px] text-[#d4d4d4]/90 leading-relaxed line-clamp-2 max-w-md">
-                      {heroDescription}
-                    </p>
-
-                    {/* Primary & Secondary Action Buttons */}
-                    <div className="pt-1 flex flex-wrap items-center gap-2.5">
-                      <button
-                        type="button"
-                        onClick={() => onPlayNow(activeHero)}
-                        className="inline-flex items-center gap-2 rounded-xl bg-[#E50914] hover:bg-[#f40612] px-6 py-2.5 sm:py-3 text-xs sm:text-sm font-extrabold text-white shadow-[0_10px_28px_rgba(229,9,20,0.45)] transition-transform hover:-translate-y-0.5 cursor-pointer"
-                      >
-                        <Play className="w-4 h-4 fill-current" />
-                        <span>{homeConfig.heroPrimaryCta || 'مشاهدة الآن'}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => onSelectMedia(activeHero)}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f242b]/85 hover:bg-white/20 border border-white/15 px-4 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-bold text-white backdrop-blur-md transition-colors cursor-pointer"
-                      >
-                        <Info className="w-4 h-4" />
-                        <span>التفاصيل</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => onToggleWatchlist(activeHero)}
-                        aria-label={heroInWatchlist ? 'إزالة من قائمتي' : 'إضافة لقائمتي'}
-                        className={`inline-flex h-10 w-10 sm:h-11 sm:w-11 items-center justify-center rounded-xl border backdrop-blur-md transition-colors cursor-pointer ${
-                          heroInWatchlist
-                            ? 'bg-[#4CAF50]/20 border-[#4CAF50] text-[#4CAF50]'
-                            : 'bg-[#1f242b]/80 border-white/15 text-white hover:bg-white/20'
+                return (
+                  <div className="hidden md:flex relative z-10 mx-auto w-full max-w-[1440px] px-4 sm:px-6 lg:px-10 pt-28 pb-6 sm:pb-8 flex-col gap-6 sm:gap-7">
+                    <div
+                      className={`flex flex-col lg:items-end justify-between gap-6 ${
+                        isLeftPos
+                          ? 'lg:flex-row-reverse'
+                          : isCenterPos
+                            ? 'lg:flex-col lg:items-center'
+                            : 'lg:flex-row'
+                      }`}
+                    >
+                      <div
+                        style={{ maxWidth: `${homeConfig.heroTextMaxWidthPx || 560}px` }}
+                        className={`w-full space-y-3 drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)] ${textAlignClass} ${
+                          isCenterPos ? 'mx-auto' : ''
                         }`}
                       >
-                        {heroInWatchlist ? (
-                          <Check className="w-4 h-4" />
-                        ) : (
-                          <Bookmark className="w-4 h-4" />
+                        {/* Compact Status Badge */}
+                        {homeConfig.heroShowBadge && (
+                          <div className={`flex ${justifyContentClass}`}>
+                            <span className="inline-flex items-center gap-1.5 rounded-full bg-[#E50914] px-3 py-1 text-[11px] font-extrabold text-white shadow-[0_6px_18px_rgba(229,9,20,0.45)]">
+                              <Flame className="w-3.5 h-3.5 fill-current" />
+                              <span>{homeConfig.heroBadgeText || 'الأكثر مشاهدة'}</span>
+                            </span>
+                          </div>
                         )}
-                      </button>
 
-                      {isAdmin && onOpenHomeBuilder && (
-                        <button
-                          type="button"
-                          onClick={onOpenHomeBuilder}
-                          className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#eab308] px-3.5 py-2.5 sm:py-3 text-xs font-black text-[#0f0f0f] transition-colors cursor-pointer"
+                        {/* Balanced Compact Headline */}
+                        <h1
+                          style={{
+                            fontSize: `${homeConfig.heroTitleSizePx || 26}px`,
+                          }}
+                          className="font-display font-extrabold text-white leading-[1.3] line-clamp-2"
                         >
-                          <SlidersHorizontal className="w-3.5 h-3.5" />
-                          <span>تخصيص الرئيسية</span>
-                        </button>
-                      )}
-                    </div>
+                          {heroTitle}
+                        </h1>
 
-                    {homeConfig.heroShowHighlights && (
-                      <div className="pt-1 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[11px] font-medium text-[#a3a3a3]">
-                        <span className="inline-flex items-center gap-1">
-                          <Zap className="w-3 h-3 text-[#E50914]" />
-                          <span>سيرفرات سريعة بدون تقطيع</span>
-                        </span>
-                        <span className="inline-flex items-center gap-1">
-                          <Film className="w-3 h-3 text-[#f9c400]" />
-                          <span>دقة 4K UHD</span>
-                        </span>
-                        <span className="inline-flex items-center gap-1">
-                          <ShieldCheck className="w-3 h-3 text-[#4CAF50]" />
-                          <span>تحديث يومي</span>
-                        </span>
+                        {/* Single Compact Metadata Line */}
+                        {metaChips.length > 0 && (
+                          <div
+                            className={`flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs font-bold text-[#d4d4d4] tabular-nums ${justifyContentClass}`}
+                          >
+                            {metaChips.map((chip, idx) => (
+                              <span key={idx} className="inline-flex items-center gap-2.5">
+                                {idx > 0 && (
+                                  <span aria-hidden="true" className="text-white/25">
+                                    |
+                                  </span>
+                                )}
+                                {chip}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Optional Genre Chips */}
+                        {homeConfig.heroShowGenres && (activeHero.genres || []).length > 0 && (
+                          <div className={`flex flex-wrap items-center gap-1.5 ${justifyContentClass}`}>
+                            {(activeHero.genres || []).slice(0, 4).map((g) => (
+                              <span
+                                key={g}
+                                className="rounded-lg bg-white/10 border border-white/15 px-2 py-0.5 text-[11px] font-bold text-white/90 backdrop-blur-sm"
+                              >
+                                {g}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Movie Description — Completely removed when heroShowDescription is OFF (zero reserved space) */}
+                        {homeConfig.heroShowDescription && heroDescription && (
+                          <p
+                            style={{
+                              fontSize: `${homeConfig.heroDescriptionSizePx || 14}px`,
+                              display: '-webkit-box',
+                              WebkitBoxOrient: 'vertical',
+                              WebkitLineClamp: homeConfig.heroDescriptionLines || 2,
+                              overflow: 'hidden',
+                            }}
+                            className="text-[#d4d4d4]/90 leading-relaxed"
+                          >
+                            {heroDescription}
+                          </p>
+                        )}
+
+                        {/* Primary & Secondary Action Buttons */}
+                        {(homeConfig.heroShowWatchBtn ||
+                          homeConfig.heroShowDetailsBtn ||
+                          homeConfig.heroShowWatchlistBtn ||
+                          (isAdmin && onOpenHomeBuilder)) && (
+                          <div className={`pt-1 flex flex-wrap items-center gap-2.5 ${justifyContentClass}`}>
+                            {homeConfig.heroShowWatchBtn && (
+                              <button
+                                type="button"
+                                onClick={() => onPlayNow(activeHero)}
+                                className="inline-flex items-center gap-2 rounded-xl bg-[#E50914] hover:bg-[#f40612] px-6 py-2.5 sm:py-3 text-xs sm:text-sm font-extrabold text-white shadow-[0_10px_28px_rgba(229,9,20,0.45)] transition-transform hover:-translate-y-0.5 cursor-pointer"
+                              >
+                                <Play className="w-4 h-4 fill-current" />
+                                <span>{homeConfig.heroPrimaryCta || 'مشاهدة الآن'}</span>
+                              </button>
+                            )}
+
+                            {homeConfig.heroShowDetailsBtn && (
+                              <button
+                                type="button"
+                                onClick={() => onSelectMedia(activeHero)}
+                                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f242b]/85 hover:bg-white/20 border border-white/15 px-4 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-bold text-white backdrop-blur-md transition-colors cursor-pointer"
+                              >
+                                <Info className="w-4 h-4" />
+                                <span>التفاصيل</span>
+                              </button>
+                            )}
+
+                            {homeConfig.heroShowWatchlistBtn && (
+                              <button
+                                type="button"
+                                onClick={() => onToggleWatchlist(activeHero)}
+                                aria-label={heroInWatchlist ? 'إزالة من قائمتي' : 'إضافة لقائمتي'}
+                                className={`inline-flex h-10 w-10 sm:h-11 sm:w-11 items-center justify-center rounded-xl border backdrop-blur-md transition-colors cursor-pointer ${
+                                  heroInWatchlist
+                                    ? 'bg-[#4CAF50]/20 border-[#4CAF50] text-[#4CAF50]'
+                                    : 'bg-[#1f242b]/80 border-white/15 text-white hover:bg-white/20'
+                                }`}
+                              >
+                                {heroInWatchlist ? (
+                                  <Check className="w-4 h-4" />
+                                ) : (
+                                  <Bookmark className="w-4 h-4" />
+                                )}
+                              </button>
+                            )}
+
+                            {isAdmin && onOpenHomeBuilder && (
+                              <button
+                                type="button"
+                                onClick={onOpenHomeBuilder}
+                                className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#eab308] px-3.5 py-2.5 sm:py-3 text-xs font-black text-[#0f0f0f] transition-colors cursor-pointer"
+                              >
+                                <SlidersHorizontal className="w-3.5 h-3.5" />
+                                <span>تخصيص الرئيسية</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
+
+                        {homeConfig.heroShowHighlights && (
+                          <div
+                            className={`pt-1 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[11px] font-medium text-[#a3a3a3] ${justifyContentClass}`}
+                          >
+                            <span className="inline-flex items-center gap-1">
+                              <Zap className="w-3 h-3 text-[#E50914]" />
+                              <span>سيرفرات سريعة بدون تقطيع</span>
+                            </span>
+                            <span className="inline-flex items-center gap-1">
+                              <Film className="w-3 h-3 text-[#f9c400]" />
+                              <span>دقة 4K UHD</span>
+                            </span>
+                            <span className="inline-flex items-center gap-1">
+                              <ShieldCheck className="w-3 h-3 text-[#4CAF50]" />
+                              <span>تحديث يومي</span>
+                            </span>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
 
                   {/* Left Controls: Circular Prev/Next Arrows + Play/Pause + Animated Progress Bar + Dots */}
                   {heroSlides.length > 1 && (showArrows || showProgressBar) && (
@@ -904,6 +1044,8 @@ export function HomeView({
                   </div>
                 )}
               </div>
+                );
+              })()}
 
               {/* Full-Width Moving Slider Progress Bar along the bottom edge */}
               {heroSlides.length > 1 && showProgressBar && autoPlayEnabled && (

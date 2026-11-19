@@ -182,7 +182,7 @@ export function TypographyPanel({
       {/* Top Action Header */}
       <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#D92321]/15 border border-[#D92321]/35 text-[#D92321]">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl rtv-admin-accent-soft border border-white/15 rtv-admin-accent-text">
             <Type className="w-5 h-5" />
           </div>
           <div>
@@ -200,12 +200,12 @@ export function TypographyPanel({
                 <button
                   type="button"
                   onClick={onOpenAdminAppearance}
-                  className="font-extrabold text-[#f9c400] underline underline-offset-2 hover:text-white cursor-pointer"
+                  className="font-extrabold rtv-admin-accent-text underline underline-offset-2 hover:opacity-85 cursor-pointer"
                 >
                   تخصيص مظهر لوحة الإدارة
                 </button>
               ) : (
-                <span className="font-bold text-[#f9c400]">تخصيص مظهر لوحة الإدارة</span>
+                <span className="font-bold rtv-admin-accent-text">تخصيص مظهر لوحة الإدارة</span>
               )}
               .
             </p>
@@ -227,7 +227,7 @@ export function TypographyPanel({
             onClick={onPreviewHome}
             className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 px-4 py-2.5 text-xs font-bold text-white cursor-pointer"
           >
-            <Eye className="w-4 h-4 text-[#f9c400]" />
+            <Eye className="w-4 h-4 rtv-admin-accent-text" />
             <span>معاينة الموقع</span>
           </button>
 
@@ -247,7 +247,7 @@ export function TypographyPanel({
       <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 space-y-4">
         <div className="flex items-center justify-between border-b border-white/10 pb-3">
           <div className="flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-[#f9c400]" />
+            <Sparkles className="w-5 h-5 rtv-admin-accent-text" />
             <h3 className="font-display text-base font-extrabold text-white">
               أحجام الخطوط والعناوين
             </h3>
@@ -270,7 +270,7 @@ export function TypographyPanel({
                     <p className="text-xs font-extrabold text-white">{item.label}</p>
                     <p className="text-[11px] text-[#b7c9ef] mt-0.5">{item.hint}</p>
                   </div>
-                  <span className="font-latin shrink-0 rounded-lg bg-[#0c1821] border border-white/10 px-2.5 py-1 text-xs font-black text-[#f9c400] tabular-nums">
+                  <span className="font-latin shrink-0 rounded-lg bg-[#0c1821] border border-white/10 px-2.5 py-1 text-xs font-black rtv-admin-accent-text tabular-nums">
                     {val}px
                   </span>
                 </div>
@@ -286,7 +286,7 @@ export function TypographyPanel({
                     onChange={(e) =>
                       updateCfg({ [item.key]: Number(e.target.value) } as Partial<TypographyConfig>)
                     }
-                    className="flex-1 accent-[#D92321] cursor-pointer"
+                    className="flex-1 rtv-admin-range cursor-pointer"
                   />
                   <span className="font-latin text-[10px] text-[#b7c9ef] w-7 text-left">{item.max}</span>
                   <button
@@ -312,12 +312,12 @@ export function TypographyPanel({
         <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 space-y-4">
           <div className="flex items-center justify-between border-b border-white/10 pb-3">
             <div className="flex items-center gap-2">
-              <Languages className="w-5 h-5 text-[#D92321]" />
+              <Languages className="w-5 h-5 rtv-admin-accent-text" />
               <h3 className="font-display text-base font-extrabold text-white">
                 فونت اللغة العربية
               </h3>
             </div>
-            <span className="rounded-lg bg-[#D92321]/15 border border-[#D92321]/30 px-2.5 py-0.5 text-[11px] font-bold text-white">
+            <span className="rounded-lg rtv-admin-accent-soft border border-white/15 px-2.5 py-0.5 text-[11px] font-bold text-white">
               {cfg.arabicFont === 'custom' && arCustom ? arCustom.fileName : cfg.arabicFont}
             </span>
           </div>
@@ -336,7 +336,7 @@ export function TypographyPanel({
                 }
                 updateCfg({ arabicFont: val });
               }}
-              className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs font-bold text-white focus:border-[#D92321] focus:outline-none"
+              className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs font-bold text-white focus:outline-none"
             >
               {ARABIC_FONT_PRESETS.map((preset) => (
                 <option key={preset.id} value={preset.id}>
@@ -354,14 +354,14 @@ export function TypographyPanel({
             <div className="flex items-center justify-between gap-2">
               <div>
                 <p className="text-xs font-extrabold text-white flex items-center gap-1.5">
-                  <FileUp className="w-4 h-4 text-[#f9c400]" />
+                  <FileUp className="w-4 h-4 rtv-admin-accent-text" />
                   <span>رفع فونت عربي مخصص من جهازك</span>
                 </p>
                 <p className="text-[11px] text-[#b7c9ef] mt-0.5">
                   يدعم .woff2 / .woff / .ttf / .otf (الحد الأقصى 680 KB — يُفضل .woff2)
                 </p>
               </div>
-              <label className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#f40612] px-3.5 py-2 text-xs font-extrabold text-white shadow cursor-pointer shrink-0">
+              <label className="inline-flex items-center gap-1.5 rounded-xl rtv-admin-accent-bg hover:opacity-90 px-3.5 py-2 text-xs font-extrabold text-white shadow cursor-pointer shrink-0">
                 <FileUp className="w-3.5 h-3.5" />
                 <span>{uploadingSlot === 'arabic' ? 'جاري الرفع...' : 'رفع ملف خط'}</span>
                 <input
@@ -416,7 +416,7 @@ export function TypographyPanel({
                 value={arUrlInput}
                 onChange={(e) => setArUrlInput(e.target.value)}
                 placeholder="أو الصق رابط مباشر (.woff2 / .ttf / Google Fonts CSS)"
-                className="flex-1 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-[11px] text-white focus:border-[#D92321] focus:outline-none font-latin"
+                className="flex-1 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-[11px] text-white focus:outline-none font-latin"
               />
               <button
                 type="button"
@@ -424,7 +424,7 @@ export function TypographyPanel({
                 onClick={() => void handleApplyUrlFont('arabic')}
                 className="inline-flex items-center gap-1 rounded-xl bg-[#1a242e] hover:bg-white/10 disabled:opacity-40 border border-white/15 px-3 py-2 text-[11px] font-bold text-white cursor-pointer shrink-0"
               >
-                <Link2 className="w-3.5 h-3.5 text-[#f9c400]" />
+                <Link2 className="w-3.5 h-3.5 rtv-admin-accent-text" />
                 <span>تفعيل الرابط</span>
               </button>
             </div>
@@ -435,12 +435,12 @@ export function TypographyPanel({
         <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 space-y-4">
           <div className="flex items-center justify-between border-b border-white/10 pb-3">
             <div className="flex items-center gap-2">
-              <Languages className="w-5 h-5 text-[#f9c400]" />
+              <Languages className="w-5 h-5 text-sky-400" />
               <h3 className="font-display text-base font-extrabold text-white">
                 فونت اللغة الإنجليزية والأرقام
               </h3>
             </div>
-            <span className="font-latin rounded-lg bg-[#f9c400]/15 border border-[#f9c400]/30 px-2.5 py-0.5 text-[11px] font-bold text-[#f9c400]">
+            <span className="font-latin rounded-lg bg-sky-500/15 border border-sky-400/30 px-2.5 py-0.5 text-[11px] font-bold text-sky-300">
               {cfg.englishFont === 'custom' && enCustom ? enCustom.fileName : cfg.englishFont}
             </span>
           </div>
@@ -459,7 +459,7 @@ export function TypographyPanel({
                 }
                 updateCfg({ englishFont: val });
               }}
-              className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs font-bold text-white focus:border-[#f9c400] focus:outline-none font-latin"
+              className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs font-bold text-white focus:outline-none font-latin"
             >
               {ENGLISH_FONT_PRESETS.map((preset) => (
                 <option key={preset.id} value={preset.id}>
@@ -477,14 +477,14 @@ export function TypographyPanel({
             <div className="flex items-center justify-between gap-2">
               <div>
                 <p className="text-xs font-extrabold text-white flex items-center gap-1.5">
-                  <FileUp className="w-4 h-4 text-[#f9c400]" />
+                  <FileUp className="w-4 h-4 text-sky-400" />
                   <span>رفع فونت إنجليزي مخصص من جهازك</span>
                 </p>
                 <p className="text-[11px] text-[#b7c9ef] mt-0.5">
                   يطبق تلقائياً على الكلمات الإنجليزية والأرقام (.woff2 / .woff / .ttf / .otf)
                 </p>
               </div>
-              <label className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#eab308] px-3.5 py-2 text-xs font-black text-[#06131c] shadow cursor-pointer shrink-0">
+              <label className="inline-flex items-center gap-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 px-3.5 py-2 text-xs font-extrabold text-white shadow cursor-pointer shrink-0">
                 <FileUp className="w-3.5 h-3.5" />
                 <span>{uploadingSlot === 'english' ? 'جاري الرفع...' : 'رفع ملف خط'}</span>
                 <input
@@ -539,7 +539,7 @@ export function TypographyPanel({
                 value={enUrlInput}
                 onChange={(e) => setEnUrlInput(e.target.value)}
                 placeholder="https://.../english-font.woff2"
-                className="flex-1 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-[11px] text-white focus:border-[#f9c400] focus:outline-none font-latin"
+                className="flex-1 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-[11px] text-white focus:outline-none font-latin"
               />
               <button
                 type="button"
@@ -547,7 +547,7 @@ export function TypographyPanel({
                 onClick={() => void handleApplyUrlFont('english')}
                 className="inline-flex items-center gap-1 rounded-xl bg-[#1a242e] hover:bg-white/10 disabled:opacity-40 border border-white/15 px-3 py-2 text-[11px] font-bold text-white cursor-pointer shrink-0"
               >
-                <Link2 className="w-3.5 h-3.5 text-[#f9c400]" />
+                <Link2 className="w-3.5 h-3.5 text-sky-400" />
                 <span>تفعيل الرابط</span>
               </button>
             </div>

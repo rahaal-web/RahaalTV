@@ -207,6 +207,7 @@
 
 .rtv-admin-root main .rounded-3xl {
   border-radius: var(--rtv-admin-radius, 16px);
+  box-shadow: var(--rtv-admin-shadow, none);
 }
 
 .rtv-admin-root main > div > .rounded-3xl,
@@ -215,57 +216,92 @@
   padding: var(--rtv-admin-card-padding, 24px);
 }
 
+.rtv-admin-root .rtv-admin-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rtv-admin-gap, 16px);
+}
+
+.rtv-admin-root .rtv-admin-grid-gap {
+  gap: var(--rtv-admin-gap, 16px);
+}
+
 @media (min-width: 1024px) {
   .rtv-admin-sidebar-expanded {
     width: var(--rtv-admin-sidebar-width, 288px);
   }
 }
 
-/* Admin Light Mode (Strictly Scoped to .rtv-admin-root[data-admin-theme="light"]) */
-.rtv-admin-root[data-admin-theme="light"] {
-  background-color: #f1f5f9;
-  color: #0f172a;
+/* ============================================================
+   Admin Eye Comfort System (Dark / Light / Soft Gray / Comfortable Eye)
+   Strictly scoped to .rtv-admin-root; never leaks into public site
+   ============================================================ */
+.rtv-admin-root[data-admin-theme] {
+  background-color: var(--rtv-admin-bg, #0b111c);
+  color: var(--rtv-admin-text, #e8edf5);
 }
 
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#06131c\] {
-  background-color: #f1f5f9;
+.rtv-admin-root[data-admin-theme] .rtv-admin-tone-target {
+  filter: contrast(var(--rtv-admin-contrast, 100%)) brightness(var(--rtv-admin-brightness, 100%));
 }
 
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#0c1821\],
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#0c1821\]\/95,
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#0c1821\]\/90,
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#12161b\] {
-  background-color: #ffffff;
+.rtv-admin-root[data-admin-theme] .bg-\[\#06131c\] {
+  background-color: var(--rtv-admin-bg, #0b111c);
 }
 
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#1a242e\],
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#1a242e\]\/80,
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#1a242e\]\/65,
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#1a242e\]\/60,
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#1a242e\]\/35,
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#23313f\] {
-  background-color: #f8fafc;
+.rtv-admin-root[data-admin-theme] .rtv-admin-sidebar-shell {
+  background-color: var(--rtv-admin-sidebar-bg, #0e1522);
 }
 
-.rtv-admin-root[data-admin-theme="light"] .border-white\/10,
-.rtv-admin-root[data-admin-theme="light"] .border-white\/\[0\.08\],
-.rtv-admin-root[data-admin-theme="light"] .border-white\/\[0\.07\],
-.rtv-admin-root[data-admin-theme="light"] .border-white\/\[0\.06\],
-.rtv-admin-root[data-admin-theme="light"] .border-white\/15,
-.rtv-admin-root[data-admin-theme="light"] .border-white\/20 {
-  border-color: rgba(15, 23, 42, 0.12);
+.rtv-admin-root[data-admin-theme] .bg-\[\#0c1821\],
+.rtv-admin-root[data-admin-theme] .bg-\[\#0c1821\]\/95,
+.rtv-admin-root[data-admin-theme] .bg-\[\#0c1821\]\/90,
+.rtv-admin-root[data-admin-theme] .bg-\[\#12161b\] {
+  background-color: var(--rtv-admin-surface, #121a28);
 }
 
-.rtv-admin-root[data-admin-theme="light"] .text-white {
-  color: #0f172a;
+.rtv-admin-root[data-admin-theme] .bg-\[\#1a242e\],
+.rtv-admin-root[data-admin-theme] .bg-\[\#1a242e\]\/80,
+.rtv-admin-root[data-admin-theme] .bg-\[\#1a242e\]\/65,
+.rtv-admin-root[data-admin-theme] .bg-\[\#1a242e\]\/60,
+.rtv-admin-root[data-admin-theme] .bg-\[\#1a242e\]\/35,
+.rtv-admin-root[data-admin-theme] .bg-\[\#23313f\] {
+  background-color: var(--rtv-admin-surface-2, #1a2433);
 }
 
-.rtv-admin-root[data-admin-theme="light"] .text-\[\#b7c9ef\],
-.rtv-admin-root[data-admin-theme="light"] .text-\[\#b7c9ef\]\/75,
-.rtv-admin-root[data-admin-theme="light"] .text-\[\#b7c9ef\]\/80,
-.rtv-admin-root[data-admin-theme="light"] .text-\[\#b7c9ef\]\/70,
-.rtv-admin-root[data-admin-theme="light"] .text-\[\#a3a3a3\] {
-  color: #475569;
+.rtv-admin-root[data-admin-theme] .border-white\/10,
+.rtv-admin-root[data-admin-theme] .border-white\/\[0\.08\],
+.rtv-admin-root[data-admin-theme] .border-white\/\[0\.07\],
+.rtv-admin-root[data-admin-theme] .border-white\/\[0\.06\],
+.rtv-admin-root[data-admin-theme] .border-white\/15,
+.rtv-admin-root[data-admin-theme] .border-white\/20 {
+  border-color: var(--rtv-admin-border, rgba(255, 255, 255, 0.1));
+}
+
+.rtv-admin-root[data-admin-theme] .text-white {
+  color: var(--rtv-admin-text, #e8edf5);
+}
+
+.rtv-admin-root[data-admin-theme] .text-\[\#b7c9ef\],
+.rtv-admin-root[data-admin-theme] .text-\[\#b7c9ef\]\/75,
+.rtv-admin-root[data-admin-theme] .text-\[\#b7c9ef\]\/80,
+.rtv-admin-root[data-admin-theme] .text-\[\#b7c9ef\]\/70,
+.rtv-admin-root[data-admin-theme] .text-\[\#a3a3a3\] {
+  color: var(--rtv-admin-text-muted, #94a3b8);
+}
+
+.rtv-admin-root[data-admin-theme] .rtv-admin-accent-text {
+  color: var(--rtv-admin-accent, #3b82f6);
+}
+
+.rtv-admin-root[data-admin-theme] .rtv-admin-accent-bg {
+  background-color: var(--rtv-admin-accent, #3b82f6);
+  color: #ffffff;
+}
+
+.rtv-admin-root[data-admin-theme] .rtv-admin-accent-soft {
+  background-color: var(--rtv-admin-accent-soft, rgba(59, 130, 246, 0.14));
+  border-color: var(--rtv-admin-accent-border, rgba(59, 130, 246, 0.36));
 }
 
 .rtv-admin-root[data-admin-theme="light"] .text-\[\#f9c400\] {
@@ -277,7 +313,15 @@
   color: #1e293b;
 }
 
-.rtv-admin-root[data-admin-theme="light"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.rtv-admin-root[data-admin-theme] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+.rtv-admin-root[data-admin-theme] select,
+.rtv-admin-root[data-admin-theme] textarea {
+  background-color: var(--rtv-admin-surface-2, #1a2433);
+  color: var(--rtv-admin-text, #e8edf5);
+  border-color: var(--rtv-admin-border, rgba(255, 255, 255, 0.12));
+}
+
+.rtv-admin-root[data-admin-theme="light"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
 .rtv-admin-root[data-admin-theme="light"] select,
 .rtv-admin-root[data-admin-theme="light"] textarea {
   background-color: #ffffff;
@@ -285,7 +329,6 @@
   border-color: #cbd5e1;
 }
 
-/* Keep crisp white text inside solid accent/active buttons & badges in Admin Light Mode */
 .rtv-admin-root[data-admin-theme="light"] .hover\:bg-\[\#1a242e\]:hover,
 .rtv-admin-root[data-admin-theme="light"] .hover\:bg-white\/10:hover,
 .rtv-admin-root[data-admin-theme="light"] .hover\:bg-white\/15:hover {
@@ -297,47 +340,54 @@
   color: #0f172a;
 }
 
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#D92321\],
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#D92321\].text-white,
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#D92321\] .text-white,
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#D92321\] span,
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#4CAF50\],
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#4CAF50\].text-white,
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#4CAF50\] .text-white,
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#E50914\],
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#E50914\].text-white,
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#E50914\] .text-white,
-.rtv-admin-root[data-admin-theme="light"] .bg-emerald-600,
-.rtv-admin-root[data-admin-theme="light"] .bg-emerald-600.text-white,
-.rtv-admin-root[data-admin-theme="light"] .bg-sky-600,
-.rtv-admin-root[data-admin-theme="light"] .bg-sky-600.text-white,
-.rtv-admin-root[data-admin-theme="light"] .bg-rose-600,
-.rtv-admin-root[data-admin-theme="light"] .bg-rose-600.text-white,
-.rtv-admin-root[data-admin-theme="light"] .hover\:bg-\[\#D92321\]:hover {
+.rtv-admin-root[data-admin-theme] .bg-\[\#D92321\],
+.rtv-admin-root[data-admin-theme] .bg-\[\#D92321\].text-white,
+.rtv-admin-root[data-admin-theme] .bg-\[\#D92321\] .text-white,
+.rtv-admin-root[data-admin-theme] .bg-\[\#D92321\] span,
+.rtv-admin-root[data-admin-theme] .bg-\[\#4CAF50\],
+.rtv-admin-root[data-admin-theme] .bg-\[\#4CAF50\].text-white,
+.rtv-admin-root[data-admin-theme] .bg-\[\#4CAF50\] .text-white,
+.rtv-admin-root[data-admin-theme] .bg-\[\#E50914\],
+.rtv-admin-root[data-admin-theme] .bg-\[\#E50914\].text-white,
+.rtv-admin-root[data-admin-theme] .bg-\[\#E50914\] .text-white,
+.rtv-admin-root[data-admin-theme] .bg-emerald-600,
+.rtv-admin-root[data-admin-theme] .bg-emerald-600.text-white,
+.rtv-admin-root[data-admin-theme] .bg-indigo-600,
+.rtv-admin-root[data-admin-theme] .bg-indigo-600.text-white,
+.rtv-admin-root[data-admin-theme] .bg-sky-600,
+.rtv-admin-root[data-admin-theme] .bg-sky-600.text-white,
+.rtv-admin-root[data-admin-theme] .bg-blue-600,
+.rtv-admin-root[data-admin-theme] .bg-blue-600.text-white,
+.rtv-admin-root[data-admin-theme] .bg-rose-600,
+.rtv-admin-root[data-admin-theme] .bg-rose-600.text-white,
+.rtv-admin-root[data-admin-theme] .rtv-admin-accent-bg,
+.rtv-admin-root[data-admin-theme] .rtv-admin-accent-bg .text-white,
+.rtv-admin-root[data-admin-theme] .hover\:bg-\[\#D92321\]:hover {
   color: #ffffff;
 }
 
-.rtv-admin-root[data-admin-theme="light"] .bg-\[\#f9c400\] {
+.rtv-admin-root[data-admin-theme] .bg-\[\#f9c400\] {
   color: #06131c;
 }
 
-/* Preserve cinema dark theme inside MediaPreviewModal when launched from Light Admin */
-.rtv-admin-root[data-admin-theme="light"] .rtv-site-preview {
-  background-color: #0c1821;
+/* Preserve cinema dark theme inside public site live previews & MediaPreviewModal when launched from Admin */
+.rtv-admin-root[data-admin-theme] .rtv-site-preview {
+  background-color: #0f0f0f;
+  color: #ffffff;
+  filter: none;
+}
+.rtv-admin-root[data-admin-theme] .rtv-site-preview .text-white {
   color: #ffffff;
 }
-.rtv-admin-root[data-admin-theme="light"] .rtv-site-preview .text-white {
-  color: #ffffff;
-}
-.rtv-admin-root[data-admin-theme="light"] .rtv-site-preview .text-\[\#b7c9ef\] {
+.rtv-admin-root[data-admin-theme] .rtv-site-preview .text-\[\#b7c9ef\] {
   color: #b7c9ef;
 }
-.rtv-admin-root[data-admin-theme="light"] .rtv-site-preview .bg-\[\#0c1821\],
-.rtv-admin-root[data-admin-theme="light"] .rtv-site-preview .bg-\[\#06131c\] {
+.rtv-admin-root[data-admin-theme] .rtv-site-preview .bg-\[\#0c1821\],
+.rtv-admin-root[data-admin-theme] .rtv-site-preview .bg-\[\#06131c\] {
   background-color: #0c1821;
 }
-.rtv-admin-root[data-admin-theme="light"] .rtv-site-preview .bg-\[\#1a242e\],
-.rtv-admin-root[data-admin-theme="light"] .rtv-site-preview .bg-\[\#1a242e\]\/95 {
+.rtv-admin-root[data-admin-theme] .rtv-site-preview .bg-\[\#1a242e\],
+.rtv-admin-root[data-admin-theme] .rtv-site-preview .bg-\[\#1a242e\]\/95 {
   background-color: #1a242e;
 }
 

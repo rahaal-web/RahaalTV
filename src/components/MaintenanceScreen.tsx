@@ -1,9 +1,12 @@
-import { ShieldCheck, Sparkles, Tv, Wrench } from 'lucide-react';
+import { ShieldCheck, Sparkles, Wrench } from 'lucide-react';
+import type { WebsiteBrandingConfig } from '../types/media';
+import { Logo } from './Logo';
 
 interface MaintenanceScreenProps {
   siteName: string;
   tagline: string;
   message: string;
+  branding?: WebsiteBrandingConfig;
   onOpenAdminLogin: () => void;
 }
 
@@ -11,8 +14,12 @@ export function MaintenanceScreen({
   siteName,
   tagline,
   message,
+  branding,
   onOpenAdminLogin,
 }: MaintenanceScreenProps) {
+  const resolvedName = branding?.siteName || siteName || 'RahaL TV';
+  const showBrand = branding?.logoMode !== 'hidden';
+
   return (
     <div className="min-h-screen bg-[#06131c] text-white flex flex-col items-center justify-center p-4 sm:p-6 relative overflow-hidden">
       <div className="moov-hex-pattern absolute inset-0 opacity-60 pointer-events-none" />
@@ -20,14 +27,11 @@ export function MaintenanceScreen({
 
       <div className="relative z-10 w-full max-w-2xl rounded-3xl bg-[#0c1821]/95 border border-white/10 p-6 sm:p-10 shadow-2xl text-center space-y-6 backdrop-blur-md">
         {/* Brand Badge */}
-        <div className="inline-flex items-center gap-2.5 rounded-2xl bg-[#1a242e] border border-white/10 px-4 py-2">
-          <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#D92321] text-white shadow-lg">
-            <Tv className="w-4 h-4" />
-          </span>
-          <span className="font-display text-base font-black tracking-wide text-white">
-            {siteName || 'RahaL TV'}
-          </span>
-        </div>
+        {showBrand && (
+          <div className="inline-flex items-center justify-center rounded-2xl bg-[#1a242e] border border-white/10 px-4 py-2">
+            <Logo size="sm" branding={branding} fallbackSiteName={resolvedName} />
+          </div>
+        )}
 
         {/* Animated Maintenance Icon */}
         <div className="mx-auto relative flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-[#D92321]/25 via-[#1a242e] to-[#f9c400]/15 border border-[#f9c400]/35 text-[#f9c400] shadow-[0_0_40px_rgba(249,196,0,0.2)]">

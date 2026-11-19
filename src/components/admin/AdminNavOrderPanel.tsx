@@ -12,10 +12,11 @@ import {
   LayoutList,
   Lock,
   MoveRight,
+  Pin,
   RotateCcw,
   Trash2,
 } from 'lucide-react';
-import { findAdminNavItem, type AdminTab } from './adminNavigation';
+import { ADMIN_NAV_GROUPS, findAdminNavItem, type AdminTab } from './adminNavigation';
 import {
   ADMIN_SECTION_SUB_OPTIONS,
   AdminNavLayoutConfig,
@@ -30,6 +31,7 @@ import {
   saveAdminNavLayout,
   syncAdminNavLayoutToFirestore,
   toggleItemHiddenInLayout,
+  togglePinnedTabInLayout,
 } from '../../lib/adminNavLayout';
 
 interface AdminNavOrderPanelProps {
@@ -137,20 +139,20 @@ export function AdminNavOrderPanel({
       <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-start gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#f9c400]/15 border border-[#f9c400]/35 text-[#f9c400]">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl rtv-admin-accent-soft border rtv-admin-accent-text">
               <LayoutList className="w-5 h-5" />
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="font-display text-lg sm:text-xl font-extrabold text-white">
-                  ترتيب أقسام لوحة الإدارة
+                  ترتيب وتنظيم أقسام لوحة الإدارة
                 </h2>
-                <span className="rounded-lg bg-[#4CAF50]/15 border border-[#4CAF50]/35 px-2.5 py-0.5 text-[10px] font-extrabold text-[#4CAF50]">
+                <span className="rounded-lg bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-0.5 text-[10px] font-extrabold text-emerald-400">
                   حفظ تلقائي فوري
                 </span>
               </div>
               <p className="text-xs text-[#b7c9ef] mt-1 leading-relaxed">
-                اسحب وأفلت الأقسام والعناصر لتغيير ترتيبها أو نقلها بين المجموعات، أو استخدم أزرار الأسهم على الهواتف. جميع الروابط والصلاحيات والوظائف تبقى محمية دون أي تغيير.
+                اسحب وأفلت الأقسام والعناصر لإعادة ترتيبها أو نقلها بين المجموعات، وثبّت الأقسام المفضلة في أعلى القائمة. جميع الروابط والصلاحيات محمية بالكامل.
               </p>
             </div>
           </div>
@@ -161,7 +163,7 @@ export function AdminNavOrderPanel({
             className="rtv-admin-btn-height inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 px-4 py-2.5 text-xs font-extrabold text-[#b7c9ef] hover:text-white cursor-pointer shrink-0"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>إعادة الترتيب الافتراضي</span>
+            <span>استعادة الترتيب الافتراضي</span>
           </button>
         </div>
 
@@ -171,10 +173,13 @@ export function AdminNavOrderPanel({
             <span className="rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2 font-bold text-[#b7c9ef]">
               الأقسام: <strong className="text-white tabular-nums">{totalStats.groupsCount}</strong>
             </span>
-            <span className="rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2 font-bold text-[#4CAF50]">
+            <span className="rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2 font-bold text-emerald-400">
               الظاهرة: <strong className="tabular-nums">{totalStats.visibleItems}</strong>
             </span>
-            <span className="rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2 font-bold text-amber-300">
+            <span className="rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2 font-bold text-sky-400">
+              المثبتة: <strong className="tabular-nums">{navLayout.pinnedTabs?.length || 0}</strong>
+            </span>
+            <span className="rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2 font-bold text-[#b7c9ef]">
               المخفية: <strong className="tabular-nums">{totalStats.hiddenItems}</strong>
             </span>
           </div>
@@ -191,12 +196,12 @@ export function AdminNavOrderPanel({
                 }
               }}
               placeholder="اسم قسم رئيسي جديد (مثال: أدوات النشر السريع)..."
-              className="flex-1 min-w-[200px] rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:border-[#f9c400] focus:outline-none"
+              className="flex-1 min-w-[200px] rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-xs text-white focus:outline-none"
             />
             <button
               type="button"
               onClick={handleCreateGroup}
-              className="rtv-admin-btn-height inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-4 py-2.5 text-xs font-extrabold text-white cursor-pointer shrink-0"
+              className="rtv-admin-btn-height inline-flex items-center gap-1.5 rounded-xl rtv-admin-accent-bg px-4 py-2.5 text-xs font-extrabold shadow cursor-pointer shrink-0"
             >
               <FolderPlus className="w-4 h-4" />
               <span>إنشاء قسم جديد</span>
@@ -279,6 +284,14 @@ export function AdminNavOrderPanel({
                     </div>
                   ) : (
                     <div className="flex flex-wrap items-center gap-2 min-w-0">
+                      <span
+                        className="h-3 w-3 rounded-full shrink-0"
+                        style={{
+                          backgroundColor:
+                            ADMIN_NAV_GROUPS.find((g) => g.id === group.id)?.accentColor ||
+                            '#64748b',
+                        }}
+                      />
                       <h3 className="font-display text-sm sm:text-base font-extrabold text-white truncate">
                         {group.label}
                       </h3>
@@ -286,7 +299,7 @@ export function AdminNavOrderPanel({
                         {group.items.length} عناصر
                       </span>
                       {group.isCustom && (
-                        <span className="rounded-md bg-[#f9c400]/15 border border-[#f9c400]/30 px-2 py-0.5 text-[10px] font-bold text-[#f9c400]">
+                        <span className="rounded-md bg-sky-500/15 border border-sky-500/30 px-2 py-0.5 text-[10px] font-bold text-sky-400">
                           مخصص
                         </span>
                       )}
@@ -486,6 +499,29 @@ export function AdminNavOrderPanel({
                               </select>
                             </div>
 
+                            {/* Pin Favorite Toggle */}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                commitAutoSave(
+                                  togglePinnedTabInLayout(navLayout, entry.id),
+                                  (navLayout.pinnedTabs || []).includes(entry.id)
+                                    ? `تمت إزالة "${meta.label}" من المثبتة`
+                                    : `تم تثبيت "${meta.label}" في أعلى القائمة الجانبية`
+                                )
+                              }
+                              className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-bold border cursor-pointer ${
+                                (navLayout.pinnedTabs || []).includes(entry.id)
+                                  ? 'rtv-admin-accent-soft rtv-admin-accent-text'
+                                  : 'bg-[#0c1821] hover:bg-white/10 border-white/10 text-[#b7c9ef] hover:text-white'
+                              }`}
+                            >
+                              <Pin className="w-3.5 h-3.5" />
+                              <span>
+                                {(navLayout.pinnedTabs || []).includes(entry.id) ? 'مثبت' : 'تثبيت'}
+                              </span>
+                            </button>
+
                             {/* Show / Hide Toggle (without deleting or changing permissions) */}
                             <button
                               type="button"
@@ -524,8 +560,8 @@ export function AdminNavOrderPanel({
                                 }
                                 className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-bold border cursor-pointer ${
                                   subExpanded
-                                    ? 'bg-[#f9c400] border-[#f9c400] text-[#06131c]'
-                                    : 'bg-[#0c1821] border-white/10 text-[#f9c400] hover:bg-white/10'
+                                    ? 'rtv-admin-accent-bg border-transparent'
+                                    : 'bg-[#0c1821] border-white/10 text-[#b7c9ef] hover:bg-white/10 hover:text-white'
                                 }`}
                               >
                                 <span>الخيارات الفرعية ({orderedSubs.length})</span>

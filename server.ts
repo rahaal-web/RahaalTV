@@ -4187,6 +4187,14 @@ async function startServer() {
   loadCachedAdaptersFromDisk();
   const app = express();
   app.use(express.json({ limit: '6mb' }));
+  const uploadsDir = path.resolve(process.cwd(), 'uploads');
+  const brandingUploadsDir = path.join(uploadsDir, 'branding');
+  try {
+    fs.mkdirSync(brandingUploadsDir, { recursive: true });
+  } catch {
+    // Ignore directory creation errors
+  }
+  app.use('/uploads', express.static(uploadsDir, { maxAge: '7d' }));
   app.use('/api', (_req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
@@ -5800,6 +5808,142 @@ async function startServer() {
         error: err instanceof Error ? err.message : 'تعذر الوصول إلى النقطة.',
         latencyMs: Date.now() - start,
       });
+    }
+  });
+
+  async function verifyBrandingAuthHeader(authHeader: string): Promise<{ uid: string } | null> {
+    const match = String(authHeader || '').match(/^Bearer\s+(.+)$/i);
+    if (!match?.[1]) return null;
+    const idToken = match[1].trim();
+    const cfgPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
+    let apiKey = '';
+    try {
+      if (fs.existsSync(cfgPath)) {
+        const parsed = JSON.parse(fs.readFileSync(cfgPath, 'utf8')) as { apiKey?: string };
+        apiKey = String(parsed.apiKey || '').trim();
+      }
+    } catch {
+      apiKey = '';
+    }
+    if (!apiKey) return null;
+    try {
+      const lookupResp = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ idToken }),
+        }
+      );
+      if (!lookupResp.ok) return null;
+      const data = (await lookupResp.json()) as {
+        users?: Array<{ localId?: string }>;
+      };
+      const uid = data.users?.[0]?.localId;
+      return uid ? { uid } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  app.post('/api/branding/upload', async (req, res) => {
+    try {
+      const authCtx = await verifyBrandingAuthHeader(req.headers.authorization || '');
+      if (!authCtx) {
+        return res.status(401).json({ ok: false, error: 'مطلوب تسجيل الدخول لرفع ملفات الهوية.' });
+      }
+      const body = (req.body || {}) as {
+        kind?: unknown;
+        dataUrl?: unknown;
+        extension?: unknown;
+      };
+      const kind = body.kind === 'favicon' ? 'favicon' : body.kind === 'logo' ? 'logo' : '';
+      if (!kind) {
+        return res.status(400).json({ ok: false, error: 'نوع الملف (kind) غير صالح.' });
+      }
+      const dataUrl = typeof body.dataUrl === 'string' ? body.dataUrl.trim() : '';
+      const match = dataUrl.match(/^data:([a-zA-Z0-9.+/-]+);base64,([A-Za-z0-9+/=]+)$/);
+      if (!match) {
+        return res.status(400).json({ ok: false, error: 'صيغة بيانات الملف غير صالحة.' });
+      }
+      const mime = match[1].toLowerCase();
+      const base64Data = match[2];
+      const buffer = Buffer.from(base64Data, 'base64');
+      if (buffer.length === 0 || buffer.length > 2 * 1024 * 1024) {
+        return res.status(400).json({ ok: false, error: 'حجم الملف يجب ألا يتجاوز 2 ميغابايت.' });
+      }
+
+      const allowedExts: Record<string, string> = {
+        'image/png': 'png',
+        'image/jpeg': 'jpg',
+        'image/webp': 'webp',
+        'image/svg+xml': 'svg',
+        'image/x-icon': 'ico',
+        'image/vnd.microsoft.icon': 'ico',
+      };
+      const ext = allowedExts[mime];
+      if (!ext) {
+        return res.status(400).json({ ok: false, error: 'صيغة الصورة غير مدعومة.' });
+      }
+      if (kind === 'favicon' && !['png', 'ico', 'svg'].includes(ext)) {
+        return res.status(400).json({ ok: false, error: 'Favicon يدعم PNG و ICO و SVG فقط.' });
+      }
+
+      let writeBuf = buffer;
+      if (ext === 'svg') {
+        const cleanSvg = buffer
+          .toString('utf8')
+          .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+          .replace(/<foreignObject[\s\S]*?>[\s\S]*?<\/foreignObject>/gi, '')
+          .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+          .replace(/javascript\s*:/gi, '');
+        if (!/<svg[\s>]/i.test(cleanSvg)) {
+          return res.status(400).json({ ok: false, error: 'ملف SVG غير صالح.' });
+        }
+        writeBuf = Buffer.from(cleanSvg, 'utf8');
+      }
+
+      fs.mkdirSync(brandingUploadsDir, { recursive: true });
+      const fileName = `${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
+      const targetPath = path.join(brandingUploadsDir, fileName);
+      fs.writeFileSync(targetPath, writeBuf);
+      return res.json({
+        ok: true,
+        url: `/uploads/branding/${fileName}`,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: err instanceof Error ? err.message : 'تعذر حفظ ملف الهوية.',
+      });
+    }
+  });
+
+  app.delete('/api/branding/asset', async (req, res) => {
+    try {
+      const authCtx = await verifyBrandingAuthHeader(req.headers.authorization || '');
+      if (!authCtx) {
+        return res.status(401).json({ ok: false, error: 'مطلوب مصادقة المسؤول.' });
+      }
+      const rawUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+      if (!rawUrl.startsWith('/uploads/branding/')) {
+        return res.json({ ok: true, deleted: false });
+      }
+      const baseName = path.basename(rawUrl);
+      if (!/^[a-zA-Z0-9_.-]+$/.test(baseName)) {
+        return res.status(400).json({ ok: false, error: 'اسم الملف غير صالح.' });
+      }
+      const targetPath = path.resolve(brandingUploadsDir, baseName);
+      if (!targetPath.startsWith(brandingUploadsDir + path.sep)) {
+        return res.status(403).json({ ok: false, error: 'مسار غير مسموح به.' });
+      }
+      if (fs.existsSync(targetPath)) {
+        fs.unlinkSync(targetPath);
+        return res.json({ ok: true, deleted: true });
+      }
+      return res.json({ ok: true, deleted: false });
+    } catch {
+      return res.status(500).json({ ok: false, error: 'تعذر حذف الملف.' });
     }
   });
 

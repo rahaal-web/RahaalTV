@@ -1,31 +1,38 @@
 import { ArrowUp } from 'lucide-react';
+import { WebsiteBrandingConfig } from '../types/media';
 import { Logo } from './Logo';
 
 export type FooterTopic = 'terms' | 'privacy' | 'community' | 'requests';
 
 interface FooterProps {
   tagline?: string;
+  branding?: WebsiteBrandingConfig;
+  siteName?: string;
   onOpenTopic: (topic: FooterTopic) => void;
   onNavigateHome: () => void;
 }
 
-export function Footer({ tagline, onOpenTopic, onNavigateHome }: FooterProps) {
+export function Footer({ tagline, branding, siteName, onOpenTopic, onNavigateHome }: FooterProps) {
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+  const resolvedBrandName = branding?.siteName || siteName || 'RahaL TV';
+  const isLogoHidden = branding?.logoMode === 'hidden';
 
   return (
     <footer className="relative mt-16 bg-[#141414] border-t border-white/[0.08] pb-20 sm:pb-10 pt-12">
       <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8">
         <div className="flex flex-col items-center text-center">
-          <button
-            type="button"
-            onClick={onNavigateHome}
-            className="mb-4 cursor-pointer focus:outline-none"
-            aria-label="العودة إلى الرئيسية - RahaL TV"
-          >
-            <Logo size="lg" showSubtitle />
-          </button>
+          {!isLogoHidden && (
+            <button
+              type="button"
+              onClick={onNavigateHome}
+              className="mb-4 cursor-pointer focus:outline-none"
+              aria-label={`العودة إلى الرئيسية - ${resolvedBrandName}`}
+            >
+              <Logo size="lg" showSubtitle branding={branding} fallbackSiteName={resolvedBrandName} />
+            </button>
+          )}
 
           <p className="max-w-2xl text-sm font-medium leading-relaxed text-[#a3a3a3]">
             {tagline ||
@@ -68,7 +75,7 @@ export function Footer({ tagline, onOpenTopic, onNavigateHome }: FooterProps) {
 
           <div className="mt-8 flex w-full flex-col sm:flex-row items-center justify-between gap-4 border-t border-white/[0.07] pt-6">
             <p className="text-xs font-medium text-[#a3a3a3]">
-              جميع الحقوق محفوظة لموقع <span className="font-bold text-white">RahaL TV</span>
+              جميع الحقوق محفوظة لموقع <span className="font-bold text-white">{resolvedBrandName}</span>
             </p>
 
             <button

@@ -1,31 +1,108 @@
+import type { CSSProperties } from 'react';
+import {
+  normalizeWebsiteBranding,
+  resolveBrandingAssetUrl,
+  resolveWebsiteBrandingFontStack,
+} from '../lib/websiteBranding';
+import type { WebsiteBrandingConfig } from '../types/media';
+
 interface LogoProps {
   size?: 'sm' | 'md' | 'lg';
   showSubtitle?: boolean;
+  branding?: WebsiteBrandingConfig;
+  fallbackSiteName?: string;
 }
 
-export function Logo({ size = 'md', showSubtitle = false }: LogoProps) {
-  const heightClass = size === 'lg' ? 'h-10' : size === 'sm' ? 'h-7' : 'h-8';
+export function Logo({
+  size = 'md',
+  showSubtitle = false,
+  branding,
+  fallbackSiteName = 'RahaL TV',
+}: LogoProps) {
+  const cfg = normalizeWebsiteBranding(branding, fallbackSiteName);
+  if (cfg.logoMode === 'hidden') {
+    return null;
+  }
+
+  const scale = size === 'lg' ? 1.15 : size === 'sm' ? 0.82 : 1;
+  const logoSrc = resolveBrandingAssetUrl(cfg.logoUrl);
+  const showImage = cfg.logoMode === 'image_and_text' || cfg.logoMode === 'image_only';
+  const showText = cfg.logoMode === 'image_and_text' || cfg.logoMode === 'text_only';
+
+  const scaledWidth = Math.max(20, Math.round(cfg.logoWidthPx * scale));
+  const scaledHeight = Math.max(20, Math.round(cfg.logoHeightPx * scale));
+  const scaledFontSize = Math.max(13, Math.round(cfg.siteNameSizePx * scale));
+
+  const layoutClass =
+    cfg.logoPlacement === 'above_text'
+      ? 'flex-col items-center text-center'
+      : cfg.logoPlacement === 'after_text'
+        ? 'flex-row-reverse items-center'
+        : 'flex-row items-center';
+
+  const textStyle: CSSProperties = {
+    color: cfg.siteNameColor,
+    fontFamily: resolveWebsiteBrandingFontStack(cfg.siteNameFont),
+    fontSize: `${scaledFontSize}px`,
+    fontWeight: cfg.siteNameWeight,
+    letterSpacing: `${cfg.siteNameLetterSpacingPx}px`,
+    lineHeight: 1.15,
+  };
+
+  const isDefaultBrandSplit =
+    cfg.siteName === 'RahaL TV' && cfg.siteNameColor.toLowerCase() === '#ffffff';
 
   return (
-    <div className="inline-flex items-center gap-2.5 select-none whitespace-nowrap shrink-0">
-      <div className="relative flex items-center justify-center w-9 h-9 rounded-xl bg-[#E50914] shadow-[0_4px_16px_rgba(229,9,20,0.4)]">
-        <svg viewBox="0 0 24 24" className="w-5 h-5 text-white fill-current" aria-hidden="true">
-          <path d="M8 5.5v13l10-6.5-10-6.5z" />
-        </svg>
-      </div>
-      <div className={`flex flex-col leading-none ${heightClass} justify-center`} dir="ltr">
-        <span className="font-latin text-xl sm:text-2xl font-black tracking-tight text-white">
-          RahaL <span className="text-[#E50914]">TV</span>
-        </span>
-        {showSubtitle && (
-          <span
-            className="text-[10px] font-semibold tracking-wide text-[#a3a3a3] text-right mt-0.5"
-            dir="rtl"
+    <div
+      className={`inline-flex ${layoutClass} select-none whitespace-nowrap shrink-0`}
+      style={{ gap: `${Math.round(cfg.logoTextGapPx)}px` }}
+    >
+      {showImage && (
+        logoSrc ? (
+          <img
+            src={logoSrc}
+            alt={cfg.siteName || 'Logo'}
+            style={{ width: `${scaledWidth}px`, height: `${scaledHeight}px` }}
+            className="object-contain shrink-0 rounded-lg"
+          />
+        ) : (
+          <div
+            style={{ width: `${scaledWidth}px`, height: `${scaledHeight}px` }}
+            className="relative flex items-center justify-center rounded-xl bg-[#E50914] shadow-[0_4px_16px_rgba(229,9,20,0.4)] shrink-0"
           >
-            سينما بلا حدود
+            <svg viewBox="0 0 24 24" className="w-5 h-5 text-white fill-current" aria-hidden="true">
+              <path d="M8 5.5v13l10-6.5-10-6.5z" />
+            </svg>
+          </div>
+        )
+      )}
+
+      {showText && (
+        <div
+          className={`flex flex-col leading-none justify-center ${
+            cfg.logoPlacement === 'above_text' ? 'items-center' : ''
+          }`}
+          dir="auto"
+        >
+          <span style={textStyle}>
+            {isDefaultBrandSplit ? (
+              <>
+                RahaL <span className="text-[#E50914]">TV</span>
+              </>
+            ) : (
+              cfg.siteName
+            )}
           </span>
-        )}
-      </div>
+          {showSubtitle && (
+            <span
+              className="text-[10px] font-semibold tracking-wide text-[#a3a3a3] mt-1"
+              dir="rtl"
+            >
+              سينما بلا حدود
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

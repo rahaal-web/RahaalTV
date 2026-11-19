@@ -213,7 +213,7 @@ export function TablePagination({
           <ChevronRight className="w-3.5 h-3.5" />
           <span>السابق</span>
         </button>
-        <span className="px-2.5 text-xs font-black text-[#f9c400] tabular-nums">
+        <span className="px-2.5 text-xs font-black rtv-admin-accent-text tabular-nums">
           {safePage} / {totalPages}
         </span>
         <button
@@ -311,7 +311,7 @@ export function GlobalCommandPalette({
       <div className="fixed inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose} />
       <div className="relative z-10 w-full max-w-2xl rounded-3xl bg-[#0c1821] border border-white/15 shadow-2xl overflow-hidden">
         <div className="flex items-center gap-3 border-b border-white/10 bg-[#1a242e] px-4 py-3.5">
-          <Search className="w-4 h-4 text-[#f9c400] shrink-0" />
+          <Search className="w-4 h-4 rtv-admin-accent-text shrink-0" />
           <input
             ref={inputRef}
             type="text"
@@ -327,7 +327,7 @@ export function GlobalCommandPalette({
             type="button"
             onClick={onClose}
             aria-label="إغلاق البحث السريع"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/5 text-white hover:bg-[#D92321] cursor-pointer"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/5 text-white hover:bg-white/15 cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -348,10 +348,10 @@ export function GlobalCommandPalette({
                       onNavigateTab(nav.id);
                       onClose();
                     }}
-                    className="flex w-full items-center justify-between gap-3 rounded-xl bg-[#1a242e]/60 hover:bg-[#D92321] border border-white/[0.06] px-3.5 py-2.5 text-right transition-colors cursor-pointer group"
+                    className="flex w-full items-center justify-between gap-3 rounded-xl bg-[#1a242e]/60 hover:bg-indigo-600 border border-white/[0.06] px-3.5 py-2.5 text-right transition-colors cursor-pointer group"
                   >
                     <div className="min-w-0">
-                      <p className="text-xs font-extrabold text-white truncate">{nav.label}</p>
+                      <p className="text-xs font-extrabold text-white group-hover:text-white truncate">{nav.label}</p>
                       <p className="text-[11px] text-[#b7c9ef] group-hover:text-white/85 truncate">
                         {nav.description}
                       </p>
@@ -365,7 +365,7 @@ export function GlobalCommandPalette({
 
           {matchedMedia.length > 0 && (
             <div className="space-y-1.5 pt-2 border-t border-white/10">
-              <p className="text-[11px] font-extrabold text-[#f9c400] px-1">
+              <p className="text-[11px] font-extrabold rtv-admin-accent-text px-1">
                 أعمال في الكتالوج ({matchedMedia.length})
               </p>
               <div className="space-y-1">
@@ -380,7 +380,7 @@ export function GlobalCommandPalette({
                     className="flex w-full items-center justify-between gap-3 rounded-xl bg-[#1a242e]/60 hover:bg-sky-500/20 border border-white/[0.06] px-3.5 py-2.5 text-right transition-colors cursor-pointer"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <Film className="w-4 h-4 text-[#f9c400] shrink-0" />
+                      <Film className="w-4 h-4 rtv-admin-accent-text shrink-0" />
                       <div className="min-w-0">
                         <p className="text-xs font-extrabold text-white truncate">{m.title}</p>
                         <p className="text-[10px] text-[#b7c9ef] truncate">
@@ -388,7 +388,7 @@ export function GlobalCommandPalette({
                         </p>
                       </div>
                     </div>
-                    <span className="text-[11px] font-bold text-sky-300 shrink-0">فتح في المحرر</span>
+                    <span className="text-[11px] font-bold text-sky-400 shrink-0">فتح في المحرر</span>
                   </button>
                 ))}
               </div>

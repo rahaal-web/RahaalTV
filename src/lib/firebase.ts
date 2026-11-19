@@ -58,6 +58,11 @@ import {
   DEFAULT_POPUP_SHIELD_CONFIG,
   saveStoredPopupShieldConfig,
 } from './popupShield';
+import {
+  DEFAULT_WEBSITE_BRANDING,
+  sanitizeBrandingForFirestore,
+  saveStoredWebsiteBranding,
+} from './websiteBranding';
 import { evaluateImageQuality } from './mediaImages';
 
 export let db: Firestore = getActiveDb();
@@ -962,6 +967,15 @@ export async function saveSiteSettingsToFirestore(
   const normalizedShield = saveStoredPopupShieldConfig(
     settings.popupShield || DEFAULT_POPUP_SHIELD_CONFIG
   );
+  const normalizedBrandingLocal = saveStoredWebsiteBranding(
+    settings.branding || { ...DEFAULT_WEBSITE_BRANDING, siteName: settings.siteName },
+    settings.siteName
+  );
+  const firestoreBranding = sanitizeBrandingForFirestore(
+    normalizedBrandingLocal,
+    settings.siteName
+  );
+
   const corePayload = {
     siteName: settings.siteName.trim().slice(0, 80) || 'RahaL TV',
     tagline: settings.tagline.trim().slice(0, 300) || 'منصة RahaL TV الترفيهية',
@@ -975,25 +989,34 @@ export async function saveSiteSettingsToFirestore(
     updatedAt: serverTimestamp(),
   };
 
+  const extendedPayloadWithoutBranding = {
+    ...corePayload,
+    homeConfig: normalizedHome,
+    typography: normalizedTypography,
+    popupShield: normalizedShield,
+  };
+
   try {
     await setDoc(doc(activeDb, 'settings', 'general'), {
-      ...corePayload,
-      homeConfig: normalizedHome,
-      typography: normalizedTypography,
-      popupShield: normalizedShield,
+      ...extendedPayloadWithoutBranding,
+      branding: firestoreBranding,
     });
     return { syncedHomeToCloud: true };
   } catch (error) {
-    const code =
-      typeof error === 'object' && error !== null && 'code' in error
-        ? String((error as { code?: unknown }).code || '')
-        : '';
-    if (code === 'permission-denied') {
+    if (isPermissionDeniedError(error)) {
       try {
-        await setDoc(doc(activeDb, 'settings', 'general'), corePayload);
-        return { syncedHomeToCloud: false };
-      } catch (innerErr) {
-        handleFirestoreError(innerErr, OperationType.WRITE, path);
+        await setDoc(doc(activeDb, 'settings', 'general'), extendedPayloadWithoutBranding);
+        return { syncedHomeToCloud: true };
+      } catch (midErr) {
+        if (isPermissionDeniedError(midErr)) {
+          try {
+            await setDoc(doc(activeDb, 'settings', 'general'), corePayload);
+            return { syncedHomeToCloud: false };
+          } catch (innerErr) {
+            handleFirestoreError(innerErr, OperationType.WRITE, path);
+          }
+        }
+        handleFirestoreError(midErr, OperationType.WRITE, path);
       }
     }
     handleFirestoreError(error, OperationType.WRITE, path);

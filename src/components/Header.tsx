@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { NAV_ITEMS } from '../data/catalog';
 import { matchesCategoryFilter, normalizeArabicText } from '../lib/mediaFilters';
-import { MediaItem } from '../types/media';
+import { MediaItem, WebsiteBrandingConfig } from '../types/media';
 import { Logo } from './Logo';
 import { PWAInstallButton } from './PWAControls';
 
@@ -37,6 +37,8 @@ interface HeaderProps {
   isAdmin: boolean;
   activeCategory: string;
   currentView: 'home' | 'archive' | 'single' | 'admin';
+  branding?: WebsiteBrandingConfig;
+  siteName?: string;
 }
 
 export function Header({
@@ -55,6 +57,8 @@ export function Header({
   isAdmin,
   activeCategory,
   currentView,
+  branding,
+  siteName,
 }: HeaderProps) {
   const [sectionsOpen, setSectionsOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -77,6 +81,10 @@ export function Header({
   const countCategory = (category?: string) =>
     category ? catalog.filter((item) => matchesCategoryFilter(item, category)).length : catalog.length;
 
+  const isLogoHidden = branding?.logoMode === 'hidden';
+  const isCenterBrand = branding?.headerAlign === 'center' && !isLogoHidden;
+  const resolvedBrandName = branding?.siteName || siteName || 'RahaL TV';
+
   return (
     <>
       <header
@@ -86,19 +94,32 @@ export function Header({
             : 'bg-gradient-to-b from-[#0f0f0f]/95 via-[#0f0f0f]/75 to-transparent border-b border-white/[0.04]'
         }`}
       >
-        <div className="mx-auto flex h-full max-w-[1440px] items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+        <div
+          className={`mx-auto flex h-full max-w-[1440px] items-center justify-between gap-4 px-4 sm:px-6 lg:px-8 ${
+            isCenterBrand ? 'lg:grid lg:grid-cols-[1fr_auto_1fr]' : ''
+          }`}
+        >
           {/* Zone 1: Brand Wordmark */}
-          <button
-            type="button"
-            onClick={onNavigateHome}
-            className="focus:outline-none cursor-pointer shrink-0"
-            aria-label="العودة إلى الرئيسية - RahaL TV"
-          >
-            <Logo size="md" />
-          </button>
+          {!isLogoHidden && (
+            <button
+              type="button"
+              onClick={onNavigateHome}
+              className={`focus:outline-none cursor-pointer shrink-0 ${
+                isCenterBrand ? 'lg:order-2 lg:justify-self-center' : ''
+              }`}
+              aria-label={`العودة إلى الرئيسية - ${resolvedBrandName}`}
+            >
+              <Logo size="md" branding={branding} fallbackSiteName={resolvedBrandName} />
+            </button>
+          )}
 
           {/* Zone 2: Clean Single-Line Navigation Links */}
-          <nav className="hidden lg:flex items-center gap-6" aria-label="التنقل الرئيسي">
+          <nav
+            className={`hidden lg:flex items-center gap-6 ${
+              isCenterBrand ? 'lg:order-1 lg:justify-self-start' : ''
+            }`}
+            aria-label="التنقل الرئيسي"
+          >
             <button
               type="button"
               onClick={onNavigateHome}
@@ -217,7 +238,11 @@ export function Header({
           </nav>
 
           {/* Zone 3: Quick Search + Primary Controls */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div
+            className={`flex items-center gap-2 shrink-0 ${
+              isCenterBrand ? 'lg:order-3 lg:justify-self-end' : ''
+            }`}
+          >
             <PWAInstallButton variant="header" />
             <button
               type="button"
@@ -307,7 +332,11 @@ export function Header({
           />
           <div className="relative z-10 flex h-full w-80 max-w-[86vw] flex-col bg-[#141414] border-l border-white/10 p-5 overflow-y-auto">
             <div className="flex items-center justify-between pb-4 mb-4 border-b border-white/10">
-              <Logo size="sm" showSubtitle />
+              {!isLogoHidden ? (
+                <Logo size="sm" showSubtitle branding={branding} fallbackSiteName={resolvedBrandName} />
+              ) : (
+                <span className="font-display text-sm font-extrabold text-white">{resolvedBrandName}</span>
+              )}
               <button
                 type="button"
                 onClick={() => setMobileMenuOpen(false)}

@@ -39,11 +39,24 @@ export const ADMIN_SECTION_SUB_OPTIONS: Partial<Record<AdminTab, AdminSubOptionD
     { id: 'migration', label: 'الترحيل والنسخ الاحتياطي' },
     { id: 'connection_logs', label: 'سجل أحداث الاتصال' },
   ],
+  website_branding: [
+    { id: 'logo_settings', label: 'إعدادات الشعار والمقاس والتموضع' },
+    { id: 'site_name_typography', label: 'اسم الموقع والخط واللون' },
+    { id: 'favicon_settings', label: 'أيقونة المتصفح (Favicon)' },
+    { id: 'live_branding_preview', label: 'المعاينة المباشرة للهوية' },
+  ],
+  slider_customization: [
+    { id: 'description_controls', label: 'إظهار/إخفاء الوصف وعدد السطور' },
+    { id: 'slider_typography', label: 'أحجام الخطوط والمحاذاة والتموضع' },
+    { id: 'slider_elements', label: 'عناصر الشارة والتقييم والأزرار' },
+    { id: 'slider_live_preview', label: 'المعاينة المباشرة للسلايدر' },
+  ],
   admin_appearance: [
+    { id: 'eye_comfort_modes', label: 'أوضاع راحة العين (Dark/Light/Soft Gray/Eye)' },
+    { id: 'palette_controls', label: 'ألوان الخلفية والبطاقات والقائمة والنصوص' },
+    { id: 'contrast_spacing', label: 'التباين والسطوع والظلال والمسافات' },
     { id: 'font_family', label: 'الخطوط والخط المخصص' },
     { id: 'font_sizes', label: 'أحجام الخطوط التفصيلية (px)' },
-    { id: 'font_weight', label: 'وزن الخط' },
-    { id: 'layout_theme', label: 'تخطيط اللوحة والمظهر (داكن/فاتح)' },
     { id: 'live_preview', label: 'صندوق المعاينة الحية' },
   ],
   settings: [
@@ -75,6 +88,7 @@ export interface AdminNavLayoutGroup {
 export interface AdminNavLayoutConfig {
   version: number;
   groups: AdminNavLayoutGroup[];
+  pinnedTabs?: AdminTab[];
   updatedAt?: string;
 }
 
@@ -94,6 +108,7 @@ export function buildDefaultAdminNavLayout(): AdminNavLayoutConfig {
         };
       }),
     })),
+    pinnedTabs: [],
   };
 }
 
@@ -210,11 +225,55 @@ export function normalizeAdminNavLayout(
     }
   }
 
+  const rawPinned = Array.isArray(raw.pinnedTabs) ? raw.pinnedTabs : [];
+  const seenPinned = new Set<AdminTab>();
+  const pinnedTabs: AdminTab[] = [];
+  for (const t of rawPinned) {
+    if (canonicalTabSet.has(t as AdminTab) && !seenPinned.has(t as AdminTab)) {
+      seenPinned.add(t as AdminTab);
+      pinnedTabs.push(t as AdminTab);
+    }
+  }
+
   return {
     version: ADMIN_NAV_LAYOUT_VERSION,
     groups: normalizedGroups,
+    pinnedTabs: pinnedTabs.slice(0, 12),
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : undefined,
   };
+}
+
+export function togglePinnedTabInLayout(
+  layout: AdminNavLayoutConfig,
+  tabId: AdminTab
+): AdminNavLayoutConfig {
+  const current = Array.isArray(layout.pinnedTabs) ? [...layout.pinnedTabs] : [];
+  const exists = current.includes(tabId);
+  const nextPinned = exists ? current.filter((t) => t !== tabId) : [tabId, ...current].slice(0, 12);
+  return {
+    ...layout,
+    pinnedTabs: nextPinned,
+  };
+}
+
+export function reorderPinnedTabsInLayout(
+  layout: AdminNavLayoutConfig,
+  fromIdx: number,
+  toIdx: number
+): AdminNavLayoutConfig {
+  const current = Array.isArray(layout.pinnedTabs) ? [...layout.pinnedTabs] : [];
+  if (
+    fromIdx === toIdx ||
+    fromIdx < 0 ||
+    toIdx < 0 ||
+    fromIdx >= current.length ||
+    toIdx >= current.length
+  ) {
+    return layout;
+  }
+  const [moved] = current.splice(fromIdx, 1);
+  current.splice(toIdx, 0, moved);
+  return { ...layout, pinnedTabs: current };
 }
 
 const layoutListeners = new Set<(cfg: AdminNavLayoutConfig) => void>();
@@ -272,6 +331,8 @@ export function resetAdminNavLayout(): AdminNavLayoutConfig {
 export interface ResolvedSidebarGroup {
   id: string;
   label: string;
+  accentColor: string;
+  iconName: string;
   isCustom?: boolean;
   items: AdminNavItem[];
 }
@@ -289,6 +350,7 @@ export function resolveSidebarGroupsForRender(
   const result: ResolvedSidebarGroup[] = [];
 
   for (const grp of normalized.groups) {
+    const canonicalGroup = ADMIN_NAV_GROUPS.find((g) => g.id === grp.id);
     const items: AdminNavItem[] = [];
     for (const entry of grp.items) {
       if (entry.hidden) continue;
@@ -301,6 +363,8 @@ export function resolveSidebarGroupsForRender(
       result.push({
         id: grp.id,
         label: grp.label,
+        accentColor: canonicalGroup?.accentColor || '#64748b',
+        iconName: canonicalGroup?.iconName || 'FolderKanban',
         isCustom: grp.isCustom,
         items,
       });

@@ -43,6 +43,13 @@ import {
   setLiveShieldConfig,
 } from './lib/popupShield';
 import {
+  applyWebsiteFaviconToDocument,
+  ensureWebsiteBrandingFontLoaded,
+  loadStoredWebsiteBranding,
+  normalizeWebsiteBranding,
+  saveStoredWebsiteBranding,
+} from './lib/websiteBranding';
+import {
   findMediaByRouteKey,
   getAppBasePrefix,
   readWatchRouteFromLocation,
@@ -124,6 +131,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   homeConfig: loadStoredHomeConfig(),
   typography: loadStoredTypographyConfig(),
   popupShield: loadStoredPopupShieldConfig(),
+  branding: loadStoredWebsiteBranding('RahaL TV'),
 };
 
 const STORAGE_WATCHLIST = 'moov_watchlist_ids';
@@ -288,20 +296,29 @@ export default function App() {
     };
   }, [activeCatalog, firestoreCatalog.length]);
 
+  const effectiveBrandName =
+    siteSettings.branding?.siteName?.trim() || siteSettings.siteName || 'RahaL TV';
+
   useEffect(() => {
     if (typeof document === 'undefined') return;
     if (view === 'admin') {
-      document.title = `إدارة ${siteSettings.siteName} — لوحة التحكم`;
+      document.title = `إدارة ${effectiveBrandName} — لوحة التحكم`;
     } else if (view === 'single' && selectedMedia) {
-      document.title = `${selectedMedia.title} — ${siteSettings.siteName}`;
+      document.title = `${selectedMedia.title} — ${effectiveBrandName}`;
     } else {
-      document.title = `${siteSettings.siteName} — افلام ومسلسلات بجودة عالية بدون تقطيع`;
+      document.title = `${effectiveBrandName} — افلام ومسلسلات بجودة عالية بدون تقطيع`;
     }
-  }, [view, selectedMedia, siteSettings.siteName]);
+  }, [view, selectedMedia, effectiveBrandName]);
 
   useEffect(() => {
     applyTypographyToDocument(siteSettings.typography, customFonts);
   }, [siteSettings.typography, customFonts]);
+
+  useEffect(() => {
+    const branding = normalizeWebsiteBranding(siteSettings.branding, siteSettings.siteName);
+    applyWebsiteFaviconToDocument(branding);
+    ensureWebsiteBrandingFontLoaded(branding.siteNameFont);
+  }, [siteSettings.branding, siteSettings.siteName]);
 
   // Apply TV/Mobile/Low-Spec device display prefs and install D-pad spatial navigation
   useEffect(() => {
@@ -492,8 +509,15 @@ export default function App() {
           const syncedShield = data.popupShield
             ? saveStoredPopupShieldConfig(data.popupShield)
             : loadStoredPopupShieldConfig();
+          const resolvedSiteName = data.siteName || DEFAULT_SETTINGS.siteName;
+          const syncedBranding = data.branding
+            ? saveStoredWebsiteBranding(
+                normalizeWebsiteBranding(data.branding, resolvedSiteName),
+                resolvedSiteName
+              )
+            : loadStoredWebsiteBranding(resolvedSiteName);
           setSiteSettings({
-            siteName: data.siteName || DEFAULT_SETTINGS.siteName,
+            siteName: syncedBranding.siteName || resolvedSiteName,
             tagline: data.tagline || DEFAULT_SETTINGS.tagline,
             announcementText: data.announcementText || '',
             tickerEnabled: data.tickerEnabled ?? false,
@@ -507,6 +531,7 @@ export default function App() {
             homeConfig: syncedHome,
             typography: syncedTypography,
             popupShield: syncedShield,
+            branding: syncedBranding,
           });
         }
       },
@@ -1020,9 +1045,10 @@ export default function App() {
     return (
       <div data-rtv-scope="site" className="rtv-site-root min-h-screen bg-[#0f0f0f] text-white">
         <MaintenanceScreen
-          siteName={siteSettings.siteName}
+          siteName={effectiveBrandName}
           tagline={siteSettings.tagline}
           message={siteSettings.maintenanceMessage}
+          branding={siteSettings.branding}
           onOpenAdminLogin={() => setLoginOpen(true)}
         />
         <LoginModal
@@ -1110,6 +1136,8 @@ export default function App() {
         isAdmin={canAccessAdmin}
         activeCategory={filters.category}
         currentView={view}
+        branding={siteSettings.branding}
+        siteName={effectiveBrandName}
       />
 
       <main className="flex-1">
@@ -1167,6 +1195,8 @@ export default function App() {
 
       <Footer
         tagline={siteSettings.tagline}
+        branding={siteSettings.branding}
+        siteName={effectiveBrandName}
         onOpenTopic={(topic) => setFooterTopic(topic)}
         onNavigateHome={navigateHome}
       />

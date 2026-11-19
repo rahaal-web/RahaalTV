@@ -213,6 +213,12 @@ service cloud.firestore {
           'heroAutoPlay', 'heroSlideIntervalSec', 'heroShowProgressBar',
           'heroShowThumbnails', 'heroShowArrows', 'heroPauseOnHover',
           'heroMaxSlides', 'heroSlideIds',
+          'heroShowDescription', 'heroTitleSizePx', 'heroDescriptionSizePx',
+          'heroDescriptionLines', 'heroTextAlign', 'heroInfoPosition',
+          'heroTextMaxWidthPx', 'heroShowBadge', 'heroShowRating',
+          'heroShowYear', 'heroShowDuration', 'heroShowGenres',
+          'heroShowQuality', 'heroShowWatchBtn', 'heroShowDetailsBtn',
+          'heroShowWatchlistBtn',
           'showQuickFilters', 'showCategoryBar', 'showFullLibrary',
           'showRequestBanner', 'cardsPerRow', 'cardStyle', 'sections'
         ])
@@ -232,6 +238,22 @@ service cloud.firestore {
         && (!('heroPauseOnHover' in cfg) || cfg.heroPauseOnHover is bool)
         && (!('heroMaxSlides' in cfg) || ((cfg.heroMaxSlides is int || cfg.heroMaxSlides is float) && cfg.heroMaxSlides >= 1 && cfg.heroMaxSlides <= 12))
         && (!('heroSlideIds' in cfg) || (cfg.heroSlideIds is list && cfg.heroSlideIds.size() <= 12 && (cfg.heroSlideIds.size() == 0 || cfg.heroSlideIds[0] is string)))
+        && (!('heroShowDescription' in cfg) || cfg.heroShowDescription is bool)
+        && (!('heroTitleSizePx' in cfg) || ((cfg.heroTitleSizePx is int || cfg.heroTitleSizePx is float) && cfg.heroTitleSizePx >= 16 && cfg.heroTitleSizePx <= 54))
+        && (!('heroDescriptionSizePx' in cfg) || ((cfg.heroDescriptionSizePx is int || cfg.heroDescriptionSizePx is float) && cfg.heroDescriptionSizePx >= 11 && cfg.heroDescriptionSizePx <= 22))
+        && (!('heroDescriptionLines' in cfg) || ((cfg.heroDescriptionLines is int || cfg.heroDescriptionLines is float) && cfg.heroDescriptionLines >= 1 && cfg.heroDescriptionLines <= 5))
+        && (!('heroTextAlign' in cfg) || cfg.heroTextAlign in ['right', 'center', 'left'])
+        && (!('heroInfoPosition' in cfg) || cfg.heroInfoPosition in ['bottom-right', 'bottom-center', 'bottom-left', 'middle-right', 'middle-center', 'middle-left'])
+        && (!('heroTextMaxWidthPx' in cfg) || ((cfg.heroTextMaxWidthPx is int || cfg.heroTextMaxWidthPx is float) && cfg.heroTextMaxWidthPx >= 320 && cfg.heroTextMaxWidthPx <= 860))
+        && (!('heroShowBadge' in cfg) || cfg.heroShowBadge is bool)
+        && (!('heroShowRating' in cfg) || cfg.heroShowRating is bool)
+        && (!('heroShowYear' in cfg) || cfg.heroShowYear is bool)
+        && (!('heroShowDuration' in cfg) || cfg.heroShowDuration is bool)
+        && (!('heroShowGenres' in cfg) || cfg.heroShowGenres is bool)
+        && (!('heroShowQuality' in cfg) || cfg.heroShowQuality is bool)
+        && (!('heroShowWatchBtn' in cfg) || cfg.heroShowWatchBtn is bool)
+        && (!('heroShowDetailsBtn' in cfg) || cfg.heroShowDetailsBtn is bool)
+        && (!('heroShowWatchlistBtn' in cfg) || cfg.heroShowWatchlistBtn is bool)
         && cfg.showQuickFilters is bool
         && cfg.showCategoryBar is bool
         && cfg.showFullLibrary is bool
@@ -296,12 +318,44 @@ service cloud.firestore {
         && shield.hostRules is map && shield.hostRules.size() <= 100;
     }
 
+    function isValidWebsiteBranding(b) {
+      return b is map
+        && b.keys().hasAll([
+          'logoMode', 'logoUrl', 'logoWidthPx', 'logoHeightPx', 'logoPlacement',
+          'headerAlign', 'logoTextGapPx', 'siteName', 'siteNameColor', 'siteNameFont',
+          'siteNameSizePx', 'siteNameWeight', 'siteNameLetterSpacingPx',
+          'faviconMode', 'faviconUrl'
+        ])
+        && b.keys().hasOnly([
+          'logoMode', 'logoUrl', 'logoWidthPx', 'logoHeightPx', 'logoPlacement',
+          'headerAlign', 'logoTextGapPx', 'siteName', 'siteNameColor', 'siteNameFont',
+          'siteNameSizePx', 'siteNameWeight', 'siteNameLetterSpacingPx',
+          'faviconMode', 'faviconUrl', 'faviconMimeType'
+        ])
+        && b.logoMode in ['image_and_text', 'image_only', 'text_only', 'hidden']
+        && b.logoUrl is string && b.logoUrl.size() <= 600
+        && (b.logoWidthPx is int || b.logoWidthPx is float) && b.logoWidthPx >= 20 && b.logoWidthPx <= 260
+        && (b.logoHeightPx is int || b.logoHeightPx is float) && b.logoHeightPx >= 20 && b.logoHeightPx <= 120
+        && b.logoPlacement in ['before_text', 'after_text', 'above_text']
+        && b.headerAlign in ['start', 'center']
+        && (b.logoTextGapPx is int || b.logoTextGapPx is float) && b.logoTextGapPx >= 0 && b.logoTextGapPx <= 40
+        && b.siteName is string && b.siteName.size() >= 1 && b.siteName.size() <= 80
+        && b.siteNameColor is string && b.siteNameColor.size() == 7 && b.siteNameColor.matches('^#[0-9a-fA-F]{6}$')
+        && b.siteNameFont is string && b.siteNameFont.size() >= 1 && b.siteNameFont.size() <= 60
+        && (b.siteNameSizePx is int || b.siteNameSizePx is float) && b.siteNameSizePx >= 14 && b.siteNameSizePx <= 48
+        && b.siteNameWeight in [400, 500, 600, 700, 800, 900]
+        && (b.siteNameLetterSpacingPx is int || b.siteNameLetterSpacingPx is float) && b.siteNameLetterSpacingPx >= -2 && b.siteNameLetterSpacingPx <= 10
+        && b.faviconMode in ['default', 'custom', 'none']
+        && b.faviconUrl is string && b.faviconUrl.size() <= 600
+        && (!('faviconMimeType' in b) || (b.faviconMimeType is string && b.faviconMimeType.size() <= 80));
+    }
+
     function isValidSiteSettings(data) {
       return data.keys().hasAll([
         'siteName', 'tagline', 'announcementText', 'tickerEnabled', 'featuredLimit', 'maintenanceMode', 'maintenanceMessage', 'updatedBy', 'updatedAt'
       ])
       && data.keys().hasOnly([
-        'siteName', 'tagline', 'announcementText', 'tickerEnabled', 'featuredLimit', 'maintenanceMode', 'maintenanceMessage', 'updatedBy', 'updatedAt', 'playerTheme', 'homeConfig', 'typography', 'popupShield'
+        'siteName', 'tagline', 'announcementText', 'tickerEnabled', 'featuredLimit', 'maintenanceMode', 'maintenanceMessage', 'updatedBy', 'updatedAt', 'playerTheme', 'homeConfig', 'typography', 'popupShield', 'branding'
       ])
       && data.siteName is string && data.siteName.size() >= 1 && data.siteName.size() <= 80
       && data.tagline is string && data.tagline.size() >= 1 && data.tagline.size() <= 300
@@ -314,6 +368,7 @@ service cloud.firestore {
       && (!('homeConfig' in data) || isValidHomeConfig(data.homeConfig))
       && (!('typography' in data) || isValidTypographyConfig(data.typography))
       && (!('popupShield' in data) || isValidPopupShieldConfig(data.popupShield))
+      && (!('branding' in data) || isValidWebsiteBranding(data.branding))
       && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
       && data.updatedAt is timestamp;
     }
@@ -556,7 +611,7 @@ service cloud.firestore {
         && data.keys().hasOnly(['kind', 'config', 'updatedBy', 'updatedAt'])
         && data.kind in ['appearance', 'nav_layout']
         && data.config is map
-        && data.config.keys().size() <= 40
+        && data.config.keys().size() <= 50
         && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
         && data.updatedAt is timestamp;
     }
