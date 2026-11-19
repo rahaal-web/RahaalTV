@@ -20,6 +20,8 @@ export type AdminTab =
   | 'crawl_operations'
   | 'home_builder'
   | 'typography'
+  | 'admin_appearance'
+  | 'admin_nav_order'
   | 'display_modes'
   | 'requests'
   | 'users'
@@ -240,10 +242,28 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
       {
         id: 'typography',
         groupId: 'design',
-        label: 'الخطوط وحجم النصوص',
-        shortLabel: 'الخطوط',
-        description: 'تخصيص الخطوط العربية واللاتينية وأحجام العناوين',
-        keywords: ['typography', 'fonts', 'size', 'خطوط', 'نصوص'],
+        label: 'خطوط وحجم نصوص الموقع',
+        shortLabel: 'خطوط الموقع',
+        description: 'تخصيص الخطوط العربية واللاتينية وأحجام العناوين لواجهة الموقع فقط',
+        keywords: ['typography', 'fonts', 'size', 'خطوط', 'نصوص', 'موقع'],
+        ownerOnly: true,
+      },
+      {
+        id: 'admin_appearance',
+        groupId: 'design',
+        label: 'تخصيص مظهر لوحة الإدارة',
+        shortLabel: 'مظهر الإدارة',
+        description: 'خطوط وأحجام وأوزان لوحة الإدارة، المظهر الداكن والفاتح، وكثافة البطاقات والجداول',
+        keywords: ['admin', 'appearance', 'theme', 'fonts', 'light', 'dark', 'مظهر', 'لوحة', 'خطوط'],
+        ownerOnly: true,
+      },
+      {
+        id: 'admin_nav_order',
+        groupId: 'design',
+        label: 'ترتيب أقسام لوحة الإدارة',
+        shortLabel: 'ترتيب الأقسام',
+        description: 'سحب وإفلات لإعادة ترتيب أقسام الإدارة، إنشاء مجموعات جديدة، وإخفاء أو إظهار العناصر',
+        keywords: ['navigation', 'order', 'sidebar', 'groups', 'ترتيب', 'اقسام', 'قائمة'],
         ownerOnly: true,
       },
       {

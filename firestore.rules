@@ -551,6 +551,16 @@ service cloud.firestore {
       && data.createdAt is timestamp;
     }
 
+    function isValidAdminWorkspaceDoc(data) {
+      return data.keys().hasAll(['kind', 'config', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['kind', 'config', 'updatedBy', 'updatedAt'])
+        && data.kind in ['appearance', 'nav_layout']
+        && data.config is map
+        && data.config.keys().size() <= 40
+        && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
+        && data.updatedAt is timestamp;
+    }
+
     // 4. Collection Rules
     match /media/{mediaId} {
       allow get: if isValidId(mediaId);
@@ -743,6 +753,18 @@ service cloud.firestore {
         allow update: if false;
         allow delete: if isStaffAdmin() && isValidId(adapterId) && isValidId(versionId);
       }
+    }
+
+    match /admin_workspace/{docId} {
+      allow get: if isOwnerAdmin() && docId in ['appearance', 'nav_layout'];
+      allow list: if isOwnerAdmin();
+      allow create, update: if isOwnerAdmin()
+        && docId in ['appearance', 'nav_layout']
+        && isValidAdminWorkspaceDoc(incoming())
+        && incoming().kind == docId
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+      allow delete: if isOwnerAdmin() && docId in ['appearance', 'nav_layout'];
     }
   }
 }

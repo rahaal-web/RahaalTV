@@ -137,7 +137,7 @@ export function MediaPreviewModal({
       className="fixed inset-0 z-[55] flex items-center justify-center p-2 sm:p-4"
     >
       <div className="fixed inset-0 bg-black/90 backdrop-blur-md" onClick={onClose} />
-      <div className="relative z-10 w-[96vw] max-w-6xl max-h-[94vh] flex flex-col rounded-3xl bg-[#06131c] border border-[#f9c400]/35 shadow-2xl overflow-hidden">
+      <div className="rtv-site-preview relative z-10 w-[96vw] max-w-6xl max-h-[94vh] flex flex-col rounded-3xl bg-[#06131c] border border-[#f9c400]/35 shadow-2xl overflow-hidden">
         {/* Top Preview Bar */}
         <div className="flex flex-wrap items-center justify-between gap-3 bg-[#1a242e] px-5 py-3 border-b border-white/10">
           <div className="flex flex-wrap items-center gap-2.5 min-w-0">

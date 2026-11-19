@@ -2473,9 +2473,12 @@ interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
   firebaseUser: User | null;
+  isGuest?: boolean;
   isAdmin: boolean;
   adminRole?: AdminPrivilegeRole | null;
   onLogout: () => Promise<void>;
+  onContinueAsGuest?: () => void;
+  onExitGuest?: () => void;
   onOpenAdmin: () => void;
   onNotify?: (msg: string) => void;
 }
@@ -2484,20 +2487,31 @@ export function LoginModal({
   isOpen,
   onClose,
   firebaseUser,
+  isGuest = false,
   isAdmin,
   adminRole,
   onLogout,
+  onContinueAsGuest,
+  onExitGuest,
   onOpenAdmin,
   onNotify,
 }: LoginModalProps) {
   const [signingIn, setSigningIn] = useState(false);
   const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [showAuthInGuest, setShowAuthInGuest] = useState(false);
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
 
   useDialogAccessibility(isOpen, onClose);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setShowAuthInGuest(false);
+      setAuthError(null);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -2549,14 +2563,16 @@ export function LoginModal({
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
     >
       <div className="fixed inset-0 bg-black/75 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-md rounded-3xl bg-[#0c1821] border border-white/10 p-6 shadow-2xl">
+      <div className="relative z-10 w-full max-w-md rounded-3xl bg-[#0c1821] border border-white/10 p-6 shadow-2xl max-h-[92vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
           <h2 className="font-display text-lg font-extrabold text-white">
             {firebaseUser
               ? 'حسابي على RahaL TV'
-              : mode === 'login'
-                ? 'تسجيل الدخول إلى RahaL TV'
-                : 'إنشاء حساب جديد'}
+              : isGuest && !showAuthInGuest
+                ? 'وضع الضيف — RahaL TV'
+                : mode === 'login'
+                  ? 'تسجيل الدخول إلى RahaL TV'
+                  : 'إنشاء حساب جديد'}
           </h2>
           <button
             type="button"
@@ -2631,6 +2647,46 @@ export function LoginModal({
               <LogOut className="w-4 h-4" />
               <span>تسجيل الخروج</span>
             </button>
+          </div>
+        ) : isGuest && !showAuthInGuest ? (
+          <div className="space-y-4 text-center">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[#f9c400]/15 border border-[#f9c400]/40 text-xl font-black text-[#f9c400]">
+              ضيف
+            </div>
+
+            <div className="space-y-1.5">
+              <p className="text-base font-extrabold text-white">أنت تتصفح حالياً كضيف</p>
+              <p className="text-xs text-[#b7c9ef] leading-relaxed">
+                يمكنك تصفح جميع الأقسام والتصنيفات، البحث، ومشاهدة الأفلام والمسلسلات وحفظ قائمتك محلياً على هذا الجهاز دون الحاجة لحساب.
+              </p>
+            </div>
+
+            <div className="rounded-2xl bg-[#1a242e]/80 border border-white/10 p-3.5 text-right text-[11px] text-[#b7c9ef] leading-relaxed">
+              المزايا التي تتطلب حساباً (مثل حفظ تقييم النجوم السحابي أو إرسال طلبات المحتوى ومتابعتها) ستطلب منك تسجيل الدخول عند استخدامها دون منعك من التصفح.
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowAuthInGuest(true)}
+              className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] py-3 text-xs font-extrabold text-white shadow-lg transition-colors cursor-pointer"
+            >
+              <ShieldCheck className="w-4 h-4" />
+              <span>تسجيل الدخول بحساب أو إنشاء حساب</span>
+            </button>
+
+            {onExitGuest && (
+              <button
+                type="button"
+                onClick={() => {
+                  onExitGuest();
+                  onClose();
+                }}
+                className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-white/10 hover:bg-white/20 py-3 text-xs font-extrabold text-white transition-colors cursor-pointer"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>تسجيل الخروج من وضع الضيف</span>
+              </button>
+            )}
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-3.5">
@@ -2727,11 +2783,35 @@ export function LoginModal({
               type="button"
               disabled={signingIn}
               onClick={() => void handleGoogleSignIn()}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-[#1a242e] hover:bg-[#23313f] border border-white/15 disabled:opacity-60 py-3 text-xs font-extrabold text-white transition-colors cursor-pointer"
+              className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#1a242e] hover:bg-[#23313f] border border-white/15 disabled:opacity-60 py-3 text-xs font-extrabold text-white transition-colors cursor-pointer"
             >
               <Globe className="w-4 h-4 text-[#f9c400]" />
               <span>تسجيل الدخول بحساب Google</span>
             </button>
+
+            {onContinueAsGuest && (
+              <div className="pt-1 space-y-1.5">
+                <button
+                  type="button"
+                  disabled={signingIn}
+                  onClick={() => {
+                    if (isGuest) {
+                      setShowAuthInGuest(false);
+                    } else {
+                      onContinueAsGuest();
+                      onClose();
+                    }
+                  }}
+                  className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/15 py-3 text-xs font-extrabold text-[#f9c400] transition-colors cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>{isGuest ? 'العودة إلى وضع الضيف' : 'المتابعة كضيف'}</span>
+                </button>
+                <p className="text-[11px] text-center text-[#b7c9ef]/75">
+                  شاهد وتصفح الأقسام والبحث فوراً دون إنشاء حساب أو ربط قاعدة بيانات.
+                </p>
+              </div>
+            )}
           </form>
         )}
       </div>
@@ -2744,6 +2824,7 @@ interface FooterInfoModalProps {
   topic: FooterTopic | null;
   onClose: () => void;
   firebaseUser: User | null;
+  isGuest?: boolean;
   onOpenLogin: () => void;
   requests: VisitorRequest[];
   onAddRequest: (req: { title: string; type: VisitorRequest['type']; notes: string }) => Promise<void>;
@@ -2753,6 +2834,7 @@ export function FooterInfoModal({
   topic,
   onClose,
   firebaseUser,
+  isGuest = false,
   onOpenLogin,
   requests,
   onAddRequest,
@@ -2858,8 +2940,10 @@ export function FooterInfoModal({
             <div className="space-y-5">
               {!firebaseUser ? (
                 <div className="rounded-2xl bg-[#1a242e] border border-white/10 p-5 text-center space-y-3">
-                  <p className="text-sm font-bold text-white">
-                    سجّل الدخول بحسابك لإرسال طلبك ومتابعة حالة تنفيذه في قاعدة البيانات
+                  <p className="text-sm font-bold text-white leading-relaxed">
+                    {isGuest
+                      ? 'أنت تتصفح حالياً كضيف — يمكنك المشاهدة والتصفح بحرية، ولإرسال طلب عمل ومتابعة حالة تنفيذه يرجى تسجيل الدخول بحسابك.'
+                      : 'سجّل الدخول بحسابك لإرسال طلبك ومتابعة حالة تنفيذه في قاعدة البيانات'}
                   </p>
                   <button
                     type="button"
@@ -2870,7 +2954,7 @@ export function FooterInfoModal({
                     className="inline-flex items-center gap-2 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-5 py-2.5 text-xs font-extrabold text-white cursor-pointer"
                   >
                     <ShieldCheck className="w-4 h-4" />
-                    <span>تسجيل الدخول</span>
+                    <span>تسجيل الدخول بحساب</span>
                   </button>
                 </div>
               ) : (

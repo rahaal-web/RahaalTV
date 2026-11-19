@@ -285,6 +285,18 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["versionId", "adapterId", "version", "changeNote", "snapshot", "savedBy", "createdAt"]
+    },
+    "AdminWorkspaceConfig": {
+      "title": "AdminWorkspaceConfig",
+      "description": "Owner-only admin UI appearance and sidebar navigation ordering configuration.",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "enum": ["appearance", "nav_layout"] },
+        "config": { "type": "object", "description": "Normalized appearance or nav layout JSON object" },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["kind", "config", "updatedBy", "updatedAt"]
     }
   },
   "firestore": {
@@ -331,6 +343,10 @@
     "/scraper_adapters/{adapterId}/versions/{versionId}": {
       "schema": { "$ref": "#/entities/ScraperAdapterVersion" },
       "description": "Immutable version history snapshots for rollback of ScraperAdapters."
+    },
+    "/admin_workspace/{docId}": {
+      "schema": { "$ref": "#/entities/AdminWorkspaceConfig" },
+      "description": "Owner-only admin dashboard appearance and navigation layout configuration."
     }
   }
 }

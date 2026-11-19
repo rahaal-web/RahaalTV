@@ -51,6 +51,7 @@ interface SingleDetailViewProps {
   initialEpisode?: number;
   initialOpenDownloads?: boolean;
   currentUser: User | null;
+  isGuest?: boolean;
   onOpenLogin: () => void;
   onSelectMedia: (item: MediaItem, openDownloads?: boolean) => void;
   onApplyFilter: (partial: Partial<CatalogFilterState>) => void;
@@ -79,6 +80,7 @@ export function SingleDetailView({
   initialEpisode,
   initialOpenDownloads = false,
   currentUser,
+  isGuest = false,
   onOpenLogin,
   onSelectMedia,
   onApplyFilter,
@@ -252,7 +254,11 @@ export function SingleDetailView({
 
   const handleRateStars = async (stars: number) => {
     if (!currentUser) {
-      onNotify('يرجى تسجيل الدخول أولاً لتقييم العمل وحفظ تقييمك');
+      onNotify(
+        isGuest
+          ? 'أنت تتصفح كضيف — سجّل الدخول بحسابك لحفظ تقييمك ومشاركته'
+          : 'يرجى تسجيل الدخول أولاً لتقييم العمل وحفظ تقييمك'
+      );
       onOpenLogin();
       return;
     }
@@ -902,7 +908,9 @@ export function SingleDetailView({
                     className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#15222d] hover:bg-[#1c2c3a] border border-white/10 hover:border-[#f9c400]/45 px-3 py-2 text-xs font-extrabold text-white transition-colors cursor-pointer"
                   >
                     <LogIn className="w-3.5 h-3.5 text-[#f9c400]" />
-                    <span>سجّل الدخول لحفظ تقييمك</span>
+                    <span>
+                      {isGuest ? 'وضع الضيف: سجّل الدخول لحفظ تقييمك' : 'سجّل الدخول لحفظ تقييمك'}
+                    </span>
                   </button>
                 ) : userStars > 0 ? (
                   <div className="flex w-full items-center justify-between gap-2 text-[11px]">

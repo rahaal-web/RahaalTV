@@ -10,6 +10,7 @@
 
 7. **Rating Ownership & Bounded Range**: Users may only create or update `/ratings/{mediaId}__{uid}` documents matching their own `request.auth.uid`, with integer `stars` strictly between `1` and `5`, and immutable `mediaId`, `userId`, and `createdAt`.
 8. **Scraper Adapters RBAC & Schema Integrity**: Only verified staff (`isStaffAdmin()`) may read, create, update, or delete `/scraper_adapters/{adapterId}` or append immutable version snapshots to `/scraper_adapters/{adapterId}/versions/{versionId}`. All adapter fields and nested rule maps enforce strict key whitelisting (`hasAll`/`hasOnly`) and bounded lengths/counts.
+9. **Admin Workspace Appearance & Nav Layout Isolation**: Only verified owner admins (`isOwnerAdmin()`) may read, create, update, or delete `/admin_workspace/appearance` and `/admin_workspace/nav_layout`, with strict key whitelisting (`kind`, `config`, `updatedBy`, `updatedAt`).
 
 ## 2. The "Dirty Dozen" Attack Payloads
 1. Unauthenticated write to `/media/fake-movie` -> DENIED.

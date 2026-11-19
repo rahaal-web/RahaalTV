@@ -33,6 +33,7 @@ interface HeaderProps {
   watchlistCount: number;
   username: string | null;
   userPhoto: string | null;
+  isGuest?: boolean;
   isAdmin: boolean;
   activeCategory: string;
   currentView: 'home' | 'archive' | 'single' | 'admin';
@@ -50,6 +51,7 @@ export function Header({
   watchlistCount,
   username,
   userPhoto,
+  isGuest = false,
   isAdmin,
   activeCategory,
   currentView,
@@ -261,8 +263,12 @@ export function Header({
             <button
               type="button"
               onClick={onOpenLogin}
-              aria-label="حسابي"
-              className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#E50914] hover:bg-[#f40612] px-3 sm:px-3.5 text-xs sm:text-sm font-bold text-white transition-colors cursor-pointer whitespace-nowrap"
+              aria-label={isGuest ? 'حساب الضيف' : 'حسابي'}
+              className={`inline-flex h-10 items-center gap-2 rounded-xl px-3 sm:px-3.5 text-xs sm:text-sm font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                isGuest
+                  ? 'bg-[#202020] hover:bg-[#2a2a2a] border border-white/15 text-white'
+                  : 'bg-[#E50914] hover:bg-[#f40612] text-white'
+              }`}
             >
               {userPhoto ? (
                 <img
@@ -272,9 +278,9 @@ export function Header({
                   className="h-5 w-5 rounded-full object-cover border border-white/40"
                 />
               ) : (
-                <UserIcon className="w-4 h-4" />
+                <UserIcon className={`w-4 h-4 ${isGuest ? 'text-[#f9c400]' : ''}`} />
               )}
-              <span className="hidden md:inline max-w-[100px] truncate">
+              <span className={`${isGuest ? 'inline' : 'hidden md:inline'} max-w-[100px] truncate`}>
                 {username || 'دخول'}
               </span>
             </button>
@@ -311,6 +317,26 @@ export function Header({
                 <X className="w-5 h-5" />
               </button>
             </div>
+
+            {/* Mobile Account / Guest Status Strip */}
+            <button
+              type="button"
+              onClick={() => {
+                setMobileMenuOpen(false);
+                onOpenLogin();
+              }}
+              className="mb-3 flex min-h-11 w-full items-center justify-between gap-2 rounded-xl bg-[#1c1c1c] border border-white/10 px-3.5 py-2 text-xs font-bold text-white hover:border-[#E50914]/60 cursor-pointer"
+            >
+              <span className="inline-flex items-center gap-2 truncate">
+                <UserIcon className={`w-4 h-4 shrink-0 ${isGuest ? 'text-[#f9c400]' : 'text-[#E50914]'}`} />
+                <span className="truncate">
+                  {isGuest ? 'الحالة: ضيف' : username ? `مرحباً، ${username}` : 'تسجيل الدخول أو المتابعة كضيف'}
+                </span>
+              </span>
+              <span className="rounded-md bg-white/10 px-2 py-0.5 text-[10px] text-[#f9c400] shrink-0">
+                {isGuest ? 'إدارة' : username ? 'حسابي' : 'دخول'}
+              </span>
+            </button>
 
             {/* Quick Mobile Search Trigger */}
             <button

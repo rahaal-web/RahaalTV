@@ -398,7 +398,7 @@ export function applyTypographyToDocument(
     customStyleEl.remove();
   }
 
-  // 3. Compose effective font stacks
+  // 3. Compose effective site-only font stacks (strictly isolated from Admin Dashboard)
   const activeArabicFamily =
     cfg.arabicFont === 'custom' && arCustom?.family
       ? `"${arCustom.family}"`
@@ -422,12 +422,13 @@ export function applyTypographyToDocument(
 
   const latinStack = `${activeEnglishFamily}, "Cairo", system-ui, sans-serif`;
 
-  root.style.setProperty('--font-sans', combinedSansStack);
-  root.style.setProperty('--font-display', combinedDisplayStack);
-  root.style.setProperty('--font-latin', latinStack);
+  // Scoped strictly to .rtv-site-root via --rtv-site-* variables (never mutating <html> fontSize or global --font-*)
+  root.style.setProperty('--rtv-site-font-sans', combinedSansStack);
+  root.style.setProperty('--rtv-site-font-display', combinedDisplayStack);
+  root.style.setProperty('--rtv-site-font-latin', latinStack);
 
-  // 4. Apply Font Sizes
-  root.style.fontSize = `${cfg.baseFontSizePx}px`;
+  // 4. Apply Site Font Sizes cleanly via scoped variables
+  root.style.setProperty('--rtv-site-base-size', `${cfg.baseFontSizePx}px`);
   root.style.setProperty('--rtv-base-font-size', `${cfg.baseFontSizePx}px`);
   root.style.setProperty('--rtv-hero-title-size', `${cfg.heroTitleSizePx}px`);
   root.style.setProperty('--rtv-detail-title-size', `${cfg.detailTitleSizePx}px`);

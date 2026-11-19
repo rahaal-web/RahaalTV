@@ -30,6 +30,7 @@ interface TypographyPanelProps {
   onUploadCustomFont: (font: CustomFontRecord) => Promise<void>;
   onDeleteCustomFont: (slot: CustomFontSlot) => Promise<void>;
   onPreviewHome: () => void;
+  onOpenAdminAppearance?: () => void;
   onNotify: (msg: string) => void;
 }
 
@@ -42,6 +43,7 @@ export function TypographyPanel({
   onUploadCustomFont,
   onDeleteCustomFont,
   onPreviewHome,
+  onOpenAdminAppearance,
   onNotify,
 }: TypographyPanelProps) {
   const cfg = useMemo(() => normalizeTypographyConfig(typography), [typography]);
@@ -184,11 +186,28 @@ export function TypographyPanel({
             <Type className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="font-display text-lg sm:text-xl font-extrabold text-white">
-              التحكم في الخطوط وأحجام النصوص (عربي وإنجليزي)
-            </h2>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="font-display text-lg sm:text-xl font-extrabold text-white">
+                خطوط وأحجام نصوص واجهة الموقع (عربي وإنجليزي)
+              </h2>
+              <span className="rounded-lg bg-emerald-500/15 border border-emerald-400/35 px-2.5 py-0.5 text-[10px] font-extrabold text-emerald-300">
+                معزولة تماماً عن لوحة الإدارة
+              </span>
+            </div>
             <p className="text-xs text-[#b7c9ef] mt-1">
-              غيّر حجم العناوين والنصوص بدقة، اختر نوع الفونت للغة العربية والإنجليزية بشكل مستقل، أو ارفع خطوطك الخاصة (.woff2 / .ttf / .otf).
+              تُطبّق هذه الخطوط والأحجام على صفحات المشاهدة والموقع العام للزوار فقط ولا تؤثر على لوحة الإدارة. لتغيير مظهر الإدارة استخدم{' '}
+              {onOpenAdminAppearance ? (
+                <button
+                  type="button"
+                  onClick={onOpenAdminAppearance}
+                  className="font-extrabold text-[#f9c400] underline underline-offset-2 hover:text-white cursor-pointer"
+                >
+                  تخصيص مظهر لوحة الإدارة
+                </button>
+              ) : (
+                <span className="font-bold text-[#f9c400]">تخصيص مظهر لوحة الإدارة</span>
+              )}
+              .
             </p>
           </div>
         </div>

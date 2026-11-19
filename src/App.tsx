@@ -53,6 +53,13 @@ import {
   loadDisplayDevicePrefs,
 } from './lib/browserCompat';
 import { loadAdminWorkspacePrefs } from './lib/adminPreferences';
+import {
+  enterGuestSession,
+  exitGuestSession,
+  GuestSession,
+  isGuestSessionActive,
+  loadGuestSession,
+} from './lib/guestSession';
 import { installTvSpatialNavigation } from './lib/tvNavigation';
 import {
   appendDatabaseConnectionLog,
@@ -159,10 +166,12 @@ export default function App() {
   const clientCapabilities = useMemo(() => detectClientCapabilities(), []);
   const [compatBannerDismissed, setCompatBannerDismissed] = useState(false);
 
-  // Firebase Auth & RBAC State
+  // Firebase Auth & RBAC State + Client-only Viewer Guest Session
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [adminRole, setAdminRole] = useState<AdminPrivilegeRole | null>(null);
+  const [guestSession, setGuestSession] = useState<GuestSession | null>(() => loadGuestSession());
+  const isGuest = !firebaseUser && isGuestSessionActive(guestSession);
   const effectiveAdminRole = adminRole;
   const canAccessAdmin = effectiveAdminRole !== null;
   const isOwnerAdmin = effectiveAdminRole === 'owner';
@@ -637,6 +646,9 @@ export default function App() {
     const unsubAuth = onAuthStateChanged(activeAuth, async (user) => {
       setFirebaseUser(user);
       if (user) {
+        // Real authenticated account takes precedence over Guest Mode
+        exitGuestSession();
+        setGuestSession(null);
         const resolvedRole = await getUserAdminRole(user);
         setAdminRole(resolvedRole);
         if (resolvedRole !== 'owner') {
@@ -860,6 +872,18 @@ export default function App() {
     showToast('تم تسجيل الخروج بنجاح');
   };
 
+  const handleContinueAsGuest = () => {
+    const session = enterGuestSession();
+    setGuestSession(session);
+    showToast('تم الدخول بوضع الضيف — يمكنك التصفح والمشاهدة بحرية');
+  };
+
+  const handleExitGuest = () => {
+    exitGuestSession();
+    setGuestSession(null);
+    showToast('تم الخروج من وضع الضيف');
+  };
+
   const handleAddRequest = async (req: {
     title: string;
     type: VisitorRequest['type'];
@@ -994,7 +1018,7 @@ export default function App() {
       );
     }
     return (
-      <>
+      <div data-rtv-scope="site" className="rtv-site-root min-h-screen bg-[#0f0f0f] text-white">
         <MaintenanceScreen
           siteName={siteSettings.siteName}
           tagline={siteSettings.tagline}
@@ -1005,18 +1029,21 @@ export default function App() {
           isOpen={loginOpen}
           onClose={() => setLoginOpen(false)}
           firebaseUser={firebaseUser}
+          isGuest={isGuest}
           isAdmin={canAccessAdmin}
           adminRole={effectiveAdminRole}
           onLogout={handleLogout}
+          onContinueAsGuest={handleContinueAsGuest}
+          onExitGuest={handleExitGuest}
           onOpenAdmin={() => openAdminPage()}
           onNotify={showToast}
         />
-      </>
+      </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#0f0f0f] text-white">
+    <div data-rtv-scope="site" className="rtv-site-root min-h-screen flex flex-col bg-[#0f0f0f] text-white">
       {!clientCapabilities.baselineSupported && !compatBannerDismissed && (
         <div
           role="status"
@@ -1071,8 +1098,15 @@ export default function App() {
         onOpenAdmin={() => openAdminPage()}
         onSelectMedia={handleSelectMedia}
         watchlistCount={watchlistItems.length}
-        username={firebaseUser?.displayName || firebaseUser?.email || null}
+        username={
+          firebaseUser
+            ? firebaseUser.displayName || firebaseUser.email || 'عضو'
+            : isGuest
+              ? 'ضيف'
+              : null
+        }
         userPhoto={firebaseUser?.photoURL || null}
+        isGuest={isGuest}
         isAdmin={canAccessAdmin}
         activeCategory={filters.category}
         currentView={view}
@@ -1114,6 +1148,7 @@ export default function App() {
             initialEpisode={routeEpisode}
             initialOpenDownloads={openDownloadsOnSingle}
             currentUser={firebaseUser}
+            isGuest={isGuest}
             onOpenLogin={() => setLoginOpen(true)}
             onSelectMedia={handleSelectMedia}
             onApplyFilter={handleApplyFilter}
@@ -1180,9 +1215,12 @@ export default function App() {
         isOpen={loginOpen}
         onClose={() => setLoginOpen(false)}
         firebaseUser={firebaseUser}
+        isGuest={isGuest}
         isAdmin={canAccessAdmin}
         adminRole={effectiveAdminRole}
         onLogout={handleLogout}
+        onContinueAsGuest={handleContinueAsGuest}
+        onExitGuest={handleExitGuest}
         onOpenAdmin={() => openAdminPage()}
         onNotify={showToast}
       />
@@ -1191,6 +1229,7 @@ export default function App() {
         topic={footerTopic}
         onClose={() => setFooterTopic(null)}
         firebaseUser={firebaseUser}
+        isGuest={isGuest}
         onOpenLogin={() => setLoginOpen(true)}
         requests={visitorRequests}
         onAddRequest={handleAddRequest}

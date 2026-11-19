@@ -1,4 +1,4 @@
-import { FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CSSProperties, FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDown,
@@ -127,6 +127,12 @@ const AdminDatabaseManagerPanel = lazy(() =>
 const AdminBackupRestorePanel = lazy(() =>
   import('./admin/AdminBackupRestorePanel').then((m) => ({ default: m.AdminBackupRestorePanel }))
 );
+const AdminAppearancePanel = lazy(() =>
+  import('./admin/AdminAppearancePanel').then((m) => ({ default: m.AdminAppearancePanel }))
+);
+const AdminNavOrderPanel = lazy(() =>
+  import('./admin/AdminNavOrderPanel').then((m) => ({ default: m.AdminNavOrderPanel }))
+);
 
 import {
   evaluateImageQuality,
@@ -247,6 +253,21 @@ import {
   loadDatabaseRegistry,
   rollbackDatabaseConnection,
 } from '../lib/dbConnectionManager';
+import {
+  AdminAppearanceConfig,
+  buildAdminAppearanceCssVars,
+  ensureAdminFontResources,
+  loadAdminAppearance,
+  subscribeAdminAppearance,
+  subscribeAdminAppearanceFromFirestore,
+} from '../lib/adminAppearance';
+import {
+  AdminNavLayoutConfig,
+  loadAdminNavLayout,
+  resolveSidebarGroupsForRender,
+  subscribeAdminNavLayout,
+  subscribeAdminNavLayoutFromFirestore,
+} from '../lib/adminNavLayout';
 import {
   AdminPrivilegeRole,
   AdminRoleRecord,
@@ -736,6 +757,52 @@ export function AdminDashboardView({
     onNotifyRef.current = onNotify;
   }, [onNotify]);
 
+  const [adminAppearance, setAdminAppearance] = useState<AdminAppearanceConfig>(() =>
+    loadAdminAppearance()
+  );
+  const [adminNavLayout, setAdminNavLayout] = useState<AdminNavLayoutConfig>(() =>
+    loadAdminNavLayout()
+  );
+
+  useEffect(() => {
+    const unsub = subscribeAdminAppearance(setAdminAppearance);
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = subscribeAdminNavLayout(setAdminNavLayout);
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    ensureAdminFontResources(adminAppearance, 'active');
+  }, [adminAppearance]);
+
+  useEffect(() => {
+    const enabled = Boolean(isOwner && dbConnectionStatus === 'connected');
+    const unsubApp = subscribeAdminAppearanceFromFirestore(enabled, setAdminAppearance);
+    const unsubNav = subscribeAdminNavLayoutFromFirestore(enabled, setAdminNavLayout);
+    return () => {
+      unsubApp();
+      unsubNav();
+    };
+  }, [isOwner, dbConnectionStatus]);
+
+  const adminCssVars = useMemo(
+    () => buildAdminAppearanceCssVars(adminAppearance) as CSSProperties,
+    [adminAppearance]
+  );
+
+  const resolvedSidebarGroups = useMemo(
+    () =>
+      resolveSidebarGroupsForRender(
+        adminNavLayout,
+        isOwner,
+        workspacePrefs.moderatorSubPermissions
+      ),
+    [adminNavLayout, isOwner, workspacePrefs.moderatorSubPermissions]
+  );
+
   const accessibleNavItems = useMemo(
     () =>
       getAllAdminNavItems().filter((item) =>
@@ -744,14 +811,18 @@ export function AdminDashboardView({
     [isOwner, workspacePrefs.moderatorSubPermissions]
   );
 
-  const currentNavMeta = useMemo(
-    () =>
-      findAdminNavItem(activeTab) || {
-        group: ADMIN_NAV_GROUPS[0],
-        item: ADMIN_NAV_GROUPS[0].items[0],
-      },
-    [activeTab]
-  );
+  const currentNavMeta = useMemo(() => {
+    const base = findAdminNavItem(activeTab) || {
+      group: ADMIN_NAV_GROUPS[0],
+      item: ADMIN_NAV_GROUPS[0].items[0],
+    };
+    const layoutGrp = adminNavLayout.groups.find((g) =>
+      g.items.some((entry) => entry.id === base.item.id)
+    );
+    return layoutGrp
+      ? { group: { ...base.group, label: layoutGrp.label }, item: base.item }
+      : base;
+  }, [activeTab, adminNavLayout]);
 
   const navigateToTab = useCallback(
     (target: AdminTab) => {
@@ -3118,7 +3189,12 @@ export function AdminDashboardView({
   /* ---------------- Standalone Auth / Access Gate ---------------- */
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-[#06131c] flex items-center justify-center p-4">
+      <div
+        data-rtv-scope="admin"
+        data-admin-theme={adminAppearance.colorMode}
+        style={adminCssVars}
+        className="rtv-admin-root min-h-screen bg-[#06131c] text-white flex items-center justify-center p-4"
+      >
         <div className="w-full max-w-md rounded-3xl bg-[#0c1821] border border-white/10 p-10 text-center shadow-2xl">
           <Database className="w-10 h-10 text-[#D92321] mx-auto mb-3 animate-pulse" />
           <p className="text-sm font-bold text-[#b7c9ef]">
@@ -3131,7 +3207,12 @@ export function AdminDashboardView({
 
   if (!user || !isAdmin) {
     return (
-      <div className="min-h-screen bg-[#06131c] flex flex-col items-center justify-center p-4">
+      <div
+        data-rtv-scope="admin"
+        data-admin-theme={adminAppearance.colorMode}
+        style={adminCssVars}
+        className="rtv-admin-root min-h-screen bg-[#06131c] text-white flex flex-col items-center justify-center p-4"
+      >
         <div className="w-full max-w-lg rounded-3xl bg-[#0c1821] border border-white/10 p-8 shadow-2xl text-center space-y-5">
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[#D92321]/15 border border-[#D92321]/40 text-[#D92321]">
             <Lock className="w-8 h-8" />
@@ -3297,11 +3378,7 @@ export function AdminDashboardView({
   /* ---------------- Standalone Authenticated /admin Dashboard ---------------- */
   const renderSidebarNavContent = (collapsed: boolean) => (
     <nav aria-label="أقسام لوحة التحكم" className="space-y-3">
-      {ADMIN_NAV_GROUPS.map((group) => {
-        const visibleItems = group.items.filter((item) =>
-          isTabAccessible(item.id, isOwner, workspacePrefs.moderatorSubPermissions)
-        );
-        if (visibleItems.length === 0) return null;
+      {resolvedSidebarGroups.map((group) => {
         const isGroupCollapsed = Boolean(workspacePrefs.collapsedGroups[group.id]);
 
         return (
@@ -3330,8 +3407,8 @@ export function AdminDashboardView({
             )}
 
             {(!isGroupCollapsed || collapsed) && (
-              <div className="space-y-1">
-                {visibleItems.map((item) => {
+              <div className="rtv-admin-sidebar-list">
+                {group.items.map((item) => {
                   const active = activeTab === item.id;
                   let badgeText: string | undefined;
                   if (item.id === 'catalog') badgeText = String(catalog.length);
@@ -3383,7 +3460,7 @@ export function AdminDashboardView({
                           });
                         }
                       }}
-                      className={`flex w-full items-center ${
+                      className={`rtv-admin-sidebar-item flex w-full items-center ${
                         collapsed ? 'justify-center px-2' : 'justify-between px-3.5'
                       } gap-2 rounded-xl py-2.5 text-xs font-bold transition-colors cursor-pointer ${
                         active
@@ -3417,7 +3494,12 @@ export function AdminDashboardView({
   );
 
   return (
-    <div className="min-h-screen bg-[#06131c] text-white flex flex-col">
+    <div
+      data-rtv-scope="admin"
+      data-admin-theme={adminAppearance.colorMode}
+      style={adminCssVars}
+      className="rtv-admin-root min-h-screen bg-[#06131c] text-white flex flex-col"
+    >
       {/* Dedicated Standalone Admin Top Bar */}
       <header className="sticky top-0 z-40 border-b border-white/10 bg-[#0c1821]/95 backdrop-blur-md">
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-3">
@@ -3606,7 +3688,7 @@ export function AdminDashboardView({
           {/* Desktop 9-Group Collapsible Sidebar */}
           <aside
             className={`hidden lg:block shrink-0 rounded-3xl bg-[#0c1821] border border-white/[0.08] p-3 lg:sticky lg:top-20 max-h-[calc(100vh-6rem)] overflow-y-auto transition-all ${
-              workspacePrefs.sidebarCollapsed ? 'w-24' : 'w-72'
+              workspacePrefs.sidebarCollapsed ? 'w-24' : 'rtv-admin-sidebar-expanded'
             }`}
           >
             {renderSidebarNavContent(workspacePrefs.sidebarCollapsed)}
@@ -4037,6 +4119,27 @@ export function AdminDashboardView({
                   onUploadCustomFont={handleUploadCustomFont}
                   onDeleteCustomFont={handleDeleteCustomFont}
                   onPreviewHome={onExitDashboard}
+                  onOpenAdminAppearance={() => navigateToTab('admin_appearance')}
+                  onNotify={onNotify}
+                />
+              )}
+
+              {isOwner && activeTab === 'admin_appearance' && (
+                <AdminAppearancePanel
+                  appearance={adminAppearance}
+                  navLayout={adminNavLayout}
+                  actorUid={activeActorUid}
+                  onChangeApplied={setAdminAppearance}
+                  onOpenSiteTypography={() => navigateToTab('typography')}
+                  onNotify={onNotify}
+                />
+              )}
+
+              {isOwner && activeTab === 'admin_nav_order' && (
+                <AdminNavOrderPanel
+                  navLayout={adminNavLayout}
+                  actorUid={activeActorUid}
+                  onChangeLayout={setAdminNavLayout}
                   onNotify={onNotify}
                 />
               )}

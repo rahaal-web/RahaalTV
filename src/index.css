@@ -76,6 +76,271 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ============================================================
+   Strict Site Typography Scope (.rtv-site-root & .rtv-site-preview)
+   Never leaks into Admin Dashboard
+   ============================================================ */
+.rtv-site-root,
+.rtv-site-preview {
+  --font-sans: var(--rtv-site-font-sans, "Tajawal", "Cairo", system-ui, sans-serif);
+  --font-display: var(--rtv-site-font-display, "Cairo", "Tajawal", system-ui, sans-serif);
+  --font-latin: var(--rtv-site-font-latin, "Cairo", system-ui, sans-serif);
+  --text-xs: calc(var(--rtv-site-base-size, 16px) * 0.75);
+  --text-sm: calc(var(--rtv-site-base-size, 16px) * 0.875);
+  --text-base: var(--rtv-site-base-size, 16px);
+  --text-lg: calc(var(--rtv-site-base-size, 16px) * 1.125);
+  --text-xl: calc(var(--rtv-site-base-size, 16px) * 1.25);
+  font-family: var(--font-sans);
+  font-size: var(--rtv-site-base-size, 16px);
+}
+
+.rtv-site-root h1,
+.rtv-site-root h2,
+.rtv-site-root h3,
+.rtv-site-root h4,
+.rtv-site-root .font-display,
+.rtv-site-preview h1,
+.rtv-site-preview h2,
+.rtv-site-preview h3,
+.rtv-site-preview h4,
+.rtv-site-preview .font-display {
+  font-family: var(--font-display);
+}
+
+.rtv-site-root .font-latin,
+.rtv-site-preview .font-latin {
+  font-family: var(--font-latin);
+}
+
+/* ============================================================
+   Strict Admin Dashboard Appearance Scope (.rtv-admin-root & .rtv-admin-preview)
+   Completely isolated from public viewer site typography
+   ============================================================ */
+.rtv-admin-root,
+.rtv-admin-preview {
+  --font-sans: var(--rtv-admin-font-family, "Tajawal", "Cairo", system-ui, sans-serif);
+  --font-display: var(--rtv-admin-font-family, "Tajawal", "Cairo", system-ui, sans-serif);
+  font-family: var(--rtv-admin-font-family, "Tajawal", "Cairo", system-ui, sans-serif);
+  font-weight: var(--rtv-admin-font-weight, 500);
+  font-size: var(--rtv-admin-body-size, 13px);
+}
+
+.rtv-admin-root h1,
+.rtv-admin-root h2,
+.rtv-admin-root h3,
+.rtv-admin-root h4,
+.rtv-admin-root .font-display,
+.rtv-admin-preview h1,
+.rtv-admin-preview h2,
+.rtv-admin-preview h3,
+.rtv-admin-preview h4,
+.rtv-admin-preview .font-display {
+  font-family: var(--rtv-admin-font-family, "Tajawal", "Cairo", system-ui, sans-serif);
+}
+
+.rtv-admin-root header h1,
+.rtv-admin-root main h1 {
+  font-size: var(--rtv-admin-h1-size, 20px);
+}
+
+.rtv-admin-root main h2 {
+  font-size: var(--rtv-admin-h2-size, 16px);
+}
+
+.rtv-admin-root main h3,
+.rtv-admin-root main h4 {
+  font-size: var(--rtv-admin-card-title-size, 15px);
+}
+
+.rtv-admin-root main {
+  --text-xs: var(--rtv-admin-body-size, 13px);
+  --text-sm: var(--rtv-admin-body-size, 13px);
+  --text-base: calc(var(--rtv-admin-body-size, 13px) + 1px);
+  font-size: var(--rtv-admin-body-size, 13px);
+}
+
+.rtv-admin-root main p.text-\[11px\],
+.rtv-admin-root main span.text-\[11px\],
+.rtv-admin-root .rtv-admin-secondary-text {
+  font-size: var(--rtv-admin-secondary-size, 11px);
+}
+
+.rtv-admin-root main button:not(.rtv-admin-fixed-btn),
+.rtv-admin-root header button:not(.rtv-admin-fixed-btn) {
+  font-size: var(--rtv-admin-button-size, 12px);
+}
+
+.rtv-admin-root main button.rtv-admin-btn-height {
+  min-height: var(--rtv-admin-button-height, 38px);
+}
+
+.rtv-admin-root .rtv-admin-sidebar-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rtv-admin-nav-spacing, 4px);
+}
+
+.rtv-admin-root .rtv-admin-sidebar-item {
+  font-size: var(--rtv-admin-sidebar-size, 12px);
+}
+
+.rtv-admin-root .rtv-admin-sidebar-item svg,
+.rtv-admin-root .rtv-admin-icon-scaled {
+  width: var(--rtv-admin-icon-size, 16px);
+  height: var(--rtv-admin-icon-size, 16px);
+}
+
+.rtv-admin-root main table th,
+.rtv-admin-root main table td {
+  font-size: var(--rtv-admin-table-size, 12px);
+  padding-top: var(--rtv-admin-table-py, 10px);
+  padding-bottom: var(--rtv-admin-table-py, 10px);
+  padding-inline: var(--rtv-admin-table-px, 14px);
+}
+
+.rtv-admin-root main input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+.rtv-admin-root main select,
+.rtv-admin-root main textarea {
+  font-size: var(--rtv-admin-input-size, 13px);
+  border-radius: min(var(--rtv-admin-radius, 16px), 14px);
+}
+
+.rtv-admin-root main .rounded-3xl {
+  border-radius: var(--rtv-admin-radius, 16px);
+}
+
+.rtv-admin-root main > div > .rounded-3xl,
+.rtv-admin-root main > form > .rounded-3xl,
+.rtv-admin-root .rtv-admin-card {
+  padding: var(--rtv-admin-card-padding, 24px);
+}
+
+@media (min-width: 1024px) {
+  .rtv-admin-sidebar-expanded {
+    width: var(--rtv-admin-sidebar-width, 288px);
+  }
+}
+
+/* Admin Light Mode (Strictly Scoped to .rtv-admin-root[data-admin-theme="light"]) */
+.rtv-admin-root[data-admin-theme="light"] {
+  background-color: #f1f5f9;
+  color: #0f172a;
+}
+
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#06131c\] {
+  background-color: #f1f5f9;
+}
+
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#0c1821\],
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#0c1821\]\/95,
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#0c1821\]\/90,
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#12161b\] {
+  background-color: #ffffff;
+}
+
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#1a242e\],
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#1a242e\]\/80,
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#1a242e\]\/65,
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#1a242e\]\/60,
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#1a242e\]\/35,
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#23313f\] {
+  background-color: #f8fafc;
+}
+
+.rtv-admin-root[data-admin-theme="light"] .border-white\/10,
+.rtv-admin-root[data-admin-theme="light"] .border-white\/\[0\.08\],
+.rtv-admin-root[data-admin-theme="light"] .border-white\/\[0\.07\],
+.rtv-admin-root[data-admin-theme="light"] .border-white\/\[0\.06\],
+.rtv-admin-root[data-admin-theme="light"] .border-white\/15,
+.rtv-admin-root[data-admin-theme="light"] .border-white\/20 {
+  border-color: rgba(15, 23, 42, 0.12);
+}
+
+.rtv-admin-root[data-admin-theme="light"] .text-white {
+  color: #0f172a;
+}
+
+.rtv-admin-root[data-admin-theme="light"] .text-\[\#b7c9ef\],
+.rtv-admin-root[data-admin-theme="light"] .text-\[\#b7c9ef\]\/75,
+.rtv-admin-root[data-admin-theme="light"] .text-\[\#b7c9ef\]\/80,
+.rtv-admin-root[data-admin-theme="light"] .text-\[\#b7c9ef\]\/70,
+.rtv-admin-root[data-admin-theme="light"] .text-\[\#a3a3a3\] {
+  color: #475569;
+}
+
+.rtv-admin-root[data-admin-theme="light"] .text-\[\#f9c400\] {
+  color: #b45309;
+}
+
+.rtv-admin-root[data-admin-theme="light"] .text-white\/85,
+.rtv-admin-root[data-admin-theme="light"] .text-white\/90 {
+  color: #1e293b;
+}
+
+.rtv-admin-root[data-admin-theme="light"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.rtv-admin-root[data-admin-theme="light"] select,
+.rtv-admin-root[data-admin-theme="light"] textarea {
+  background-color: #ffffff;
+  color: #0f172a;
+  border-color: #cbd5e1;
+}
+
+/* Keep crisp white text inside solid accent/active buttons & badges in Admin Light Mode */
+.rtv-admin-root[data-admin-theme="light"] .hover\:bg-\[\#1a242e\]:hover,
+.rtv-admin-root[data-admin-theme="light"] .hover\:bg-white\/10:hover,
+.rtv-admin-root[data-admin-theme="light"] .hover\:bg-white\/15:hover {
+  background-color: #e2e8f0;
+  color: #0f172a;
+}
+
+.rtv-admin-root[data-admin-theme="light"] .hover\:text-white:hover {
+  color: #0f172a;
+}
+
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#D92321\],
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#D92321\].text-white,
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#D92321\] .text-white,
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#D92321\] span,
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#4CAF50\],
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#4CAF50\].text-white,
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#4CAF50\] .text-white,
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#E50914\],
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#E50914\].text-white,
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#E50914\] .text-white,
+.rtv-admin-root[data-admin-theme="light"] .bg-emerald-600,
+.rtv-admin-root[data-admin-theme="light"] .bg-emerald-600.text-white,
+.rtv-admin-root[data-admin-theme="light"] .bg-sky-600,
+.rtv-admin-root[data-admin-theme="light"] .bg-sky-600.text-white,
+.rtv-admin-root[data-admin-theme="light"] .bg-rose-600,
+.rtv-admin-root[data-admin-theme="light"] .bg-rose-600.text-white,
+.rtv-admin-root[data-admin-theme="light"] .hover\:bg-\[\#D92321\]:hover {
+  color: #ffffff;
+}
+
+.rtv-admin-root[data-admin-theme="light"] .bg-\[\#f9c400\] {
+  color: #06131c;
+}
+
+/* Preserve cinema dark theme inside MediaPreviewModal when launched from Light Admin */
+.rtv-admin-root[data-admin-theme="light"] .rtv-site-preview {
+  background-color: #0c1821;
+  color: #ffffff;
+}
+.rtv-admin-root[data-admin-theme="light"] .rtv-site-preview .text-white {
+  color: #ffffff;
+}
+.rtv-admin-root[data-admin-theme="light"] .rtv-site-preview .text-\[\#b7c9ef\] {
+  color: #b7c9ef;
+}
+.rtv-admin-root[data-admin-theme="light"] .rtv-site-preview .bg-\[\#0c1821\],
+.rtv-admin-root[data-admin-theme="light"] .rtv-site-preview .bg-\[\#06131c\] {
+  background-color: #0c1821;
+}
+.rtv-admin-root[data-admin-theme="light"] .rtv-site-preview .bg-\[\#1a242e\],
+.rtv-admin-root[data-admin-theme="light"] .rtv-site-preview .bg-\[\#1a242e\]\/95 {
+  background-color: #1a242e;
+}
+
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
