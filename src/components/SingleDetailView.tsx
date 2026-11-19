@@ -24,9 +24,10 @@ import {
   Tv,
   Users,
 } from 'lucide-react';
+import { subscribeActiveDatabaseChange } from '../lib/dbConnectionManager';
 import {
-  db,
   deleteMediaRatingFromFirestore,
+  getActiveDatabase,
   handleFirestoreError,
   OperationType,
   sanitizeRatingMediaId,
@@ -121,12 +122,20 @@ export function SingleDetailView({
     }
   }, [item.id, initialEpisode, initialOpenDownloads]);
 
+  const [dbRevision, setDbRevision] = useState(0);
+
+  useEffect(() => {
+    return subscribeActiveDatabaseChange(() => {
+      setDbRevision((n) => n + 1);
+    });
+  }, []);
+
   // Real-time Firestore listener for media star ratings
   useEffect(() => {
     setRatingsLoading(true);
     setRatingsPermissionError(false);
     const ratingsPath = 'ratings';
-    const q = query(collection(db, ratingsPath), where('mediaId', '==', cleanMediaId));
+    const q = query(collection(getActiveDatabase(), ratingsPath), where('mediaId', '==', cleanMediaId));
 
     const unsubscribe = onSnapshot(
       q,
@@ -171,7 +180,7 @@ export function SingleDetailView({
     );
 
     return () => unsubscribe();
-  }, [cleanMediaId]);
+  }, [cleanMediaId, dbRevision]);
 
   const ratingCount =
     ratingsList.length > 0 ? ratingsList.length : ratingsLoading ? item.communityRating?.count || 0 : 0;

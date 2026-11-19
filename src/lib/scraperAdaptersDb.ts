@@ -11,7 +11,7 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 import { User } from 'firebase/auth';
-import { db, handleFirestoreError, OperationType } from './firebase';
+import { getActiveDatabase, handleFirestoreError, OperationType } from './firebase';
 import {
   resolveApiEndpoint,
   shouldSkipBackendApiCalls,
@@ -101,7 +101,7 @@ export function subscribeScraperAdapters(
   onData: (adapters: ScraperAdapter[], cloudSynced: boolean) => void
 ): () => void {
   const path = 'scraper_adapters';
-  const q = query(collection(db, path), orderBy('updatedAt', 'desc'));
+  const q = query(collection(getActiveDatabase(), path), orderBy('updatedAt', 'desc'));
   return onSnapshot(
     q,
     (snapshot) => {
@@ -251,7 +251,8 @@ export async function saveScraperAdapterWithVersion(params: {
 
   const docPath = `scraper_adapters/${normalized.id}`;
   try {
-    const docRef = doc(db, 'scraper_adapters', normalized.id);
+    const activeDb = getActiveDatabase();
+    const docRef = doc(activeDb, 'scraper_adapters', normalized.id);
     if (isNew) {
       await setDoc(docRef, toFirestoreAdapterPayload(normalized, uid, true));
     } else {
@@ -269,7 +270,7 @@ export async function saveScraperAdapterWithVersion(params: {
 
     // Write immutable version snapshot in subcollection
     await setDoc(
-      doc(db, 'scraper_adapters', normalized.id, 'versions', versionId),
+      doc(activeDb, 'scraper_adapters', normalized.id, 'versions', versionId),
       {
         versionId,
         adapterId: normalized.id,
@@ -312,7 +313,7 @@ export async function toggleScraperAdapterEnabled(
 
   const docPath = `scraper_adapters/${updated.id}`;
   try {
-    await updateDoc(doc(db, 'scraper_adapters', updated.id), {
+    await updateDoc(doc(getActiveDatabase(), 'scraper_adapters', updated.id), {
       ...toFirestoreAdapterPayload(updated, uid, false),
     });
     return { adapter: updated, syncedToCloud: true };
@@ -335,7 +336,7 @@ export async function deleteScraperAdapter(adapterId: string): Promise<{ syncedT
 
   const docPath = `scraper_adapters/${cleanId}`;
   try {
-    await deleteDoc(doc(db, 'scraper_adapters', cleanId));
+    await deleteDoc(doc(getActiveDatabase(), 'scraper_adapters', cleanId));
     return { syncedToCloud: true };
   } catch (error) {
     if (isPermissionError(error)) {
@@ -356,7 +357,7 @@ export async function fetchAdapterVersions(
   const path = `scraper_adapters/${adapterId}/versions`;
   try {
     const snap = await getDocs(
-      query(collection(db, 'scraper_adapters', adapterId, 'versions'), orderBy('createdAt', 'desc'))
+      query(collection(getActiveDatabase(), 'scraper_adapters', adapterId, 'versions'), orderBy('createdAt', 'desc'))
     );
     const cloudVersions: ScraperAdapterVersionRecord[] = snap.docs.map((d) => {
       const raw = d.data() as Record<string, unknown> & {

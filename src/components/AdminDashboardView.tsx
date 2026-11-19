@@ -34,6 +34,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Ruler,
   Search,
   Server,
@@ -51,7 +52,6 @@ import {
   X,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
 import { ASSETS, CATALOG_ITEMS } from '../data/catalog';
 import { MediaPreviewModal } from './MediaPreviewModal';
 import {
@@ -119,6 +119,11 @@ const AdminSecurityLogsPanel = lazy(() =>
 const AdminSystemHealthPanel = lazy(() =>
   import('./admin/AdminSystemHealthPanel').then((m) => ({ default: m.AdminSystemHealthPanel }))
 );
+const AdminDatabaseManagerPanel = lazy(() =>
+  import('./admin/AdminDatabaseManagerPanel').then((m) => ({
+    default: m.AdminDatabaseManagerPanel,
+  }))
+);
 const AdminBackupRestorePanel = lazy(() =>
   import('./admin/AdminBackupRestorePanel').then((m) => ({ default: m.AdminBackupRestorePanel }))
 );
@@ -144,6 +149,7 @@ import {
   deleteVisitorRequestFromFirestore,
   FirestoreConnectionStatus,
   formatFirestoreWriteError,
+  getActiveFirebaseConfig,
   getFirebaseAuthErrorMessage,
   grantAdminRoleInFirestore,
   revokeAdminRoleFromFirestore,
@@ -237,6 +243,10 @@ import {
   runCatalogContentAudit,
 } from '../lib/contentAudit';
 import { reportClientError } from '../lib/clientLogger';
+import {
+  loadDatabaseRegistry,
+  rollbackDatabaseConnection,
+} from '../lib/dbConnectionManager';
 import {
   AdminPrivilegeRole,
   AdminRoleRecord,
@@ -3315,6 +3325,12 @@ export function AdminDashboardView({
                     badgeText = String(scraperAdapters.length);
                   else if (item.id === 'popup_shield')
                     badgeText = activePopupShield.enabled ? 'نشط' : undefined;
+                  else if (
+                    item.id === 'database_manager' &&
+                    dbConnectionStatus &&
+                    dbConnectionStatus !== 'connected'
+                  )
+                    badgeText = dbConnectionStatus === 'connecting' ? 'جارٍ' : 'تنبيه';
 
                   return (
                     <button
@@ -3578,7 +3594,10 @@ export function AdminDashboardView({
 
           {/* Active Tab Workspace */}
           <main className="flex-1 min-w-0 w-full space-y-6">
-            {dbConnectionStatus && dbConnectionStatus !== 'connected' && (
+            {dbConnectionStatus && dbConnectionStatus !== 'connected' && (() => {
+              const activeFirebaseConfig = getActiveFirebaseConfig();
+              const dbReg = loadDatabaseRegistry();
+              return (
               <div
                 className={`rounded-2xl border px-4 py-3.5 flex flex-wrap items-center justify-between gap-3 shadow-lg ${
                   dbConnectionStatus === 'connecting'
@@ -3606,7 +3625,7 @@ export function AdminDashboardView({
                                 : 'تنبيه اتصال قاعدة بيانات Firestore'}
                       </span>
                       <span className="font-latin text-[10px] rounded-md bg-black/30 px-2 py-0.5 text-[#b7c9ef]">
-                        {firebaseConfig.projectId}
+                        {activeFirebaseConfig.projectId}
                       </span>
                     </div>
                     {dbConnectionError && (
@@ -3616,9 +3635,48 @@ export function AdminDashboardView({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {isOwner && activeTab !== 'database_manager' && (
+                    <button
+                      type="button"
+                      onClick={() => navigateToTab('database_manager')}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/15 border border-white/15 px-3 py-2 text-xs font-extrabold text-white cursor-pointer whitespace-nowrap"
+                    >
+                      <Database className="w-3.5 h-3.5 text-[#f9c400]" />
+                      <span>إدارة قواعد البيانات</span>
+                    </button>
+                  )}
+                  {isOwner && dbReg.previousConnectionId && dbConnectionStatus !== 'connecting' && (
+                    <button
+                      type="button"
+                      disabled={reconnectingDb}
+                      onClick={async () => {
+                        setReconnectingDb(true);
+                        try {
+                          const res = await rollbackDatabaseConnection({
+                            uid: user.uid,
+                            name: user.displayName || user.email || 'Admin',
+                          });
+                          if (res.ok) {
+                            onNotify(
+                              `تمت استعادة الاتصال بالقاعدة السابقة (${res.targetName || ''}) بنجاح`
+                            );
+                            await onReconnectDatabase?.();
+                          } else {
+                            onNotify(res.error || 'تعذر الرجوع إلى القاعدة السابقة');
+                          }
+                        } finally {
+                          setReconnectingDb(false);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 px-3 py-2 text-xs font-extrabold text-amber-200 cursor-pointer whitespace-nowrap"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>الرجوع للقاعدة السابقة</span>
+                    </button>
+                  )}
                   {dbConnectionStatus === 'quota_exceeded' && (
                     <a
-                      href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/${firebaseConfig.firestoreDatabaseId}/data?openUpgradeDialog=true`}
+                      href={`https://console.firebase.google.com/project/${activeFirebaseConfig.projectId}/firestore/databases/${activeFirebaseConfig.firestoreDatabaseId}/data?openUpgradeDialog=true`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] px-3 py-2 text-xs font-black text-[#06131c] whitespace-nowrap"
@@ -3629,7 +3687,7 @@ export function AdminDashboardView({
                   )}
                   {dbConnectionStatus === 'permission_denied' && (
                     <a
-                      href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/${firebaseConfig.firestoreDatabaseId}/rules`}
+                      href={`https://console.firebase.google.com/project/${activeFirebaseConfig.projectId}/firestore/databases/${activeFirebaseConfig.firestoreDatabaseId}/rules`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] px-3 py-2 text-xs font-black text-[#06131c] whitespace-nowrap"
@@ -3662,7 +3720,8 @@ export function AdminDashboardView({
                   )}
                 </div>
               </div>
-            )}
+              );
+            })()}
             {isFirestoreSeeded && default78Items.length >= 5 && (
               <div className="rounded-2xl bg-[#1a242e] border border-[#f9c400]/35 px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-lg">
                 <div className="flex items-center gap-2.5 text-xs font-bold text-[#fde68a]">
@@ -3803,6 +3862,7 @@ export function AdminDashboardView({
                   onRequestDeleteMedia={(id) => setConfirmDeleteId(id)}
                   onNavigateTab={navigateToTab}
                   onNotify={onNotify}
+                  onDeleteDuplicateIds={handleDeleteMediaIds}
                   refreshingRatings={refreshingRatings}
                   ratingsProgress={ratingsProgress}
                   default78Count={default78Items.length}
@@ -3972,6 +4032,17 @@ export function AdminDashboardView({
 
               {isOwner && activeTab === 'audit_logs' && (
                 <AdminSecurityLogsPanel mode="audit_logs" onNotify={onNotify} />
+              )}
+
+              {isOwner && activeTab === 'database_manager' && (
+                <AdminDatabaseManagerPanel
+                  user={user}
+                  dbConnectionStatus={dbConnectionStatus}
+                  dbConnectionError={dbConnectionError}
+                  customApiUrl={customApiUrl}
+                  onReconnectDatabase={onReconnectDatabase}
+                  onNotify={onNotify}
+                />
               )}
 
               {isOwner && activeTab === 'system_health' && (

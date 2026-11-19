@@ -20,7 +20,7 @@ import {
   bulkDeleteMediaFromFirestore,
   bulkSaveMediaToFirestore,
   bulkUpdateMediaInFirestore,
-  db,
+  getActiveDatabase,
   handleFirestoreError,
   OperationType,
 } from './firebase';
@@ -108,7 +108,7 @@ export async function persistActivityLogToFirestore(
   const cleanId = sanitizeLogId(entry.id);
   const path = `admin_activity_logs/${cleanId}`;
   try {
-    await setDoc(doc(db, 'admin_activity_logs', cleanId), {
+    await setDoc(doc(getActiveDatabase(), 'admin_activity_logs', cleanId), {
       id: cleanId,
       adminUid: entry.adminUid.slice(0, 128),
       adminName: (entry.adminName || 'مشرف').slice(0, 120) || 'مشرف',
@@ -141,7 +141,7 @@ export function subscribeActivityLogsFromFirestore(
   onSyncStatus?: (status: 'firestore+local' | 'local') => void
 ): () => void {
   const logsQuery = query(
-    collection(db, 'admin_activity_logs'),
+    collection(getActiveDatabase(), 'admin_activity_logs'),
     orderBy('createdAt', 'desc'),
     limit(60)
   );
@@ -228,9 +228,10 @@ export async function clearActivityLog(syncToFirestore = true): Promise<AdminAct
   }
   if (syncToFirestore) {
     try {
-      const snap = await getDocs(query(collection(db, 'admin_activity_logs'), limit(80)));
+      const activeDb = getActiveDatabase();
+      const snap = await getDocs(query(collection(activeDb, 'admin_activity_logs'), limit(80)));
       if (!snap.empty) {
-        const batch = writeBatch(db);
+        const batch = writeBatch(activeDb);
         snap.docs.forEach((d) => batch.delete(d.ref));
         await batch.commit();
       }
@@ -299,7 +300,7 @@ function mapFirestoreDocToMediaItem(d: QueryDocumentSnapshot<DocumentData>): Med
 export async function countMediaInFirestore(
   filterYear?: string
 ): Promise<NonNullable<ExecutionPreviewPlan['countSummary']>> {
-  const mediaCol = collection(db, 'media');
+  const mediaCol = collection(getActiveDatabase(), 'media');
   try {
     const baseConstraints: QueryConstraint[] = filterYear
       ? [where('year', '==', filterYear)]
@@ -333,7 +334,7 @@ export async function fetchTopMediaFromFirestore(
   limitCount: number,
   sortBy: ParsedAdminCommand['sortBy'] = 'latest'
 ): Promise<MediaItem[]> {
-  const mediaCol = collection(db, 'media');
+  const mediaCol = collection(getActiveDatabase(), 'media');
   const orderField =
     sortBy === 'imdb' ? 'imdb' : sortBy === 'views' ? 'views' : 'updatedAt';
   const safeLimit = Math.min(50, Math.max(1, limitCount));
@@ -377,7 +378,7 @@ export async function fetchScopedMediaFromFirestore(params: {
   filterYear?: string;
   maxScan?: number;
 }): Promise<MediaItem[]> {
-  const mediaCol = collection(db, 'media');
+  const mediaCol = collection(getActiveDatabase(), 'media');
   const maxScan = params.maxScan ?? 1500;
   const pageSize = 250;
 

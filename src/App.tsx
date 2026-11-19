@@ -55,10 +55,18 @@ import {
 import { loadAdminWorkspacePrefs } from './lib/adminPreferences';
 import { installTvSpatialNavigation } from './lib/tvNavigation';
 import {
-  auth,
+  appendDatabaseConnectionLog,
+  getActiveConnectionProfile,
+  loadDatabaseRegistry,
+  recordDatabaseConnected,
+  recordDatabaseOutage,
+  subscribeActiveDatabaseChange,
+} from './lib/dbConnectionManager';
+import {
   classifyFirestoreConnectionError,
-  db,
   FirestoreConnectionStatus,
+  getActiveAuth,
+  getActiveDatabase,
   getUserAdminRole,
   handleFirestoreError,
   OperationType,
@@ -168,6 +176,16 @@ export default function App() {
     useState<FirestoreConnectionStatus>('connecting');
   const [dbConnectionError, setDbConnectionError] = useState<string | null>(null);
   const [dbReconnectNonce, setDbReconnectNonce] = useState(0);
+
+  useEffect(() => {
+    return subscribeActiveDatabaseChange(() => {
+      setFirestoreCatalog([]);
+      setInitialMediaLoaded(false);
+      setDbConnectionStatus('connecting');
+      setDbConnectionError(null);
+      setDbReconnectNonce((n) => n + 1);
+    });
+  }, []);
   const [siteSettings, setSiteSettings] = useState<SiteSettings>(DEFAULT_SETTINGS);
   const [customFonts, setCustomFonts] = useState<
     Partial<Record<CustomFontSlot, CustomFontRecord>>
@@ -354,9 +372,10 @@ export default function App() {
 
   // 1. Public Firestore Listeners (/media and /settings/general)
   useEffect(() => {
+    const activeDb = getActiveDatabase();
     const mediaPath = 'media';
     const unsubMedia = onSnapshot(
-      collection(db, mediaPath),
+      collection(activeDb, mediaPath),
       (snapshot) => {
         const docs = snapshot.docs.map((d) => {
           const raw = d.data() as Partial<MediaItem> & {
@@ -419,6 +438,7 @@ export default function App() {
         setInitialMediaLoaded(true);
         setDbConnectionStatus('connected');
         setDbConnectionError(null);
+        recordDatabaseConnected();
         if (docs.length > 0) {
           // Once Firestore holds live items, prevent initial fallback items from popping back if DB is cleared later
           setStarterCleared(true);
@@ -429,6 +449,13 @@ export default function App() {
         const classified = classifyFirestoreConnectionError(error);
         setDbConnectionStatus(classified.status);
         setDbConnectionError(classified.message);
+        recordDatabaseOutage(
+          classified.status === 'error' || classified.status === 'connecting'
+            ? 'offline'
+            : classified.status,
+          classified.message,
+          error instanceof Error ? error.message : String(error)
+        );
         try {
           handleFirestoreError(error, OperationType.LIST, mediaPath);
         } catch {
@@ -439,7 +466,7 @@ export default function App() {
 
     const settingsPath = 'settings/general';
     const unsubSettings = onSnapshot(
-      doc(db, 'settings', 'general'),
+      doc(activeDb, 'settings', 'general'),
       (snap) => {
         if (snap.exists()) {
           const data = snap.data() as Partial<SiteSettings>;
@@ -484,7 +511,7 @@ export default function App() {
 
     const fontsPath = 'fonts';
     const unsubFonts = onSnapshot(
-      collection(db, fontsPath),
+      collection(activeDb, fontsPath),
       (snapshot) => {
         const nextFonts: Partial<Record<CustomFontSlot, CustomFontRecord>> = {};
         snapshot.docs.forEach((d) => {
@@ -518,7 +545,7 @@ export default function App() {
 
     const ratingsPath = 'ratings';
     const unsubRatings = onSnapshot(
-      collection(db, ratingsPath),
+      collection(activeDb, ratingsPath),
       (snapshot) => {
         const sums: Record<string, { total: number; count: number }> = {};
         snapshot.docs.forEach((d) => {
@@ -559,9 +586,54 @@ export default function App() {
     };
   }, [dbReconnectNonce]);
 
-  // 2. Auth State Listener + Profile Sync
+  // 1b. Automatic Transient Outage Retry Guard
   useEffect(() => {
-    const unsubAuth = onAuthStateChanged(auth, async (user) => {
+    if (dbConnectionStatus !== 'offline') return;
+    const reg = loadDatabaseRegistry();
+    if (!reg.autoRetryEnabled) return;
+
+    let cancelled = false;
+    let attempt = 0;
+    const delays = [6000, 15000, 30000];
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleNext = () => {
+      if (cancelled || attempt >= delays.length) return;
+      const delay = delays[attempt];
+      attempt += 1;
+      timer = setTimeout(async () => {
+        if (cancelled) return;
+        const activeProf = getActiveConnectionProfile();
+        const probe = await probeDatabaseConnection();
+        appendDatabaseConnectionLog({
+          event: 'retry',
+          connectionId: activeProf.id,
+          connectionName: activeProf.name,
+          status: probe.ok ? 'success' : 'warning',
+          resultStatus: probe.ok ? 'connected' : 'offline',
+          message: probe.ok
+            ? `نجحت إعادة المحاولة التلقائية (#${attempt}) وتم استرجاع الاتصال.`
+            : `فشلت إعادة المحاولة التلقائية (#${attempt}): ${probe.message || 'غير متصل'}`,
+        });
+        if (probe.ok) {
+          setDbReconnectNonce((n) => n + 1);
+        } else {
+          scheduleNext();
+        }
+      }, delay);
+    };
+
+    scheduleNext();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [dbConnectionStatus, dbReconnectNonce]);
+
+  // 2. Auth State Listener + Profile Sync (re-attaches if active Firebase App switches)
+  useEffect(() => {
+    const activeAuth = getActiveAuth();
+    const unsubAuth = onAuthStateChanged(activeAuth, async (user) => {
       setFirebaseUser(user);
       if (user) {
         const resolvedRole = await getUserAdminRole(user);
@@ -590,16 +662,17 @@ export default function App() {
     });
     return () => unsubAuth();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [dbReconnectNonce]);
 
   // 3. Authenticated Listeners (/requests, plus /users & /admins for Owner Admins only)
   useEffect(() => {
     if (authLoading || !firebaseUser) return;
 
+    const activeDb = getActiveDatabase();
     const reqPath = 'requests';
     const reqQuery = isOwnerAdmin
-      ? query(collection(db, reqPath), orderBy('createdAt', 'desc'))
-      : query(collection(db, reqPath), where('userId', '==', firebaseUser.uid));
+      ? query(collection(activeDb, reqPath), orderBy('createdAt', 'desc'))
+      : query(collection(activeDb, reqPath), where('userId', '==', firebaseUser.uid));
 
     const unsubRequests = onSnapshot(
       reqQuery,
@@ -647,7 +720,7 @@ export default function App() {
 
     if (isOwnerAdmin) {
       unsubUsers = onSnapshot(
-        collection(db, 'users'),
+        collection(activeDb, 'users'),
         (snapshot) => {
           setUsersList(snapshot.docs.map((d) => d.data() as UserProfileRecord));
         },
@@ -661,7 +734,7 @@ export default function App() {
       );
 
       unsubAdmins = onSnapshot(
-        collection(db, 'admins'),
+        collection(activeDb, 'admins'),
         (snapshot) => {
           setAdminsList(snapshot.docs.map((d) => d.data() as AdminRoleRecord));
         },
@@ -680,7 +753,7 @@ export default function App() {
       unsubUsers();
       unsubAdmins();
     };
-  }, [authLoading, firebaseUser, isOwnerAdmin]);
+  }, [authLoading, firebaseUser, isOwnerAdmin, dbReconnectNonce]);
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);

@@ -36,7 +36,10 @@ export interface ContentAuditReport {
 export function normalizeTitleForDuplicateCheck(title: string): string {
   return (title || '')
     .toLowerCase()
-    .replace(/[\u064B-\u065F\u0670]/g, '')
+    .replace(/[\u0640\u064B-\u065F\u0670]/g, '')
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -253,31 +256,20 @@ export function runCatalogContentAudit(media: MediaItem[]): ContentAuditReport {
     countsBySeverity[finding.severity] += 1;
   };
 
-  // 1. Duplicate title + kind + year detection
-  const duplicateMap = new Map<string, MediaItem[]>();
-  for (const item of media) {
-    const norm = normalizeTitleForDuplicateCheck(item.title || item.englishTitle);
-    if (!norm) continue;
-    const key = `${item.kind}::${norm}::${item.year || 'na'}`;
-    const bucket = duplicateMap.get(key) || [];
-    bucket.push(item);
-    duplicateMap.set(key, bucket);
-  }
-
-  for (const [, group] of duplicateMap.entries()) {
-    if (group.length > 1) {
-      for (const item of group) {
-        addFinding({
-          mediaId: item.id,
-          title: item.title,
-          englishTitle: item.englishTitle,
-          kind: item.kind,
-          category: 'duplicate',
-          severity: 'warning',
-          summary: `تكرار محتمل (${group.length} نسخ)`,
-          details: `يوجد ${group.length} أعمال بنفس الاسم والنوع والسنة (${item.year || 'غير محدد'}).`,
-        });
-      }
+  // 1. Duplicate title / English title + kind + year detection
+  const duplicateGroups = findDuplicateGroups(media);
+  for (const group of duplicateGroups) {
+    for (const item of group.items) {
+      addFinding({
+        mediaId: item.id,
+        title: item.title,
+        englishTitle: item.englishTitle,
+        kind: item.kind,
+        category: 'duplicate',
+        severity: 'warning',
+        summary: `تكرار محتمل (${group.items.length} نسخ)`,
+        details: `يوجد ${group.items.length} نسخ متطابقة لنفس العمل (${group.year || 'غير محدد'}) — النسخة الأفضل هي المحفوظة تلقائياً.`,
+      });
     }
   }
 

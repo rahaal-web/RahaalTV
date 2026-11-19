@@ -26,11 +26,11 @@ function isBlockedHost(hostname) {
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, HEAD, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, DELETE, HEAD, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   'Access-Control-Expose-Headers':
     'X-Final-Url, X-Upstream-Status, X-Upstream-X-Frame-Options, X-Upstream-CSP, X-Proxy-Worker',
-  'X-Proxy-Worker': 'rahaltv-v3',
+  'X-Proxy-Worker': 'rahaltv-v4',
 };
 
 function sanitizeLogString(val, maxLen = 400) {
@@ -106,6 +106,161 @@ async function handleClientErrorLog(request) {
   }
 }
 
+async function verifyWorkerAdminRequest(request, env) {
+  const authHeader = request.headers.get('Authorization') || '';
+  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  if (!match || !match[1]) {
+    return { ok: false, status: 401, error: 'Missing Authorization Bearer Token' };
+  }
+  const webApiKey = env && env.FIREBASE_WEB_API_KEY ? String(env.FIREBASE_WEB_API_KEY).trim() : '';
+  if (!webApiKey) {
+    return {
+      ok: false,
+      status: 503,
+      error: 'FIREBASE_WEB_API_KEY secret is not configured on Cloudflare Worker.',
+    };
+  }
+  const lookup = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(webApiKey)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken: match[1].trim() }),
+    }
+  );
+  if (!lookup.ok) {
+    return { ok: false, status: 401, error: 'Invalid Firebase ID Token' };
+  }
+  const data = await lookup.json();
+  const user = data && data.users && data.users[0];
+  const email = String((user && user.email) || '').toLowerCase();
+  const allowedOwners = String(
+    (env && env.ADMIN_OWNER_EMAILS) ||
+      'rahalahmed348@gmail.com,mfeshmeny2@gmail.com,ccicada6@gmail.com,bebraheem439@gmail.com'
+  )
+    .toLowerCase()
+    .split(',')
+    .map((e) => e.trim())
+    .filter(Boolean);
+
+  if (!user || !user.emailVerified || !allowedOwners.includes(email)) {
+    return { ok: false, status: 403, error: 'Owner admin access required' };
+  }
+  return { ok: true, uid: user.localId, email };
+}
+
+async function handleWorkerDbApi(request, env, pathname) {
+  const jsonRes = (body, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: {
+        ...CORS_HEADERS,
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+      },
+    });
+
+  const authCheck = await verifyWorkerAdminRequest(request, env);
+  if (!authCheck.ok) {
+    return jsonRes({ ok: false, error: authCheck.error }, authCheck.status);
+  }
+
+  const kv = env && env.DB_CONFIG_KV ? env.DB_CONFIG_KV : null;
+
+  if (pathname === '/api/db/secrets/status' && request.method === 'GET') {
+    if (!kv) {
+      return jsonRes({
+        ok: true,
+        source: 'cloudflare_kv',
+        statuses: {},
+        note: 'أضف ربط KV باسم DB_CONFIG_KV في Cloudflare Worker لتفعيل حفظ الأسرار السحابية.',
+      });
+    }
+    const raw = await kv.get('db_secret_statuses');
+    const statuses = raw ? JSON.parse(raw) : {};
+    return jsonRes({ ok: true, source: 'cloudflare_kv', statuses });
+  }
+
+  if (pathname === '/api/db/secrets' && request.method === 'POST') {
+    if (!kv) {
+      return jsonRes(
+        { ok: false, error: 'KV namespace DB_CONFIG_KV is not bound to this Worker.' },
+        501
+      );
+    }
+    const body = await request.json().catch(() => null);
+    if (!body || !body.connectionId) {
+      return jsonRes({ ok: false, error: 'connectionId is required' }, 400);
+    }
+    const cleanId = String(body.connectionId).replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 96);
+    const updatedAt = new Date().toISOString();
+    const existingRaw = await kv.get('db_secret_statuses');
+    const statuses = existingRaw ? JSON.parse(existingRaw) : {};
+
+    let saEmail = statuses[cleanId] && statuses[cleanId].serviceAccountClientEmail;
+    if (body.serviceAccountJson) {
+      try {
+        const sa = JSON.parse(String(body.serviceAccountJson));
+        saEmail = sa.client_email || saEmail;
+      } catch {
+        return jsonRes({ ok: false, error: 'Invalid Service Account JSON' }, 400);
+      }
+    }
+
+    // Store raw secret blob in KV separate key (never returned via status API)
+    await kv.put(
+      `db_secret_blob:${cleanId}`,
+      JSON.stringify({
+        serviceAccountJson: body.serviceAccountJson || '',
+        privateKey: body.privateKey || '',
+        apiSecret: body.apiSecret || '',
+        cloudflareToken: body.cloudflareToken || '',
+        updatedAt,
+        updatedBy: authCheck.email,
+      })
+    );
+
+    const status = {
+      connectionId: cleanId,
+      hasServiceAccount: Boolean(
+        body.serviceAccountJson || (statuses[cleanId] && statuses[cleanId].hasServiceAccount)
+      ),
+      serviceAccountClientEmail: saEmail,
+      hasPrivateKey: Boolean(
+        body.privateKey || (statuses[cleanId] && statuses[cleanId].hasPrivateKey)
+      ),
+      hasApiSecret: Boolean(
+        body.apiSecret || (statuses[cleanId] && statuses[cleanId].hasApiSecret)
+      ),
+      hasCloudflareToken: Boolean(
+        body.cloudflareToken || (statuses[cleanId] && statuses[cleanId].hasCloudflareToken)
+      ),
+      updatedAt,
+      updatedBy: authCheck.email,
+      vaultSource: 'cloudflare_kv',
+    };
+    statuses[cleanId] = status;
+    await kv.put('db_secret_statuses', JSON.stringify(statuses));
+    return jsonRes({ ok: true, status });
+  }
+
+  if (pathname.startsWith('/api/db/secrets/') && request.method === 'DELETE') {
+    const cleanId = pathname.replace('/api/db/secrets/', '').replace(/[^a-zA-Z0-9_\-]/g, '-');
+    if (kv && cleanId) {
+      await kv.delete(`db_secret_blob:${cleanId}`);
+      const existingRaw = await kv.get('db_secret_statuses');
+      if (existingRaw) {
+        const statuses = JSON.parse(existingRaw);
+        delete statuses[cleanId];
+        await kv.put('db_secret_statuses', JSON.stringify(statuses));
+      }
+    }
+    return jsonRes({ ok: true, deleted: true });
+  }
+
+  return jsonRes({ ok: false, error: 'Unsupported DB API endpoint' }, 404);
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') {
@@ -116,6 +271,10 @@ export default {
 
     if (reqUrl.pathname === '/api/client-logs' && request.method === 'POST') {
       return handleClientErrorLog(request);
+    }
+
+    if (reqUrl.pathname.startsWith('/api/db/')) {
+      return handleWorkerDbApi(request, env, reqUrl.pathname);
     }
 
     let target = (reqUrl.searchParams.get('url') || '').trim();

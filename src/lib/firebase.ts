@@ -1,5 +1,6 @@
 import { deleteApp, initializeApp } from 'firebase/app';
 import {
+  Auth,
   createUserWithEmailAndPassword,
   getAuth,
   GoogleAuthProvider,
@@ -14,15 +15,20 @@ import {
   collection,
   deleteDoc,
   doc,
+  Firestore,
   getDoc,
   getDocFromServer,
-  getFirestore,
   serverTimestamp,
   setDoc,
   updateDoc,
   writeBatch,
 } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
+import {
+  getActiveAuthInstance,
+  getActiveDb,
+  getActiveFirebaseConfig,
+  subscribeActiveDatabaseChange,
+} from './dbConnectionManager';
 import fallbackBackdropImg from '../assets/images/hero_scifi_backdrop_1794813333496.jpg';
 import fallbackPosterImg from '../assets/images/poster_running_man_1794813333683.jpg';
 import {
@@ -54,11 +60,27 @@ import {
 } from './popupShield';
 import { evaluateImageQuality } from './mediaImages';
 
-const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
+export let db: Firestore = getActiveDb();
+export let auth: Auth = getActiveAuthInstance();
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
+
+export function getActiveDatabase(): Firestore {
+  db = getActiveDb();
+  return db;
+}
+
+export function getActiveAuth(): Auth {
+  auth = getActiveAuthInstance();
+  return auth;
+}
+
+export { getActiveFirebaseConfig };
+
+subscribeActiveDatabaseChange(() => {
+  db = getActiveDb();
+  auth = getActiveAuthInstance();
+});
 
 export const PRIMARY_ADMIN_EMAILS = [
   'rahalahmed348@gmail.com',
@@ -98,16 +120,17 @@ export function handleFirestoreError(
   operationType: OperationType,
   path: string | null
 ): never {
+  const currentAuth = getActiveAuth();
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
+      userId: currentAuth.currentUser?.uid,
+      email: currentAuth.currentUser?.email,
+      emailVerified: currentAuth.currentUser?.emailVerified,
+      isAnonymous: currentAuth.currentUser?.isAnonymous,
+      tenantId: currentAuth.currentUser?.tenantId,
       providerInfo:
-        auth.currentUser?.providerData?.map((provider) => ({
+        currentAuth.currentUser?.providerData?.map((provider) => ({
           providerId: provider.providerId,
           email: provider.email,
         })) || [],
@@ -123,7 +146,7 @@ export function handleFirestoreError(
     context: {
       operationType,
       path: path || '',
-      hasUser: Boolean(auth.currentUser?.uid),
+      hasUser: Boolean(currentAuth.currentUser?.uid),
     },
   });
   throw new Error(JSON.stringify(errInfo));
@@ -200,7 +223,8 @@ export function formatFirestoreWriteError(error: unknown, fallbackMessage: strin
     return `${fallbackMessage}: تم تجاوز الحصة اليومية المجانية لقاعدة Firestore (Quota exceeded) — تتجدد الحصة تلقائياً في اليوم التالي.`;
   }
   if (combined.includes('permission-denied') || combined.includes('insufficient permissions')) {
-    return `${fallbackMessage}: مرفوض من قواعد الأمان (permission-denied) — تأكد من تحديث firestore.rules في قاعدة ai-studio-rahaaltvv1-fc865f77-1460-4d81-9b51-3211632b0c99 ومن وجود صلاحية المسؤول/المشرف لحسابك.`;
+    const activeDbId = getActiveFirebaseConfig().firestoreDatabaseId;
+    return `${fallbackMessage}: مرفوض من قواعد الأمان (permission-denied) — تأكد من تحديث firestore.rules في قاعدة ${activeDbId} ومن وجود صلاحية المسؤول/المشرف لحسابك.`;
   }
   if (combined.includes('resource-exhausted') || combined.includes('maximum allowed size')) {
     return `${fallbackMessage}: حجم المستند يتجاوز الحد المسموح في Firestore (1MB) — قلل عدد الحلقات أو السيرفرات في العنصر الواحد.`;
@@ -265,7 +289,7 @@ export async function testConnection(): Promise<{
   message?: string;
 }> {
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
+    await getDocFromServer(doc(getActiveDatabase(), 'test', 'connection'));
     return { ok: true, status: 'connected' };
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
@@ -283,7 +307,7 @@ export async function probeDatabaseConnection(): Promise<{
   message?: string;
 }> {
   try {
-    await getDocFromServer(doc(db, 'settings', 'general'));
+    await getDocFromServer(doc(getActiveDatabase(), 'settings', 'general'));
     return { ok: true, status: 'connected' };
   } catch (error) {
     const classified = classifyFirestoreConnectionError(error);
@@ -333,7 +357,7 @@ export function getFirebaseAuthErrorMessage(err: unknown): string {
 
 export async function signInWithEmailPassword(identifier: string, password: string) {
   const email = normalizeAuthIdentifier(identifier);
-  return signInWithEmailAndPassword(auth, email, password);
+  return signInWithEmailAndPassword(getActiveAuth(), email, password);
 }
 
 export async function registerMemberWithEmailPassword(
@@ -342,7 +366,7 @@ export async function registerMemberWithEmailPassword(
   displayName: string
 ) {
   const email = normalizeAuthIdentifier(identifier);
-  const cred = await createUserWithEmailAndPassword(auth, email, password);
+  const cred = await createUserWithEmailAndPassword(getActiveAuth(), email, password);
   if (displayName.trim()) {
     await updateProfile(cred.user, { displayName: displayName.trim().slice(0, 120) });
   }
@@ -354,11 +378,11 @@ export async function resendVerificationEmail(user: User) {
 }
 
 export async function signInWithGoogle() {
-  return signInWithPopup(auth, googleProvider);
+  return signInWithPopup(getActiveAuth(), googleProvider);
 }
 
 export async function signOutFirebase() {
-  return signOut(auth);
+  return signOut(getActiveAuth());
 }
 
 export async function getUserAdminRole(user: User | null): Promise<AdminPrivilegeRole | null> {
@@ -368,7 +392,7 @@ export async function getUserAdminRole(user: User | null): Promise<AdminPrivileg
     return 'owner';
   }
   try {
-    const adminDoc = await getDoc(doc(db, 'admins', user.uid));
+    const adminDoc = await getDoc(doc(getActiveDatabase(), 'admins', user.uid));
     if (!adminDoc.exists()) return null;
     const data = adminDoc.data() as { role?: unknown };
     return data?.role === 'moderator' ? 'moderator' : 'owner';
@@ -631,20 +655,21 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
 }
 
 export async function seedCatalogToFirestore(items: MediaItem[], uid: string) {
+  const activeDb = getActiveDatabase();
   const path = 'media';
   const prepared = items.map((item) => sanitizeMediaPayload(item, uid, true));
   try {
-    const batch = writeBatch(db);
+    const batch = writeBatch(activeDb);
     for (const { cleanId, payload } of prepared) {
-      batch.set(doc(db, 'media', cleanId), payload);
+      batch.set(doc(activeDb, 'media', cleanId), payload);
     }
     await batch.commit();
   } catch (error) {
     if (isPermissionDeniedError(error)) {
       try {
-        const legacyBatch = writeBatch(db);
+        const legacyBatch = writeBatch(activeDb);
         for (const { cleanId, payload } of prepared) {
-          legacyBatch.set(doc(db, 'media', cleanId), stripExtendedImageFields(payload));
+          legacyBatch.set(doc(activeDb, 'media', cleanId), stripExtendedImageFields(payload));
         }
         await legacyBatch.commit();
         return;
@@ -657,6 +682,7 @@ export async function seedCatalogToFirestore(items: MediaItem[], uid: string) {
 }
 
 export async function bulkSaveMediaToFirestore(items: MediaItem[], uid: string): Promise<number> {
+  const activeDb = getActiveDatabase();
   const path = 'media';
   const CHUNK_SIZE = 35;
   let savedCount = 0;
@@ -665,16 +691,16 @@ export async function bulkSaveMediaToFirestore(items: MediaItem[], uid: string):
       const chunk = items.slice(i, i + CHUNK_SIZE);
       const prepared = chunk.map((item) => sanitizeMediaPayload(item, uid, true));
       try {
-        const batch = writeBatch(db);
+        const batch = writeBatch(activeDb);
         for (const { cleanId, payload } of prepared) {
-          batch.set(doc(db, 'media', cleanId), payload);
+          batch.set(doc(activeDb, 'media', cleanId), payload);
         }
         await batch.commit();
       } catch (chunkErr) {
         if (isPermissionDeniedError(chunkErr)) {
-          const legacyBatch = writeBatch(db);
+          const legacyBatch = writeBatch(activeDb);
           for (const { cleanId, payload } of prepared) {
-            legacyBatch.set(doc(db, 'media', cleanId), stripExtendedImageFields(payload));
+            legacyBatch.set(doc(activeDb, 'media', cleanId), stripExtendedImageFields(payload));
           }
           await legacyBatch.commit();
         } else {
@@ -690,6 +716,7 @@ export async function bulkSaveMediaToFirestore(items: MediaItem[], uid: string):
 }
 
 export async function bulkUpdateMediaInFirestore(items: MediaItem[], uid: string): Promise<number> {
+  const activeDb = getActiveDatabase();
   const path = 'media';
   const CHUNK_SIZE = 35;
   let updatedCount = 0;
@@ -698,16 +725,16 @@ export async function bulkUpdateMediaInFirestore(items: MediaItem[], uid: string
       const chunk = items.slice(i, i + CHUNK_SIZE);
       const prepared = chunk.map((item) => sanitizeMediaPayload(item, uid, false));
       try {
-        const batch = writeBatch(db);
+        const batch = writeBatch(activeDb);
         for (const { cleanId, payload } of prepared) {
-          batch.update(doc(db, 'media', cleanId), payload);
+          batch.update(doc(activeDb, 'media', cleanId), payload);
         }
         await batch.commit();
       } catch (chunkErr) {
         if (isPermissionDeniedError(chunkErr)) {
-          const legacyBatch = writeBatch(db);
+          const legacyBatch = writeBatch(activeDb);
           for (const { cleanId, payload } of prepared) {
-            legacyBatch.update(doc(db, 'media', cleanId), stripExtendedImageFields(payload));
+            legacyBatch.update(doc(activeDb, 'media', cleanId), stripExtendedImageFields(payload));
           }
           await legacyBatch.commit();
         } else {
@@ -727,9 +754,10 @@ export async function saveMediaToFirestore(
   uid: string,
   isCreate: boolean
 ): Promise<{ usedLegacySchemaFallback: boolean }> {
+  const activeDb = getActiveDatabase();
   const { cleanId, payload } = sanitizeMediaPayload(item, uid, isCreate);
   const path = `media/${cleanId}`;
-  const docRef = doc(db, 'media', cleanId);
+  const docRef = doc(activeDb, 'media', cleanId);
 
   const writeDoc = async (docPayload: Record<string, unknown>, createMode: boolean) => {
     if (createMode) {
@@ -770,15 +798,17 @@ export async function saveMediaToFirestore(
 }
 
 export async function deleteMediaFromFirestore(mediaId: string) {
+  const activeDb = getActiveDatabase();
   const path = `media/${mediaId}`;
   try {
-    await deleteDoc(doc(db, 'media', mediaId));
+    await deleteDoc(doc(activeDb, 'media', mediaId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 
 export async function bulkDeleteMediaFromFirestore(mediaIds: string[]): Promise<number> {
+  const activeDb = getActiveDatabase();
   const path = 'media';
   const CHUNK_SIZE = 400;
   let deletedCount = 0;
@@ -788,9 +818,9 @@ export async function bulkDeleteMediaFromFirestore(mediaIds: string[]): Promise<
       .filter((id) => /^[a-zA-Z0-9_\-]+$/.test(id));
     for (let i = 0; i < validIds.length; i += CHUNK_SIZE) {
       const chunk = validIds.slice(i, i + CHUNK_SIZE);
-      const batch = writeBatch(db);
+      const batch = writeBatch(activeDb);
       for (const id of chunk) {
-        batch.delete(doc(db, 'media', id));
+        batch.delete(doc(activeDb, 'media', id));
       }
       await batch.commit();
       deletedCount += chunk.length;
@@ -805,10 +835,11 @@ export async function submitVisitorRequestToFirestore(
   user: User,
   req: { title: string; type: VisitorRequest['type']; notes: string }
 ) {
+  const activeDb = getActiveDatabase();
   const id = `req_${Date.now()}`;
   const path = `requests/${id}`;
   try {
-    await setDoc(doc(db, 'requests', id), {
+    await setDoc(doc(activeDb, 'requests', id), {
       id,
       userId: user.uid,
       requesterName: (user.displayName || 'مستخدم RahaL TV').slice(0, 120),
@@ -830,9 +861,10 @@ export async function updateVisitorRequestInFirestore(
   status: RequestStatus,
   adminNote: string
 ) {
+  const activeDb = getActiveDatabase();
   const path = `requests/${requestId}`;
   try {
-    await updateDoc(doc(db, 'requests', requestId), {
+    await updateDoc(doc(activeDb, 'requests', requestId), {
       status,
       adminNote: adminNote.trim().slice(0, 500),
       updatedAt: serverTimestamp(),
@@ -843,9 +875,10 @@ export async function updateVisitorRequestInFirestore(
 }
 
 export async function deleteVisitorRequestFromFirestore(requestId: string) {
+  const activeDb = getActiveDatabase();
   const path = `requests/${requestId}`;
   try {
-    await deleteDoc(doc(db, 'requests', requestId));
+    await deleteDoc(doc(activeDb, 'requests', requestId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
@@ -856,15 +889,16 @@ export async function syncUserProfileToFirestore(
   localWatchlist: string[],
   isAdminUser: boolean
 ): Promise<string[]> {
+  const activeDb = getActiveDatabase();
   const userPath = `users/${user.uid}`;
   const privatePath = `users/${user.uid}/private/info`;
   try {
-    const userRef = doc(db, 'users', user.uid);
+    const userRef = doc(activeDb, 'users', user.uid);
     const snap = await getDoc(userRef);
 
     if (user.email) {
       await setDoc(
-        doc(db, 'users', user.uid, 'private', 'info'),
+        doc(activeDb, 'users', user.uid, 'private', 'info'),
         {
           email: user.email.slice(0, 200),
           updatedAt: serverTimestamp(),
@@ -902,9 +936,10 @@ export async function syncUserProfileToFirestore(
 }
 
 export async function saveWatchlistToFirestore(uid: string, watchlistIds: string[]) {
+  const activeDb = getActiveDatabase();
   const path = `users/${uid}`;
   try {
-    await updateDoc(doc(db, 'users', uid), {
+    await updateDoc(doc(activeDb, 'users', uid), {
       watchlistIds: watchlistIds.slice(0, 100),
       updatedAt: serverTimestamp(),
     });
@@ -917,6 +952,7 @@ export async function saveSiteSettingsToFirestore(
   settings: SiteSettings,
   uid: string
 ): Promise<{ syncedHomeToCloud: boolean }> {
+  const activeDb = getActiveDatabase();
   const path = 'settings/general';
   const normalizedTheme = saveStoredPlayerTheme(settings.playerTheme || DEFAULT_PLAYER_THEME);
   const normalizedHome = saveStoredHomeConfig(settings.homeConfig || DEFAULT_HOME_CONFIG);
@@ -940,7 +976,7 @@ export async function saveSiteSettingsToFirestore(
   };
 
   try {
-    await setDoc(doc(db, 'settings', 'general'), {
+    await setDoc(doc(activeDb, 'settings', 'general'), {
       ...corePayload,
       homeConfig: normalizedHome,
       typography: normalizedTypography,
@@ -954,7 +990,7 @@ export async function saveSiteSettingsToFirestore(
         : '';
     if (code === 'permission-denied') {
       try {
-        await setDoc(doc(db, 'settings', 'general'), corePayload);
+        await setDoc(doc(activeDb, 'settings', 'general'), corePayload);
         return { syncedHomeToCloud: false };
       } catch (innerErr) {
         handleFirestoreError(innerErr, OperationType.WRITE, path);
@@ -968,10 +1004,11 @@ export async function saveCustomFontToFirestore(
   font: CustomFontRecord,
   uid: string
 ): Promise<void> {
+  const activeDb = getActiveDatabase();
   const slot: CustomFontSlot = font.id === 'english' ? 'english' : 'arabic';
   const path = `fonts/${slot}`;
   try {
-    await setDoc(doc(db, 'fonts', slot), {
+    await setDoc(doc(activeDb, 'fonts', slot), {
       id: slot,
       family: String(font.family || `RahaLCustom_${slot}`).trim().slice(0, 80),
       fileName: String(font.fileName || 'custom-font').trim().slice(0, 160),
@@ -986,10 +1023,11 @@ export async function saveCustomFontToFirestore(
 }
 
 export async function deleteCustomFontFromFirestore(slot: CustomFontSlot): Promise<void> {
+  const activeDb = getActiveDatabase();
   const cleanSlot: CustomFontSlot = slot === 'english' ? 'english' : 'arabic';
   const path = `fonts/${cleanSlot}`;
   try {
-    await deleteDoc(doc(db, 'fonts', cleanSlot));
+    await deleteDoc(doc(activeDb, 'fonts', cleanSlot));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
@@ -1001,10 +1039,11 @@ export async function grantAdminRoleInFirestore(
   addedByUid: string,
   role: AdminPrivilegeRole = 'moderator'
 ) {
+  const activeDb = getActiveDatabase();
   const cleanUid = targetUid.trim().replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 128);
   const path = `admins/${cleanUid}`;
   try {
-    await setDoc(doc(db, 'admins', cleanUid), {
+    await setDoc(doc(activeDb, 'admins', cleanUid), {
       uid: cleanUid,
       displayName: displayName.trim().slice(0, 120) || (role === 'owner' ? 'مسؤول RahaL TV' : 'مشرف RahaL TV'),
       addedBy: addedByUid,
@@ -1028,7 +1067,18 @@ export async function createAdminAccountInFirebase(
     displayName.trim().slice(0, 120) ||
     email.split('@')[0] ||
     (role === 'owner' ? 'مسؤول RahaL TV' : 'مشرف RahaL TV');
-  const secondaryApp = initializeApp(firebaseConfig, `admin-creator-${Date.now()}`);
+  const activeCfg = getActiveFirebaseConfig();
+  const secondaryApp = initializeApp(
+    {
+      apiKey: activeCfg.apiKey,
+      authDomain: activeCfg.authDomain,
+      projectId: activeCfg.projectId,
+      appId: activeCfg.appId,
+      ...(activeCfg.storageBucket ? { storageBucket: activeCfg.storageBucket } : {}),
+      ...(activeCfg.messagingSenderId ? { messagingSenderId: activeCfg.messagingSenderId } : {}),
+    },
+    `admin-creator-${Date.now()}`
+  );
   const secondaryAuth = getAuth(secondaryApp);
   try {
     const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
@@ -1045,19 +1095,21 @@ export async function updateAdminRoleInFirestore(
   targetUid: string,
   role: AdminPrivilegeRole
 ) {
+  const activeDb = getActiveDatabase();
   const cleanUid = targetUid.trim().replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 128);
   const path = `admins/${cleanUid}`;
   try {
-    await updateDoc(doc(db, 'admins', cleanUid), { role });
+    await updateDoc(doc(activeDb, 'admins', cleanUid), { role });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 
 export async function revokeAdminRoleFromFirestore(targetUid: string) {
+  const activeDb = getActiveDatabase();
   const path = `admins/${targetUid}`;
   try {
-    await deleteDoc(doc(db, 'admins', targetUid));
+    await deleteDoc(doc(activeDb, 'admins', targetUid));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
@@ -1078,6 +1130,7 @@ export async function submitMediaRatingToFirestore(
   uid: string,
   stars: number
 ): Promise<number> {
+  const activeDb = getActiveDatabase();
   const cleanMediaId = sanitizeRatingMediaId(mediaId);
   const cleanUid = String(uid || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 128);
   const ratingId = `${cleanMediaId}__${cleanUid}`;
@@ -1085,7 +1138,7 @@ export async function submitMediaRatingToFirestore(
   const safeStars = Math.min(5, Math.max(1, Math.round(Number(stars) || 5)));
 
   try {
-    const ratingRef = doc(db, 'ratings', ratingId);
+    const ratingRef = doc(activeDb, 'ratings', ratingId);
     const snap = await getDoc(ratingRef);
     if (snap.exists()) {
       await updateDoc(ratingRef, {
@@ -1109,13 +1162,14 @@ export async function submitMediaRatingToFirestore(
 }
 
 export async function deleteMediaRatingFromFirestore(mediaId: string, uid: string) {
+  const activeDb = getActiveDatabase();
   const cleanMediaId = sanitizeRatingMediaId(mediaId);
   const cleanUid = String(uid || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 128);
   const ratingId = `${cleanMediaId}__${cleanUid}`;
   const path = `ratings/${ratingId}`;
 
   try {
-    await deleteDoc(doc(db, 'ratings', ratingId));
+    await deleteDoc(doc(activeDb, 'ratings', ratingId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }

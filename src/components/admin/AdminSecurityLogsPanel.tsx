@@ -8,7 +8,7 @@ import {
   ShieldCheck,
   Trash2,
 } from 'lucide-react';
-import firebaseConfig from '../../../firebase-applet-config.json';
+import { getActiveFirebaseConfig } from '../../lib/firebase';
 import firestoreRulesSource from '../../../firestore.rules?raw';
 import {
   AdminActivityLogEntry,
@@ -49,6 +49,8 @@ export function AdminSecurityLogsPanel({ mode, onNotify }: AdminSecurityLogsPane
     return () => unsub();
   }, [mode]);
 
+  const activeFirebaseConfig = getActiveFirebaseConfig();
+
   if (mode === 'security_rules') {
     return (
       <div className="space-y-6">
@@ -66,7 +68,7 @@ export function AdminSecurityLogsPanel({ mode, onNotify }: AdminSecurityLogsPane
                 </span>
                 ) وتمنع الكتابة غير المصرح بها على قاعدة{' '}
                 <span className="font-latin text-[#f9c400]">
-                  {firebaseConfig.firestoreDatabaseId}
+                  {activeFirebaseConfig.firestoreDatabaseId}
                 </span>
                 .
               </p>
@@ -89,7 +91,7 @@ export function AdminSecurityLogsPanel({ mode, onNotify }: AdminSecurityLogsPane
                 <span>نسخ قواعد firestore.rules</span>
               </button>
               <a
-                href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/${firebaseConfig.firestoreDatabaseId}/rules`}
+                href={`https://console.firebase.google.com/project/${activeFirebaseConfig.projectId}/firestore/databases/${activeFirebaseConfig.firestoreDatabaseId}/rules`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 px-4 py-2.5 text-xs font-extrabold text-white"
@@ -104,7 +106,7 @@ export function AdminSecurityLogsPanel({ mode, onNotify }: AdminSecurityLogsPane
             <li>اضغط على زر &quot;نسخ قواعد firestore.rules&quot; أعلاه.</li>
             <li>
               افتح محرر Rules في Firebase Console وتأكد من اختيار القاعدة{' '}
-              <span className="font-latin text-[#f9c400]">{firebaseConfig.firestoreDatabaseId}</span>.
+              <span className="font-latin text-[#f9c400]">{activeFirebaseConfig.firestoreDatabaseId}</span>.
             </li>
             <li>استبدل القواعد بالكامل ثم اضغط Publish لتفعيل التغييرات فوراً.</li>
           </ol>

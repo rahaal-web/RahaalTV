@@ -14,8 +14,7 @@ import {
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 import { collection, getDocs, limit, query } from 'firebase/firestore';
-import firebaseConfig from '../../../firebase-applet-config.json';
-import { db } from '../../lib/firebase';
+import { getActiveDatabase, getActiveFirebaseConfig } from '../../lib/firebase';
 import { detectClientCapabilities } from '../../lib/browserCompat';
 import {
   resolveApiEndpoint,
@@ -71,15 +70,16 @@ export function AdminSystemHealthPanel({
     setRunningAll(true);
 
     // 1. Live Firestore Read Probe
+    const activeCfg = getActiveFirebaseConfig();
     setFirestoreProbe({ status: 'running', detail: 'جاري اختبار قراءة Firestore...' });
     const fsStart = performance.now();
     try {
-      await getDocs(query(collection(db, 'media'), limit(1)));
+      await getDocs(query(collection(getActiveDatabase(), 'media'), limit(1)));
       const ms = Math.round(performance.now() - fsStart);
       setFirestoreProbe({
         status: 'ok',
         latencyMs: ms,
-        detail: `اتصال ناجح بقاعدة البيانات (${firebaseConfig.firestoreDatabaseId}) خلال ${ms}ms.`,
+        detail: `اتصال ناجح بقاعدة البيانات (${activeCfg.firestoreDatabaseId}) خلال ${ms}ms.`,
       });
     } catch (err) {
       setFirestoreProbe({
@@ -223,7 +223,7 @@ export function AdminSystemHealthPanel({
           </div>
           <p className="text-xs text-[#b7c9ef] leading-relaxed">{firestoreProbe.detail}</p>
           <p className="font-latin text-[10px] text-white/60">
-            Project: {firebaseConfig.projectId} • DB: {firebaseConfig.firestoreDatabaseId}
+            Project: {getActiveFirebaseConfig().projectId} • DB: {getActiveFirebaseConfig().firestoreDatabaseId}
           </p>
         </div>
 
@@ -315,7 +315,7 @@ export function AdminSystemHealthPanel({
       <div className="rounded-2xl bg-[#0c1821] border border-white/[0.08] p-4 flex flex-wrap items-center justify-between gap-3 text-xs text-[#b7c9ef]">
         <span>الحد الأدنى الرسمي المدعوم: Chrome / Android WebView 90+ • Firefox 90+ • Safari 15+ • Edge 90+.</span>
         <a
-          href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore`}
+          href={`https://console.firebase.google.com/project/${getActiveFirebaseConfig().projectId}/firestore`}
           target="_blank"
           rel="noopener noreferrer"
           className="inline-flex items-center gap-1 text-[#f9c400] font-bold hover:underline"

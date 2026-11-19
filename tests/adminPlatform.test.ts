@@ -73,17 +73,19 @@ const SAMPLE_SETTINGS: SiteSettings = {
 };
 
 describe('RahaL TV Admin Navigation & RBAC', () => {
-  it('defines exactly 9 navigation groups and 26 unique admin tabs', () => {
+  it('defines exactly 9 navigation groups and 27 unique admin tabs', () => {
     assert.equal(ADMIN_NAV_GROUPS.length, 9);
     const items = getAllAdminNavItems();
-    assert.equal(items.length, 26);
+    assert.equal(items.length, 27);
     const uniqueIds = new Set(items.map((item) => item.id));
-    assert.equal(uniqueIds.size, 26);
+    assert.equal(uniqueIds.size, 27);
   });
 
   it('enforces ownerOnly restrictions and granular moderator permissions', () => {
     assert.equal(isTabAccessible('overview', true, DEFAULT_MODERATOR_SUB_PERMS), true);
     assert.equal(isTabAccessible('overview', false, DEFAULT_MODERATOR_SUB_PERMS), false);
+    assert.equal(isTabAccessible('database_manager', true, DEFAULT_MODERATOR_SUB_PERMS), true);
+    assert.equal(isTabAccessible('database_manager', false, DEFAULT_MODERATOR_SUB_PERMS), false);
     assert.equal(isTabAccessible('settings', false, DEFAULT_MODERATOR_SUB_PERMS), false);
     assert.equal(isTabAccessible('security_rules', false, DEFAULT_MODERATOR_SUB_PERMS), false);
     assert.equal(isTabAccessible('users', false, DEFAULT_MODERATOR_SUB_PERMS), false);

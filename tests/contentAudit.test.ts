@@ -112,3 +112,36 @@ test('findDuplicateGroups respects ignoreYear option for cross-year title matche
   assert.equal(crossYear.length, 1);
   assert.equal(crossYear[0].matchReason, 'title_cross_year');
 });
+
+test('findDuplicateGroups normalizes Arabic hamza, teh marbuta, alef maqsura, and tatweel', () => {
+  const variantA = makeMedia({
+    id: 'ar-1',
+    title: 'أرضُ السعـادة المفقودة',
+    englishTitle: '',
+    year: '2025',
+    servers: [],
+  });
+  const variantB = makeMedia({
+    id: 'ar-2',
+    title: 'ارض السعاده المفقوده',
+    englishTitle: '',
+    year: '2025',
+    servers: [
+      {
+        id: 's1',
+        name: 'سيرفر',
+        mode: 'url',
+        url: 'https://cdn.example.com/v.mp4',
+        quality: '1080p',
+        speed: 'سريع',
+        tag: 'HD',
+      },
+    ],
+  });
+
+  const groups = findDuplicateGroups([variantA, variantB]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].keepId, 'ar-2');
+  assert.deepEqual(groups[0].extraIds, ['ar-1']);
+});
+

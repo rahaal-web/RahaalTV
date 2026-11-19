@@ -23,7 +23,7 @@ import { findDuplicateGroups } from '../../lib/contentAudit';
 import { getPosterUrl } from '../../lib/mediaImages';
 import { MediaItem, MediaKind } from '../../types/media';
 import type { AdminTab } from './adminNavigation';
-import { TablePagination } from './AdminSharedUi';
+import { ConfirmDialog, TablePagination } from './AdminSharedUi';
 
 export interface CatalogServerStatusEntry {
   status: 'checking' | 'working' | 'warning' | 'broken';
@@ -71,6 +71,7 @@ interface AdminCatalogPanelProps {
   onRequestDeleteMedia: (id: string) => void;
   onNavigateTab: (tab: AdminTab) => void;
   onNotify: (msg: string) => void;
+  onDeleteDuplicateIds?: (ids: string[]) => Promise<void> | void;
   refreshingRatings?: boolean;
   ratingsProgress?: { done: number; total: number } | null;
   default78Count?: number;
@@ -130,6 +131,7 @@ export function AdminCatalogPanel({
   onRequestDeleteMedia,
   onNavigateTab,
   onNotify,
+  onDeleteDuplicateIds,
   refreshingRatings = false,
   ratingsProgress = null,
   default78Count = 0,
@@ -138,6 +140,7 @@ export function AdminCatalogPanel({
   const [page, setPage] = useState(1);
   const [showColumnMenu, setShowColumnMenu] = useState(false);
   const [duplicatesOnly, setDuplicatesOnly] = useState(false);
+  const [confirmDeleteDuplicates, setConfirmDeleteDuplicates] = useState(false);
 
   const duplicateAnalysis = useMemo(() => {
     const groups = findDuplicateGroups(catalog);
@@ -412,20 +415,31 @@ export function AdminCatalogPanel({
             </button>
 
             {duplicateAnalysis.extraIds.length > 0 && (
-              <button
-                type="button"
-                onClick={() => {
-                  onSetSelectedIds(duplicateAnalysis.extraIds);
-                  setDuplicatesOnly(true);
-                  setPage(1);
-                  onNotify(
-                    `تم تحديد ${duplicateAnalysis.extraIds.length} نسخة مكررة مع الإبقاء على النسخة الأفضل لكل عمل`
-                  );
-                }}
-                className="rounded-xl bg-[#f9c400]/15 hover:bg-[#f9c400]/25 border border-[#f9c400]/45 px-3 py-1.5 text-xs font-extrabold text-[#f9c400] cursor-pointer whitespace-nowrap shrink-0"
-              >
-                تحديد النسخ المكررة ({duplicateAnalysis.extraIds.length})
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSetSelectedIds(duplicateAnalysis.extraIds);
+                    setDuplicatesOnly(true);
+                    setPage(1);
+                    onNotify(
+                      `تم تحديد ${duplicateAnalysis.extraIds.length} نسخة مكررة مع الإبقاء على النسخة الأفضل لكل عمل`
+                    );
+                  }}
+                  className="rounded-xl bg-[#f9c400]/15 hover:bg-[#f9c400]/25 border border-[#f9c400]/45 px-3 py-1.5 text-xs font-extrabold text-[#f9c400] cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  تحديد النسخ المكررة ({duplicateAnalysis.extraIds.length})
+                </button>
+                <button
+                  type="button"
+                  disabled={busyAction}
+                  onClick={() => setConfirmDeleteDuplicates(true)}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321]/20 hover:bg-[#D92321] border border-[#D92321]/50 disabled:opacity-40 px-3 py-1.5 text-xs font-extrabold text-[#ff9f9d] hover:text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>حذف المحتوى المكرر ({duplicateAnalysis.extraIds.length})</span>
+                </button>
+              </>
             )}
 
             {catalog.length > effectiveCatalog.length && (
@@ -748,6 +762,25 @@ export function AdminCatalogPanel({
           />
         </>
       )}
+      <ConfirmDialog
+        isOpen={confirmDeleteDuplicates}
+        title="تأكيد حذف المحتوى المكرر"
+        description={`سيتم حذف ${duplicateAnalysis.extraIds.length} نسخة مكررة من أصل ${duplicateAnalysis.groups.length} مجموعة مكررة، مع الإبقاء تلقائياً على النسخة الأفضل والأكثر اكتمالاً لكل عمل. هل تريد المتابعة؟`}
+        confirmLabel={`حذف ${duplicateAnalysis.extraIds.length} نسخة مكررة`}
+        busy={busyAction}
+        onCancel={() => setConfirmDeleteDuplicates(false)}
+        onConfirm={async () => {
+          const idsToDelete = [...duplicateAnalysis.extraIds];
+          setConfirmDeleteDuplicates(false);
+          if (idsToDelete.length === 0) return;
+          if (onDeleteDuplicateIds) {
+            await onDeleteDuplicateIds(idsToDelete);
+          } else {
+            onSetSelectedIds(idsToDelete);
+            onOpenBulkDelete('selected');
+          }
+        }}
+      />
     </div>
   );
 }

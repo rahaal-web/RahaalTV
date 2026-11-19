@@ -31,6 +31,13 @@ import {
 } from './server/scraperAdapterEngine.ts';
 import { normalizeScraperAdapter } from './src/lib/scraperAdapterUtils.ts';
 import type { AdapterContentTypeHint, ScraperAdapter } from './src/types/scraperAdapter.ts';
+import {
+  deleteSecretRecord,
+  getMaskedSecretStatuses,
+  upsertSecretRecord,
+  type VerifiedAdminContext,
+  verifyOwnerAdminMiddleware,
+} from './server/dbSecretVault.ts';
 
 const PORT = 3000;
 
@@ -3983,7 +3990,7 @@ async function startServer() {
   app.use(express.json({ limit: '6mb' }));
   app.use('/api', (_req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     if (_req.method === 'OPTIONS') {
       return res.status(204).end();
@@ -5513,6 +5520,87 @@ async function startServer() {
       return res.status(202).json({ ok: true, logged: true });
     } catch {
       return res.status(400).json({ ok: false });
+    }
+  });
+
+  // Database Connection Manager: Authenticated Server Secret Vault & Endpoint Probe
+  app.get('/api/db/secrets/status', verifyOwnerAdminMiddleware, (_req, res) => {
+    return res.json({
+      ok: true,
+      source: 'node_vault',
+      statuses: getMaskedSecretStatuses(),
+    });
+  });
+
+  app.post('/api/db/secrets', verifyOwnerAdminMiddleware, (req, res) => {
+    try {
+      const adminAuth = (req as express.Request & { adminAuth?: VerifiedAdminContext }).adminAuth;
+      const body = (req.body || {}) as {
+        connectionId?: string;
+        serviceAccountJson?: string;
+        privateKey?: string;
+        apiSecret?: string;
+        cloudflareToken?: string;
+      };
+      if (!body.connectionId) {
+        return res.status(400).json({ ok: false, error: 'معرّف الاتصال connectionId مطلوب.' });
+      }
+      const status = upsertSecretRecord({
+        connectionId: String(body.connectionId),
+        serviceAccountJson: body.serviceAccountJson,
+        privateKey: body.privateKey,
+        apiSecret: body.apiSecret,
+        cloudflareToken: body.cloudflareToken,
+        updatedBy: adminAuth?.email || adminAuth?.uid || 'owner',
+      });
+      return res.json({ ok: true, status });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'تعذر حفظ المفاتيح السرية.';
+      return res.status(400).json({ ok: false, error: msg });
+    }
+  });
+
+  app.delete('/api/db/secrets/:connectionId', verifyOwnerAdminMiddleware, (req, res) => {
+    const deleted = deleteSecretRecord(String(req.params.connectionId || ''));
+    return res.json({ ok: true, deleted });
+  });
+
+  app.post('/api/db/test-endpoint', verifyOwnerAdminMiddleware, async (req, res) => {
+    const { url } = (req.body || {}) as { url?: string };
+    const cleanUrl = typeof url === 'string' ? url.trim() : '';
+    if (!cleanUrl) {
+      return res.status(400).json({ ok: false, error: 'يرجى تحديد رابط الفحص.' });
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(cleanUrl);
+    } catch {
+      return res.status(400).json({ ok: false, error: 'صيغة الرابط غير صالحة.' });
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol) || isBlockedHostEnhanced(parsed.hostname)) {
+      return res.status(403).json({ ok: false, error: 'نطاق غير مسموح به (SSRF guard).' });
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const start = Date.now();
+    try {
+      const upstream = await fetch(parsed.toString(), {
+        method: 'GET',
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      return res.json({
+        ok: upstream.ok,
+        status: upstream.status,
+        latencyMs: Date.now() - start,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      return res.status(502).json({
+        ok: false,
+        error: err instanceof Error ? err.message : 'تعذر الوصول إلى النقطة.',
+        latencyMs: Date.now() - start,
+      });
     }
   });
 

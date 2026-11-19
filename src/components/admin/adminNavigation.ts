@@ -25,6 +25,7 @@ export type AdminTab =
   | 'users'
   | 'security_rules'
   | 'audit_logs'
+  | 'database_manager'
   | 'system_health'
   | 'backup_restore'
   | 'settings'
@@ -306,8 +307,17 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
   },
   {
     id: 'system',
-    label: 'صحة النظام والنسخ الاحتياطي',
+    label: 'قواعد البيانات وصحة النظام',
     items: [
+      {
+        id: 'database_manager',
+        groupId: 'system',
+        label: 'إدارة قواعد البيانات والاتصال',
+        shortLabel: 'قواعد البيانات',
+        description: 'إضافة وتبديل واختبار قواعد البيانات، مخزن الأسرار الآمن، الترحيل، والحماية من الانقطاع',
+        keywords: ['database', 'firestore', 'realtime', 'connection', 'secrets', 'vault', 'migration', 'قواعد', 'بيانات', 'اتصال', 'تبديل'],
+        ownerOnly: true,
+      },
       {
         id: 'system_health',
         groupId: 'system',
