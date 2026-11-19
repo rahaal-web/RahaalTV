@@ -11,6 +11,7 @@ import {
 import { matchesCategoryFilter } from './categoryMatcher';
 
 export const HOME_CONFIG_STORAGE_KEY = 'rahaltv_home_config_v1';
+const HERO_FIT_DEFAULT_RESTORED_KEY = 'rahaltv_hero_fit_cover_restored_v1';
 
 export const DEFAULT_HOME_SECTIONS: HomeSectionConfig[] = [
   {
@@ -59,7 +60,7 @@ export const DEFAULT_HOME_CONFIG: HomeLayoutConfig = {
   heroPauseOnHover: true,
   heroMaxSlides: 8,
   heroSlideIds: [],
-  heroImageFit: 'contain',
+  heroImageFit: 'cover',
   heroBackdropBlurPx: 24,
   heroBackdropDimPct: 45,
   heroShowDescription: true,
@@ -301,8 +302,20 @@ export function loadStoredHomeConfig(): HomeLayoutConfig {
   if (typeof window === 'undefined') return normalizeHomeConfig();
   try {
     const raw = localStorage.getItem(HOME_CONFIG_STORAGE_KEY);
-    if (!raw) return normalizeHomeConfig();
-    return normalizeHomeConfig(JSON.parse(raw) as Partial<HomeLayoutConfig>);
+    if (!raw) {
+      localStorage.setItem(HERO_FIT_DEFAULT_RESTORED_KEY, '1');
+      return normalizeHomeConfig();
+    }
+    const parsed = JSON.parse(raw) as Partial<HomeLayoutConfig>;
+    if (!localStorage.getItem(HERO_FIT_DEFAULT_RESTORED_KEY)) {
+      localStorage.setItem(HERO_FIT_DEFAULT_RESTORED_KEY, '1');
+      if (parsed && parsed.heroImageFit === 'contain') {
+        const migrated = normalizeHomeConfig({ ...parsed, heroImageFit: 'cover' });
+        localStorage.setItem(HOME_CONFIG_STORAGE_KEY, JSON.stringify(migrated));
+        return migrated;
+      }
+    }
+    return normalizeHomeConfig(parsed);
   } catch {
     return normalizeHomeConfig();
   }
@@ -312,6 +325,7 @@ export function saveStoredHomeConfig(config: HomeLayoutConfig): HomeLayoutConfig
   const clean = normalizeHomeConfig(config);
   if (typeof window !== 'undefined') {
     try {
+      localStorage.setItem(HERO_FIT_DEFAULT_RESTORED_KEY, '1');
       localStorage.setItem(HOME_CONFIG_STORAGE_KEY, JSON.stringify(clean));
     } catch {
       // Ignore storage quota errors

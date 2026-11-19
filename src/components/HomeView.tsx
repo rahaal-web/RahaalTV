@@ -410,7 +410,7 @@ export function HomeView({
   if (loading && catalog.length === 0) {
     return (
       <div className="space-y-10 pb-16">
-        <div className="h-[430px] sm:h-[470px] md:h-[600px] lg:h-[660px] w-full rtv-skeleton" />
+        <div className="h-[430px] sm:h-[470px] md:h-[600px] lg:h-[660px] rtv-hero-fullbleed rtv-skeleton" />
         <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 space-y-8">
           <div className="h-12 w-full rounded-2xl rtv-skeleton" />
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-4">
@@ -481,7 +481,7 @@ export function HomeView({
         </div>
       )}
 
-      {/* 1. Cinematic Hero Section (Uncropped Contain Default / Ambient Blur + Contain / Cover + Controls) */}
+      {/* 1. Full-Bleed Cinematic Hero Section (100vw Cover Default / Optional Contain & Ambient Blur) */}
       {homeConfig.showHero && (() => {
         const backdropInfo = getBackdropInfo(activeHero);
         const heroBgSrc = backdropInfo.hasDedicatedBackdrop
@@ -491,7 +491,7 @@ export function HomeView({
           ? buildBackdropSrcSet(backdropInfo.url)
           : undefined;
         const ambientPoster = getPosterUrl(activeHero);
-        const imageFitMode = homeConfig.heroImageFit || 'contain';
+        const imageFitMode = homeConfig.heroImageFit || 'cover';
         const blurPx = homeConfig.heroBackdropBlurPx ?? 24;
         const dimPct = homeConfig.heroBackdropDimPct ?? 45;
         const isCoverMode = imageFitMode === 'cover';
@@ -499,7 +499,7 @@ export function HomeView({
 
         return (
           <section
-            className="relative overflow-hidden bg-[#0a0b0e]"
+            className="relative rtv-hero-fullbleed overflow-hidden bg-[#0f0f0f]"
             onMouseEnter={() => setHeroHovered(true)}
             onMouseLeave={() => setHeroHovered(false)}
             onTouchStart={(e) => {

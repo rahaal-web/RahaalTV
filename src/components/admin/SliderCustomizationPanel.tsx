@@ -53,20 +53,20 @@ const IMAGE_FIT_OPTIONS: Array<{
   desc: string;
 }> = [
   {
+    id: 'cover',
+    label: 'ملء عرض الشاشة بالكامل (Full Width Cover)',
+    badge: 'الافتراضي',
+    desc: 'يمدد الصورة بعرض السلايدر الكامل 100vw دون أي هوامش جانبية مع الحفاظ على التناسق.',
+  },
+  {
     id: 'contain',
     label: 'إظهار الصورة كاملة (Contain)',
-    badge: 'الافتراضي',
     desc: 'يعرض الصورة الأصلية كاملة مع الحفاظ على نسبة الأبعاد دون أي قص.',
   },
   {
     id: 'contain_blur',
     label: 'خلفية مموهة مكبرة + الصورة كاملة',
     desc: 'يملأ الفراغات بنسخة مكبرة ومموهة مع طبقة تعتيم ويُظهر الصورة الأصلية كاملة وواضحة.',
-  },
-  {
-    id: 'cover',
-    label: 'ملء مساحة السلايدر (Cover)',
-    desc: 'يمدد الصورة لتغطية كامل المساحة المتاحة مع قص الحواف عند الحاجة.',
   },
 ];
 
@@ -308,7 +308,7 @@ export function SliderCustomizationPanel({
           }`}
         >
           {activeSlide && (() => {
-            const fitMode = draft.heroImageFit || 'contain';
+            const fitMode = draft.heroImageFit || 'cover';
             const previewImg = activeSlide.backdrop || activeSlide.poster;
             const blurPx = draft.heroBackdropBlurPx ?? 24;
             const dimOpacity = Math.min(0.85, Math.max(0, (draft.heroBackdropDimPct ?? 45) / 100));
@@ -488,17 +488,17 @@ export function SliderCustomizationPanel({
           <div className="flex items-center gap-2">
             <ImageIcon className="w-5 h-5 rtv-admin-accent-text" />
             <h3 className="font-display text-base font-extrabold text-white">
-              1. طريقة عرض صورة السلايدر والخلفية (بدون قص)
+              1. طريقة عرض صورة السلايدر والخلفية
             </h3>
           </div>
           <span className="text-[11px] font-bold text-[#b7c9ef]">
-            الوضع الافتراضي يحفظ كامل الصورة دون قص أو تشويه
+            الوضع الافتراضي يعرض السلايدر بعرض الشاشة الكامل (Full Bleed) دون هوامش جانبية
           </span>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
           {IMAGE_FIT_OPTIONS.map((opt) => {
-            const active = (draft.heroImageFit || 'contain') === opt.id;
+            const active = (draft.heroImageFit || 'cover') === opt.id;
             return (
               <button
                 key={opt.id}

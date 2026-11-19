@@ -285,9 +285,9 @@ describe('Website Branding Normalization & Sanitation', () => {
 });
 
 describe('Hero Slider Customization Normalization', () => {
-  it('defaults heroImageFit to contain without cropping and clamps blur/dim backdrop settings', () => {
+  it('defaults heroImageFit to cover for full-bleed hero display and clamps blur/dim backdrop settings', () => {
     const defaults = normalizeHomeConfig({});
-    assert.equal(defaults.heroImageFit, 'contain');
+    assert.equal(defaults.heroImageFit, 'cover');
     assert.equal(defaults.heroBackdropBlurPx, 24);
     assert.equal(defaults.heroBackdropDimPct, 45);
 
@@ -300,14 +300,14 @@ describe('Hero Slider Customization Normalization', () => {
     assert.equal(ambientBlur.heroBackdropBlurPx, 48);
     assert.equal(ambientBlur.heroBackdropDimPct, 85);
 
-    const coverCfg = normalizeHomeConfig({
-      heroImageFit: 'cover',
+    const containCfg = normalizeHomeConfig({
+      heroImageFit: 'contain',
       heroBackdropBlurPx: -10,
       heroBackdropDimPct: -5,
     });
-    assert.equal(coverCfg.heroImageFit, 'cover');
-    assert.equal(coverCfg.heroBackdropBlurPx, 0);
-    assert.equal(coverCfg.heroBackdropDimPct, 0);
+    assert.equal(containCfg.heroImageFit, 'contain');
+    assert.equal(containCfg.heroBackdropBlurPx, 0);
+    assert.equal(containCfg.heroBackdropDimPct, 0);
   });
 
   it('preserves heroShowDescription=false, typography bounds, positions, and element visibility flags', () => {

@@ -1069,7 +1069,7 @@ export default function App() {
   }
 
   return (
-    <div data-rtv-scope="site" className="rtv-site-root min-h-screen flex flex-col bg-[#0f0f0f] text-white">
+    <div data-rtv-scope="site" className="rtv-site-root min-h-screen flex flex-col bg-[#0f0f0f] text-white overflow-x-clip">
       {!clientCapabilities.baselineSupported && !compatBannerDismissed && (
         <div
           role="status"
