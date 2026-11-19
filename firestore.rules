@@ -310,11 +310,12 @@ service cloud.firestore {
           'autoFallbackOnReject', 'showPlayerBadge', 'hostRules'
         ])
         && shield.keys().hasOnly([
-          'enabled', 'defaultStrategy', 'blockWindowOpen', 'guardBlankLinks',
+          'enabled', 'defaultStrategy', 'defaultWatchMode', 'blockWindowOpen', 'guardBlankLinks',
           'autoFallbackOnReject', 'showPlayerBadge', 'hostRules'
         ])
         && shield.enabled is bool
         && shield.defaultStrategy in ['adaptive', 'strict_when_safe', 'observe_only']
+        && (!('defaultWatchMode' in shield) || shield.defaultWatchMode in ['strict_sandbox', 'redirect_guard', 'direct_unrestricted'])
         && shield.blockWindowOpen is bool
         && shield.guardBlankLinks is bool
         && shield.autoFallbackOnReject is bool

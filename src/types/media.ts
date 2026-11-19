@@ -314,6 +314,7 @@ export interface PopupShieldHostRule {
 export interface PopupShieldConfig {
   enabled: boolean;
   defaultStrategy: 'adaptive' | 'strict_when_safe' | 'observe_only';
+  defaultWatchMode?: Exclude<PopupShieldProfileMode, 'direct_media'>;
   blockWindowOpen: boolean;
   guardBlankLinks: boolean;
   autoFallbackOnReject: boolean;

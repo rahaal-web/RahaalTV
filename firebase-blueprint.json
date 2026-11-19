@@ -172,7 +172,7 @@
         "playerTheme": { "type": "object", "description": "Customizable internal video player theme configuration" },
         "homeConfig": { "type": "object", "description": "Customizable homepage layout, hero slider controls, and ordered sections configuration" },
         "typography": { "type": "object", "description": "Customizable global font families and font sizes configuration" },
-        "popupShield": { "type": "object", "description": "Smart Popup Shield protection strategy and per-host sandbox compatibility rules" },
+        "popupShield": { "type": "object", "description": "Smart Popup Shield default watch mode, protection strategy, and per-host sandbox compatibility rules" },
         "branding": { "type": "object", "description": "Website Branding settings (logo, site name typography, and browser favicon configuration)" },
         "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
         "updatedAt": { "type": "string", "format": "date-time" }

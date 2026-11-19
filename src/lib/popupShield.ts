@@ -20,6 +20,7 @@ const MAX_LOG_ENTRIES = 120;
 export const DEFAULT_POPUP_SHIELD_CONFIG: PopupShieldConfig = {
   enabled: true,
   defaultStrategy: 'adaptive',
+  defaultWatchMode: 'direct_unrestricted',
   blockWindowOpen: true,
   guardBlankLinks: true,
   autoFallbackOnReject: true,
@@ -230,9 +231,17 @@ export function normalizePopupShieldConfig(
       });
   }
 
+  const defaultWatchMode: Exclude<PopupShieldProfileMode, 'direct_media'> =
+    base.defaultWatchMode === 'strict_sandbox' ||
+    base.defaultWatchMode === 'redirect_guard' ||
+    base.defaultWatchMode === 'direct_unrestricted'
+      ? base.defaultWatchMode
+      : DEFAULT_POPUP_SHIELD_CONFIG.defaultWatchMode!;
+
   return {
     enabled: base.enabled !== undefined ? Boolean(base.enabled) : DEFAULT_POPUP_SHIELD_CONFIG.enabled,
     defaultStrategy: strategy,
+    defaultWatchMode,
     blockWindowOpen:
       base.blockWindowOpen !== undefined
         ? Boolean(base.blockWindowOpen)
@@ -402,23 +411,34 @@ export function resolveEffectiveShieldDecision(
     mode = sessionOverrideMode;
     compatibility = savedRule?.compatibility || (mode === 'direct_unrestricted' ? 'incompatible' : 'compatible');
     customNote = 'تم التبديل المؤقت لوضع التوافق أثناء هذه الجلسة.';
-  } else if (cfg.defaultStrategy === 'observe_only') {
-    mode = 'direct_unrestricted';
-    compatibility = savedRule?.compatibility || 'untested';
-    customNote = 'وضع المراقبة فقط: يمنع نوافذ الصفحة الأم ويراقب السيرفر دون تقييد iframe.';
   } else if (savedRule) {
     mode = savedRule.mode;
     compatibility = savedRule.compatibility;
     customNote = savedRule.note || '';
   } else {
+    const selectedDefault: Exclude<PopupShieldProfileMode, 'direct_media'> =
+      cfg.defaultWatchMode === 'strict_sandbox' ||
+      cfg.defaultWatchMode === 'redirect_guard' ||
+      cfg.defaultWatchMode === 'direct_unrestricted'
+        ? cfg.defaultWatchMode
+        : DEFAULT_POPUP_SHIELD_CONFIG.defaultWatchMode!;
+
+    mode = selectedDefault;
     const known = classifyKnownHostDefaults(hostname);
-    if (cfg.defaultStrategy === 'strict_when_safe' && known.compatibility === 'partial') {
-      mode = 'strict_sandbox';
-    } else {
-      mode = known.mode;
-    }
-    compatibility = known.compatibility;
-    customNote = known.reason;
+    compatibility =
+      mode === 'strict_sandbox'
+        ? known.compatibility
+        : mode === 'redirect_guard'
+          ? 'partial'
+          : known.compatibility === 'incompatible'
+            ? 'incompatible'
+            : 'compatible';
+    customNote =
+      mode === 'direct_unrestricted'
+        ? 'الوضع الافتراضي: وضع التوافق المباشر.'
+        : mode === 'redirect_guard'
+          ? 'الوضع الافتراضي: منع تحويل الصفحة.'
+          : 'الوضع الافتراضي: حماية كاملة للـ iframe.';
   }
 
   const sandboxAttr = buildIframeSandboxAttr(mode, true);

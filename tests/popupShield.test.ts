@@ -29,22 +29,39 @@ test('buildIframeSandboxAttr enforces strict isolation without breaking fullscre
   assert.equal(buildIframeSandboxAttr('strict_sandbox', false), undefined);
 });
 
-test('resolveEffectiveShieldDecision uses per-host adaptive profiles rather than uniform sandbox', () => {
-  const ytDecision = resolveEffectiveShieldDecision(
+test('resolveEffectiveShieldDecision defaults to direct_unrestricted and switches across all 3 configured watch modes', () => {
+  assert.equal(DEFAULT_POPUP_SHIELD_CONFIG.defaultWatchMode, 'direct_unrestricted');
+
+  const ytDefaultDecision = resolveEffectiveShieldDecision(
     'https://www.youtube.com/embed/dQw4w9WgXcQ',
     DEFAULT_POPUP_SHIELD_CONFIG
   );
-  assert.equal(ytDecision.mode, 'strict_sandbox');
-  assert.equal(ytDecision.compatibility, 'compatible');
-  assert.ok(ytDecision.sandboxAttr);
+  assert.equal(ytDefaultDecision.mode, 'direct_unrestricted');
+  assert.equal(ytDefaultDecision.sandboxAttr, undefined);
 
-  const vidmolyDecision = resolveEffectiveShieldDecision(
-    'https://vidmoly.to/embed-abc123.html',
-    DEFAULT_POPUP_SHIELD_CONFIG
+  const redirectGuardCfg = normalizePopupShieldConfig({
+    ...DEFAULT_POPUP_SHIELD_CONFIG,
+    defaultWatchMode: 'redirect_guard',
+  });
+  const redirectDecision = resolveEffectiveShieldDecision(
+    'https://www.youtube.com/embed/dQw4w9WgXcQ',
+    redirectGuardCfg
   );
-  assert.equal(vidmolyDecision.mode, 'direct_unrestricted');
-  assert.equal(vidmolyDecision.compatibility, 'incompatible');
-  assert.equal(vidmolyDecision.sandboxAttr, undefined);
+  assert.equal(redirectDecision.mode, 'redirect_guard');
+  assert.ok(redirectDecision.sandboxAttr?.includes('allow-popups'));
+  assert.equal(redirectDecision.sandboxAttr?.includes('allow-top-navigation'), false);
+
+  const strictSandboxCfg = normalizePopupShieldConfig({
+    ...DEFAULT_POPUP_SHIELD_CONFIG,
+    defaultWatchMode: 'strict_sandbox',
+  });
+  const strictDecision = resolveEffectiveShieldDecision(
+    'https://www.youtube.com/embed/dQw4w9WgXcQ',
+    strictSandboxCfg
+  );
+  assert.equal(strictDecision.mode, 'strict_sandbox');
+  assert.ok(strictDecision.sandboxAttr?.includes('allow-scripts'));
+  assert.equal(strictDecision.sandboxAttr?.includes('allow-popups'), false);
 
   const directMp4Decision = resolveEffectiveShieldDecision(
     'https://cdn.example.com/movies/sample-1080p.mp4',

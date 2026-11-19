@@ -511,6 +511,62 @@ export function PopupShieldPanel({
           </label>
         </div>
 
+        {/* Default Watch Mode Selector (3 Existing Modes — Desktop & Mobile) */}
+        <div className="rounded-2xl bg-[#1a242e] border border-white/10 p-4 space-y-3">
+          <div>
+            <p className="text-xs font-extrabold text-white">
+              الوضع الافتراضي لصفحات المشاهدة
+            </p>
+            <p className="text-[11px] text-[#b7c9ef] mt-0.5">
+              يُطبّق تلقائياً عند فتح صفحات مشاهدة الأفلام والمسلسلات (الوضع الافتراضي الحالي: وضع التوافق المباشر).
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5" role="radiogroup" aria-label="الوضع الافتراضي لصفحات المشاهدة">
+            {(
+              [
+                {
+                  id: 'direct_unrestricted',
+                  label: 'وضع التوافق المباشر',
+                },
+                {
+                  id: 'redirect_guard',
+                  label: 'منع تحويل الصفحة',
+                },
+                {
+                  id: 'strict_sandbox',
+                  label: 'حماية كاملة للـ iframe',
+                },
+              ] as const
+            ).map((opt) => {
+              const currentMode = shieldConfig.defaultWatchMode || 'direct_unrestricted';
+              const isSelected = currentMode === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={isSelected}
+                  onClick={() =>
+                    onChangeShieldConfig({
+                      ...shieldConfig,
+                      defaultWatchMode: opt.id,
+                    })
+                  }
+                  className={`w-full min-h-[44px] rounded-xl border px-3.5 py-2.5 text-xs font-extrabold transition-colors cursor-pointer flex items-center justify-between gap-2 text-right ${
+                    isSelected
+                      ? 'bg-[#4CAF50]/15 border-[#4CAF50] text-white'
+                      : 'bg-[#0c1821] border-white/10 text-[#b7c9ef] hover:border-white/25 hover:text-white'
+                  }`}
+                >
+                  <span>{opt.label}</span>
+                  {isSelected && <CheckCircle2 className="w-4 h-4 text-[#4CAF50] shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Default Strategy + Badge Toggle */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
           <div>
