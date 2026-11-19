@@ -20,7 +20,6 @@ import {
   Film,
   Globe,
   Image as ImageIcon,
-  KeyRound,
   Layers,
   LayoutDashboard,
   Link2,
@@ -249,13 +248,6 @@ import {
   rollbackDatabaseConnection,
 } from '../lib/dbConnectionManager';
 import {
-  hasOfflineLocalMasterAccount,
-  loginMasterAdmin,
-  logoutMasterAdmin,
-  MasterAdminSession,
-  setupOfflineLocalMasterAccount,
-} from '../lib/masterAdminAuth';
-import {
   AdminPrivilegeRole,
   AdminRoleRecord,
   CastMember,
@@ -322,7 +314,6 @@ const MODERATOR_PERM_LABELS: {
 
 interface AdminDashboardViewProps {
   user: User | null;
-  masterAdminSession?: MasterAdminSession | null;
   isAdmin: boolean;
   adminRole?: AdminPrivilegeRole | null;
   authLoading: boolean;
@@ -617,7 +608,6 @@ function scrapedToMediaItem(scraped: ScrapedPayload, indexOffset = 0): MediaItem
 
 export function AdminDashboardView({
   user,
-  masterAdminSession = null,
   isAdmin,
   adminRole,
   authLoading,
@@ -645,22 +635,15 @@ export function AdminDashboardView({
   const effectiveRole: AdminPrivilegeRole | null =
     adminRole !== undefined ? adminRole : isAdmin ? 'owner' : null;
   const isOwner = effectiveRole === 'owner';
-  const activeActorUid =
-    user?.uid || (masterAdminSession ? `master:${masterAdminSession.username}` : 'master-admin');
+  const activeActorUid = user?.uid || '';
   const activeActorName =
     user?.displayName ||
     user?.email ||
-    masterAdminSession?.displayName ||
     (isOwner ? 'المسؤول الأساسي' : 'مشرف');
-  const activeActorEmail =
-    user?.email ||
-    (masterAdminSession
-      ? `${masterAdminSession.username} • مستقل عن قاعدة البيانات`
-      : '');
-  const hasActor = Boolean(user || masterAdminSession);
+  const activeActorEmail = user?.email || '';
+  const hasActor = Boolean(user);
 
   const handleCombinedSignOut = async () => {
-    await logoutMasterAdmin();
     await signOutFirebase().catch(() => undefined);
   };
 
@@ -860,7 +843,7 @@ export function AdminDashboardView({
   }, []);
 
   useEffect(() => {
-    if (!authLoading && user && !masterAdminSession && !isAdmin) {
+    if (!authLoading && user && !isAdmin) {
       const sig = `admin_gate:${user.uid}`;
       if (!loggedUnauthorizedRef.current.has(sig)) {
         loggedUnauthorizedRef.current.add(sig);
@@ -872,19 +855,14 @@ export function AdminDashboardView({
         });
       }
     }
-  }, [authLoading, user, masterAdminSession, isAdmin]);
+  }, [authLoading, user, isAdmin]);
 
   const [busyAction, setBusyAction] = useState(false);
   const [reconnectingDb, setReconnectingDb] = useState(false);
   const [adminSigningIn, setAdminSigningIn] = useState(false);
   const [adminAuthError, setAdminAuthError] = useState<string | null>(null);
-  const [adminLoginMode, setAdminLoginMode] = useState<'master' | 'firebase'>('master');
   const [adminLoginEmail, setAdminLoginEmail] = useState('');
   const [adminLoginPassword, setAdminLoginPassword] = useState('');
-  const [showOfflineMasterSetup, setShowOfflineMasterSetup] = useState(false);
-  const [offlineMasterUsername, setOfflineMasterUsername] = useState('admin');
-  const [offlineMasterDisplayName, setOfflineMasterDisplayName] = useState('المسؤول الأساسي');
-  const [offlineMasterPassword, setOfflineMasterPassword] = useState('');
 
   // Catalog tab states
   const [searchQuery, setSearchQuery] = useState('');
@@ -3136,9 +3114,7 @@ export function AdminDashboardView({
     );
   }
 
-  if ((!user && !masterAdminSession) || !isAdmin) {
-    const isStaticHost = shouldSkipBackendApiCalls();
-    const hasOfflineAccount = isStaticHost ? hasOfflineLocalMasterAccount() : false;
+  if (!user || !isAdmin) {
     return (
       <div className="min-h-screen bg-[#06131c] flex flex-col items-center justify-center p-4">
         <div className="w-full max-w-lg rounded-3xl bg-[#0c1821] border border-white/10 p-8 shadow-2xl text-center space-y-5">
@@ -3151,12 +3127,12 @@ export function AdminDashboardView({
               RahaL TV • /admin
             </span>
             <h1 className="font-display text-2xl font-extrabold text-white">
-              بوابة إدارة RahaL TV المستقلة
+              بوابة إدارة RahaL TV
             </h1>
             <p className="mt-2 text-sm text-[#b7c9ef] leading-relaxed">
               {!user
-                ? 'يمكنك الدخول بالحساب الأساسي المستقل لإضافة وربط قاعدة البيانات في أي وقت، أو تسجيل الدخول بحساب Firebase.'
-                : `الحساب الحالي (${user.email}) لا يمتلك صلاحيات المشرف في قاعدة البيانات، ويمكنك التبديل للحساب الأساسي المستقل.`}
+                ? 'سجّل الدخول بحساب الإدارة المصرّح له للوصول إلى لوحة التحكم وإدارة المحتوى وقواعد البيانات.'
+                : `الحساب الحالي (${user.email}) لا يمتلك صلاحيات المشرف في قاعدة البيانات.`}
             </p>
           </div>
 
@@ -3189,319 +3165,106 @@ export function AdminDashboardView({
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-1.5 rounded-2xl bg-[#1a242e] p-1 border border-white/10">
-            <button
-              type="button"
-              onClick={() => {
-                setAdminLoginMode('master');
+          <div className="space-y-3 text-right">
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!adminLoginEmail.trim() || !adminLoginPassword) {
+                  setAdminAuthError('يرجى إدخال اسم المستخدم/البريد الإلكتروني وكلمة المرور.');
+                  return;
+                }
                 setAdminAuthError(null);
+                setAdminSigningIn(true);
+                try {
+                  await signInWithEmailPassword(adminLoginEmail, adminLoginPassword);
+                } catch (err: unknown) {
+                  setAdminAuthError(getFirebaseAuthErrorMessage(err));
+                } finally {
+                  setAdminSigningIn(false);
+                }
               }}
-              className={`rounded-xl py-2.5 px-3 text-xs font-extrabold transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
-                adminLoginMode === 'master'
-                  ? 'bg-[#D92321] text-white shadow'
-                  : 'text-[#b7c9ef] hover:text-white'
-              }`}
+              className="space-y-3"
             >
-              <KeyRound className="w-3.5 h-3.5" />
-              <span>الحساب الأساسي (بدون قاعدة)</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setAdminLoginMode('firebase');
-                setAdminAuthError(null);
-              }}
-              className={`rounded-xl py-2.5 px-3 text-xs font-extrabold transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
-                adminLoginMode === 'firebase'
-                  ? 'bg-[#D92321] text-white shadow'
-                  : 'text-[#b7c9ef] hover:text-white'
-              }`}
-            >
-              <Database className="w-3.5 h-3.5" />
-              <span>حساب Firebase / Google</span>
-            </button>
-          </div>
-
-          {adminLoginMode === 'master' ? (
-            <div className="space-y-3 text-right">
-              <div className="rounded-xl bg-[#4CAF50]/10 border border-[#4CAF50]/30 p-3 text-xs text-emerald-100 leading-relaxed">
-                هذا الحساب مستقل تماماً عن Firestore وFirebase Auth، ويتيح لك الدخول لإضافة واختبار وتبديل قواعد البيانات بحرية.
+              <div>
+                <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
+                  البريد الإلكتروني أو اسم المستخدم
+                </label>
+                <input
+                  type="text"
+                  required
+                  dir="ltr"
+                  value={adminLoginEmail}
+                  onChange={(e) => setAdminLoginEmail(e.target.value)}
+                  placeholder="admin@rahaltv.com"
+                  className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-4 py-3 text-sm text-white focus:border-[#D92321] focus:outline-none"
+                />
               </div>
 
-              {isStaticHost && !hasOfflineAccount && showOfflineMasterSetup ? (
-                <form
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    setAdminAuthError(null);
-                    setAdminSigningIn(true);
-                    try {
-                      const res = await setupOfflineLocalMasterAccount({
-                        username: offlineMasterUsername,
-                        password: offlineMasterPassword,
-                        displayName: offlineMasterDisplayName,
-                      });
-                      if (!res.ok) {
-                        setAdminAuthError(res.error);
-                        return;
-                      }
-                      setOfflineMasterPassword('');
-                      setShowOfflineMasterSetup(false);
-                      if (dbConnectionStatus && dbConnectionStatus !== 'connected') {
-                        setActiveTab('database_manager');
-                      }
-                      onNotify('تم إنشاء وتفعيل حساب الطوارئ المحلي على هذا المتصفح بنجاح');
-                    } finally {
-                      setAdminSigningIn(false);
-                    }
-                  }}
-                  className="space-y-3 rounded-2xl bg-[#1a242e] border border-white/10 p-4"
-                >
-                  <p className="text-xs font-extrabold text-[#f9c400]">
-                    تجهيز حساب الطوارئ المحلي (للاستضافة الثابتة بدون خادم خلفي)
-                  </p>
-                  <div>
-                    <label className="block text-xs font-bold text-[#b7c9ef] mb-1">اسم المستخدم</label>
-                    <input
-                      type="text"
-                      required
-                      dir="ltr"
-                      value={offlineMasterUsername}
-                      onChange={(e) => setOfflineMasterUsername(e.target.value)}
-                      className="w-full rounded-xl bg-[#06131c] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-[#b7c9ef] mb-1">الاسم المعروض</label>
-                    <input
-                      type="text"
-                      value={offlineMasterDisplayName}
-                      onChange={(e) => setOfflineMasterDisplayName(e.target.value)}
-                      className="w-full rounded-xl bg-[#06131c] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-[#b7c9ef] mb-1">
-                      كلمة المرور (8 أحرف على الأقل)
-                    </label>
-                    <input
-                      type="password"
-                      required
-                      minLength={8}
-                      dir="ltr"
-                      value={offlineMasterPassword}
-                      onChange={(e) => setOfflineMasterPassword(e.target.value)}
-                      className="w-full rounded-xl bg-[#06131c] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
-                    />
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="submit"
-                      disabled={adminSigningIn}
-                      className="flex-1 rounded-xl bg-[#4CAF50] hover:bg-emerald-600 py-2.5 text-xs font-extrabold text-white cursor-pointer"
-                    >
-                      إنشاء والدخول الآن
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowOfflineMasterSetup(false)}
-                      className="rounded-xl bg-white/10 px-4 py-2.5 text-xs font-bold text-white cursor-pointer"
-                    >
-                      رجوع
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                <form
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    if (!adminLoginEmail.trim() || !adminLoginPassword) {
-                      setAdminAuthError('يرجى إدخال اسم المستخدم وكلمة المرور.');
-                      return;
-                    }
-                    setAdminAuthError(null);
-                    setAdminSigningIn(true);
-                    try {
-                      const res = await loginMasterAdmin(adminLoginEmail, adminLoginPassword);
-                      if (!res.ok) {
-                        setAdminAuthError(res.error);
-                        return;
-                      }
-                      setAdminLoginPassword('');
-                      if (dbConnectionStatus && dbConnectionStatus !== 'connected') {
-                        setActiveTab('database_manager');
-                      }
-                      onNotify('تم تسجيل الدخول بالحساب الأساسي المستقل بنجاح');
-                    } finally {
-                      setAdminSigningIn(false);
-                    }
-                  }}
-                  className="space-y-3"
-                >
-                  <div>
-                    <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
-                      اسم المستخدم الأساسي
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      dir="ltr"
-                      value={adminLoginEmail}
-                      onChange={(e) => setAdminLoginEmail(e.target.value)}
-                      placeholder="admin"
-                      className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-4 py-3 text-sm text-white focus:border-[#D92321] focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
-                      كلمة المرور
-                    </label>
-                    <input
-                      type="password"
-                      required
-                      dir="ltr"
-                      value={adminLoginPassword}
-                      onChange={(e) => setAdminLoginPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-4 py-3 text-sm text-white focus:border-[#D92321] focus:outline-none"
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={adminSigningIn}
-                    className="w-full inline-flex items-center justify-center gap-2.5 rounded-2xl bg-[#D92321] hover:bg-[#dc0e30] disabled:opacity-60 py-3.5 px-6 text-sm font-extrabold text-white shadow-lg transition-colors cursor-pointer"
-                  >
-                    {adminSigningIn ? (
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                      <KeyRound className="w-5 h-5" />
-                    )}
-                    <span>
-                      {adminSigningIn ? 'جاري التحقق والدخول...' : 'دخول بالحساب الأساسي المستقل'}
-                    </span>
-                  </button>
-
-                  {isStaticHost && !hasOfflineAccount && (
-                    <button
-                      type="button"
-                      onClick={() => setShowOfflineMasterSetup(true)}
-                      className="w-full rounded-xl border border-amber-400/35 bg-amber-500/10 py-2.5 text-xs font-bold text-amber-200 hover:bg-amber-500/20 cursor-pointer"
-                    >
-                      استضافة ثابتة بدون خادم؟ اضغط هنا لإعداد حساب الطوارئ المحلي لأول مرة
-                    </button>
-                  )}
-                </form>
-              )}
-
-              {adminAuthError && (
-                <div className="rounded-xl bg-[#D92321]/15 border border-[#D92321]/40 p-3 text-xs leading-relaxed text-red-200">
-                  {adminAuthError}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="space-y-3 text-right">
-              <form
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  if (!adminLoginEmail.trim() || !adminLoginPassword) {
-                    setAdminAuthError('يرجى إدخال اسم المستخدم/البريد الإلكتروني وكلمة المرور.');
-                    return;
-                  }
-                  setAdminAuthError(null);
-                  setAdminSigningIn(true);
-                  try {
-                    await signInWithEmailPassword(adminLoginEmail, adminLoginPassword);
-                  } catch (err: unknown) {
-                    setAdminAuthError(getFirebaseAuthErrorMessage(err));
-                  } finally {
-                    setAdminSigningIn(false);
-                  }
-                }}
-                className="space-y-3"
-              >
-                <div>
-                  <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
-                    البريد الإلكتروني أو اسم المستخدم
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    dir="ltr"
-                    value={adminLoginEmail}
-                    onChange={(e) => setAdminLoginEmail(e.target.value)}
-                    placeholder="admin@rahaltv.com أو admin"
-                    className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-4 py-3 text-sm text-white focus:border-[#D92321] focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
-                    كلمة المرور
-                  </label>
-                  <input
-                    type="password"
-                    required
-                    dir="ltr"
-                    value={adminLoginPassword}
-                    onChange={(e) => setAdminLoginPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-4 py-3 text-sm text-white focus:border-[#D92321] focus:outline-none"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={adminSigningIn}
-                  className="w-full inline-flex items-center justify-center gap-2.5 rounded-2xl bg-[#D92321] hover:bg-[#dc0e30] disabled:opacity-60 py-3.5 px-6 text-sm font-extrabold text-white shadow-lg transition-colors cursor-pointer"
-                >
-                  {adminSigningIn ? (
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                  ) : (
-                    <ShieldCheck className="w-5 h-5" />
-                  )}
-                  <span>{adminSigningIn ? 'جاري تسجيل الدخول...' : 'دخول إلى لوحة التحكم'}</span>
-                </button>
-              </form>
-
-              <div className="flex items-center gap-3 py-1">
-                <div className="h-px flex-1 bg-white/10" />
-                <span className="text-[11px] font-bold text-[#b7c9ef]/60">أو</span>
-                <div className="h-px flex-1 bg-white/10" />
+              <div>
+                <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
+                  كلمة المرور
+                </label>
+                <input
+                  type="password"
+                  required
+                  dir="ltr"
+                  value={adminLoginPassword}
+                  onChange={(e) => setAdminLoginPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-4 py-3 text-sm text-white focus:border-[#D92321] focus:outline-none"
+                />
               </div>
 
               <button
-                type="button"
+                type="submit"
                 disabled={adminSigningIn}
-                onClick={async () => {
-                  setAdminAuthError(null);
-                  setAdminSigningIn(true);
-                  try {
-                    await signInWithGoogle();
-                  } catch (err: unknown) {
-                    setAdminAuthError(getFirebaseAuthErrorMessage(err));
-                  } finally {
-                    setAdminSigningIn(false);
-                  }
-                }}
-                className="w-full inline-flex items-center justify-center gap-2.5 rounded-2xl bg-[#1a242e] hover:bg-[#23313f] border border-white/15 disabled:opacity-60 py-3 px-6 text-sm font-extrabold text-white transition-colors cursor-pointer"
+                className="w-full inline-flex items-center justify-center gap-2.5 rounded-2xl bg-[#D92321] hover:bg-[#dc0e30] disabled:opacity-60 py-3.5 px-6 text-sm font-extrabold text-white shadow-lg transition-colors cursor-pointer"
               >
-                <Globe className="w-4 h-4 text-[#f9c400]" />
-                <span>تسجيل الدخول بحساب Google</span>
+                {adminSigningIn ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <ShieldCheck className="w-5 h-5" />
+                )}
+                <span>{adminSigningIn ? 'جاري تسجيل الدخول...' : 'دخول إلى لوحة التحكم'}</span>
               </button>
+            </form>
 
-              {adminAuthError && (
-                <div className="rounded-xl bg-[#D92321]/15 border border-[#D92321]/40 p-3 text-xs leading-relaxed text-red-200">
-                  {adminAuthError}
-                </div>
-              )}
-
-              <p className="text-[11px] text-[#b7c9ef]/70 text-center leading-relaxed pt-1">
-                إذا كتبت اسم مستخدم بدون @ سيتم إلحاق <span className="font-latin text-white/90">@rahaltv.com</span> تلقائيًا.
-              </p>
+            <div className="flex items-center gap-3 py-1">
+              <div className="h-px flex-1 bg-white/10" />
+              <span className="text-[11px] font-bold text-[#b7c9ef]/60">أو</span>
+              <div className="h-px flex-1 bg-white/10" />
             </div>
-          )}
+
+            <button
+              type="button"
+              disabled={adminSigningIn}
+              onClick={async () => {
+                setAdminAuthError(null);
+                setAdminSigningIn(true);
+                try {
+                  await signInWithGoogle();
+                } catch (err: unknown) {
+                  setAdminAuthError(getFirebaseAuthErrorMessage(err));
+                } finally {
+                  setAdminSigningIn(false);
+                }
+              }}
+              className="w-full inline-flex items-center justify-center gap-2.5 rounded-2xl bg-[#1a242e] hover:bg-[#23313f] border border-white/15 disabled:opacity-60 py-3 px-6 text-sm font-extrabold text-white transition-colors cursor-pointer"
+            >
+              <Globe className="w-4 h-4 text-[#f9c400]" />
+              <span>تسجيل الدخول بحساب Google</span>
+            </button>
+
+            {adminAuthError && (
+              <div className="rounded-xl bg-[#D92321]/15 border border-[#D92321]/40 p-3 text-xs leading-relaxed text-red-200">
+                {adminAuthError}
+              </div>
+            )}
+
+            <p className="text-[11px] text-[#b7c9ef]/70 text-center leading-relaxed pt-1">
+              إذا كتبت اسم مستخدم بدون @ سيتم إلحاق <span className="font-latin text-white/90">@rahaltv.com</span> تلقائيًا.
+            </p>
+          </div>
 
           <button
             type="button"
@@ -3762,18 +3525,14 @@ export function AdminDashboardView({
             </button>
 
             <div className="hidden xl:flex items-center gap-2 rounded-xl bg-[#1a242e] border border-white/10 px-3 py-1.5">
-              {user?.photoURL ? (
+              {user?.photoURL && (
                 <img
                   src={user.photoURL}
                   alt={activeActorName}
                   referrerPolicy="no-referrer"
                   className="h-6 w-6 rounded-full object-cover"
                 />
-              ) : masterAdminSession ? (
-                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#4CAF50]/20 text-[#4CAF50]">
-                  <KeyRound className="w-3.5 h-3.5" />
-                </span>
-              ) : null}
+              )}
               <div className="text-right leading-tight">
                 <p className="text-[11px] font-extrabold text-white truncate max-w-[130px]">
                   {activeActorName}
@@ -3840,25 +3599,6 @@ export function AdminDashboardView({
 
           {/* Active Tab Workspace */}
           <main className="flex-1 min-w-0 w-full space-y-6">
-            {masterAdminSession?.mustChangePassword && (
-              <div className="rounded-2xl border border-amber-400/40 bg-amber-500/15 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs text-amber-100 shadow-lg">
-                <div className="flex items-center gap-2.5">
-                  <KeyRound className="w-4 h-4 text-[#f9c400] shrink-0" />
-                  <span>
-                    <strong className="text-white">تنبيه أمني:</strong> أنت تستخدم كلمة المرور المبدئية للحساب الأساسي المستقل — يُرجى تغييرها فوراً لحماية لوحة التحكم.
-                  </span>
-                </div>
-                {activeTab !== 'database_manager' && (
-                  <button
-                    type="button"
-                    onClick={() => navigateToTab('database_manager')}
-                    className="rounded-xl bg-[#f9c400] hover:bg-amber-300 text-[#06131c] px-3.5 py-1.5 text-xs font-extrabold cursor-pointer whitespace-nowrap"
-                  >
-                    تغيير كلمة المرور الآن
-                  </button>
-                )}
-              </div>
-            )}
             {dbConnectionStatus && dbConnectionStatus !== 'connected' && (() => {
               const activeFirebaseConfig = getActiveFirebaseConfig();
               const dbReg = loadDatabaseRegistry();
@@ -4302,7 +4042,6 @@ export function AdminDashboardView({
               {isOwner && activeTab === 'database_manager' && (
                 <AdminDatabaseManagerPanel
                   user={user}
-                  masterAdminSession={masterAdminSession}
                   dbConnectionStatus={dbConnectionStatus}
                   dbConnectionError={dbConnectionError}
                   customApiUrl={customApiUrl}

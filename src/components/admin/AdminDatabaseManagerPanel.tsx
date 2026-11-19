@@ -57,10 +57,6 @@ import {
   testDatabaseConnection,
 } from '../../lib/dbConnectionManager';
 import { FirestoreConnectionStatus } from '../../lib/firebase';
-import {
-  changeMasterAdminCredentialsClient,
-  MasterAdminSession,
-} from '../../lib/masterAdminAuth';
 import { safeCopyToClipboard } from '../../lib/browserCompat';
 import firestoreRulesTemplate from '../../../firestore.rules?raw';
 import {
@@ -77,7 +73,6 @@ import { ConfirmDialog } from './AdminSharedUi';
 
 interface AdminDatabaseManagerPanelProps {
   user: User | null;
-  masterAdminSession?: MasterAdminSession | null;
   dbConnectionStatus?: FirestoreConnectionStatus;
   dbConnectionError?: string | null;
   customApiUrl?: string;
@@ -216,7 +211,6 @@ function parseSnippetToFirebaseFields(rawSnippet: string): Partial<ReturnType<ty
 
 export function AdminDatabaseManagerPanel({
   user,
-  masterAdminSession = null,
   dbConnectionStatus,
   dbConnectionError,
   customApiUrl,
@@ -287,31 +281,12 @@ export function AdminDatabaseManagerPanel({
   const [showWorkerGuide, setShowWorkerGuide] = useState(false);
   const backupFileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Master Admin credentials editor state
-  const [masterEditOpen, setMasterEditOpen] = useState(() =>
-    Boolean(masterAdminSession?.mustChangePassword)
-  );
-  const [masterCurrentPassword, setMasterCurrentPassword] = useState('');
-  const [masterNewUsername, setMasterNewUsername] = useState(
-    masterAdminSession?.username || 'admin'
-  );
-  const [masterNewDisplayName, setMasterNewDisplayName] = useState(
-    masterAdminSession?.displayName || 'المسؤول الأساسي (Master Admin)'
-  );
-  const [masterNewPassword, setMasterNewPassword] = useState('');
-  const [savingMasterCreds, setSavingMasterCreds] = useState(false);
-
   const actor = useMemo(
     () => ({
-      uid: user?.uid || (masterAdminSession ? `master:${masterAdminSession.username}` : undefined),
-      name:
-        user?.displayName ||
-        user?.email ||
-        masterAdminSession?.displayName ||
-        masterAdminSession?.username ||
-        'Owner',
+      uid: user?.uid,
+      name: user?.displayName || user?.email || 'Owner',
     }),
-    [user, masterAdminSession]
+    [user]
   );
 
   useEffect(() => {
@@ -334,7 +309,7 @@ export function AdminDatabaseManagerPanel({
     return () => {
       active = false;
     };
-  }, [user, masterAdminSession?.username, customApiUrl]);
+  }, [user, customApiUrl]);
 
   const activeProfile = useMemo(
     () =>
@@ -1958,133 +1933,6 @@ export function AdminDatabaseManagerPanel({
           </div>
         )}
       </div>
-
-      {/* Master Admin Standalone Account Security Card */}
-      {masterAdminSession && (
-        <div className="rounded-3xl bg-[#0c1821] border border-[#f9c400]/30 p-5 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <KeyRound className="w-5 h-5 text-[#f9c400]" />
-                <h3 className="font-display text-sm sm:text-base font-extrabold text-white">
-                  الحساب الأساسي المستقل (يعمل بدون قاعدة بيانات)
-                </h3>
-                {masterAdminSession.mustChangePassword ? (
-                  <span className="rounded-lg bg-[#D92321]/20 border border-[#D92321]/45 px-2.5 py-0.5 text-[10px] font-black text-[#ff9f9d]">
-                    يُوصى بتغيير كلمة المرور المبدئية
-                  </span>
-                ) : (
-                  <span className="rounded-lg bg-[#4CAF50]/20 border border-[#4CAF50]/40 px-2.5 py-0.5 text-[10px] font-black text-[#4CAF50]">
-                    مؤمّن بكلمة مرور مخصصة
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-[#b7c9ef]">
-                الحساب النشط:{' '}
-                <span className="font-latin font-bold text-white">{masterAdminSession.username}</span>
-                {' • '}تخزين آمن مشفر على الخادم (scrypt + HMAC) ومستقل تماماً عن Firestore وFirebase Auth.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setMasterEditOpen((v) => !v)}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 px-3.5 py-2 text-xs font-extrabold text-white cursor-pointer"
-            >
-              <Edit3 className="w-3.5 h-3.5 text-[#f9c400]" />
-              <span>{masterEditOpen ? 'إغلاق التعديل' : 'تعديل بيانات الدخول'}</span>
-            </button>
-          </div>
-
-          {masterEditOpen && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-2xl bg-[#1a242e]/80 border border-white/10 p-4">
-              <div>
-                <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">
-                  اسم المستخدم الجديد
-                </label>
-                <input
-                  type="text"
-                  dir="ltr"
-                  value={masterNewUsername}
-                  onChange={(e) => setMasterNewUsername(e.target.value)}
-                  className="w-full rounded-xl bg-[#06131c] border border-white/10 px-3 py-2 text-xs font-bold text-white focus:border-[#f9c400] focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">
-                  الاسم المعروض في اللوحة
-                </label>
-                <input
-                  type="text"
-                  value={masterNewDisplayName}
-                  onChange={(e) => setMasterNewDisplayName(e.target.value)}
-                  className="w-full rounded-xl bg-[#06131c] border border-white/10 px-3 py-2 text-xs font-bold text-white focus:border-[#f9c400] focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">
-                  كلمة المرور الحالية (مطلوبة للتأكيد)
-                </label>
-                <input
-                  type="password"
-                  dir="ltr"
-                  value={masterCurrentPassword}
-                  onChange={(e) => setMasterCurrentPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full rounded-xl bg-[#06131c] border border-white/10 px-3 py-2 text-xs font-bold text-white focus:border-[#f9c400] focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">
-                  كلمة المرور الجديدة (8 أحرف فأكثر — اتركه فارغاً للإبقاء على الحالية)
-                </label>
-                <input
-                  type="password"
-                  dir="ltr"
-                  value={masterNewPassword}
-                  onChange={(e) => setMasterNewPassword(e.target.value)}
-                  placeholder="كلمة مرور قوية جديدة..."
-                  className="w-full rounded-xl bg-[#06131c] border border-white/10 px-3 py-2 text-xs font-bold text-white focus:border-[#f9c400] focus:outline-none"
-                />
-              </div>
-              <div className="sm:col-span-2 flex flex-wrap items-center justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  disabled={savingMasterCreds || !masterCurrentPassword}
-                  onClick={async () => {
-                    setSavingMasterCreds(true);
-                    try {
-                      const res = await changeMasterAdminCredentialsClient({
-                        currentPassword: masterCurrentPassword,
-                        newUsername: masterNewUsername.trim() || undefined,
-                        newPassword: masterNewPassword.trim() || undefined,
-                        displayName: masterNewDisplayName.trim() || undefined,
-                      });
-                      if (res.ok) {
-                        setMasterCurrentPassword('');
-                        setMasterNewPassword('');
-                        setMasterEditOpen(false);
-                        onNotify('تم تحديث بيانات الحساب الأساسي المستقل بنجاح.');
-                      } else {
-                        onNotify(res.error);
-                      }
-                    } finally {
-                      setSavingMasterCreds(false);
-                    }
-                  }}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#4CAF50] hover:bg-[#43a047] disabled:opacity-50 px-4 py-2 text-xs font-extrabold text-white cursor-pointer"
-                >
-                  {savingMasterCreds ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Save className="w-3.5 h-3.5" />
-                  )}
-                  <span>حفظ بيانات الحساب الأساسي</span>
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Confirmations */}
       <ConfirmDialog

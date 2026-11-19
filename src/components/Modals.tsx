@@ -50,10 +50,6 @@ import {
   signInWithGoogle,
 } from '../lib/firebase';
 import {
-  loginMasterAdmin,
-  MasterAdminSession,
-} from '../lib/masterAdminAuth';
-import {
   buildPlayerThemeVars,
   formatShortServerName,
   loadStoredPlayerTheme,
@@ -2477,7 +2473,6 @@ interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
   firebaseUser: User | null;
-  masterAdminSession?: MasterAdminSession | null;
   isAdmin: boolean;
   adminRole?: AdminPrivilegeRole | null;
   onLogout: () => Promise<void>;
@@ -2489,7 +2484,6 @@ export function LoginModal({
   isOpen,
   onClose,
   firebaseUser,
-  masterAdminSession = null,
   isAdmin,
   adminRole,
   onLogout,
@@ -2497,7 +2491,7 @@ export function LoginModal({
   onNotify,
 }: LoginModalProps) {
   const [signingIn, setSigningIn] = useState(false);
-  const [mode, setMode] = useState<'login' | 'register' | 'master'>('login');
+  const [mode, setMode] = useState<'login' | 'register'>('login');
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -2506,8 +2500,6 @@ export function LoginModal({
   useDialogAccessibility(isOpen, onClose);
 
   if (!isOpen) return null;
-
-  const isSignedIn = Boolean(firebaseUser || masterAdminSession);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -2518,18 +2510,6 @@ export function LoginModal({
     setAuthError(null);
     setSigningIn(true);
     try {
-      if (mode === 'master') {
-        const res = await loginMasterAdmin(identifier, password);
-        if (!res.ok) {
-          setAuthError(res.error);
-          return;
-        }
-        onNotify?.(`تم تسجيل الدخول بالحساب الأساسي المستقل (${res.session.username})`);
-        setPassword('');
-        onClose();
-        onOpenAdmin();
-        return;
-      }
       if (mode === 'login') {
         const cred = await signInWithEmailPassword(identifier, password);
         onNotify?.(`مرحبًا بك يا ${cred.user.displayName || cred.user.email || 'مستخدم'} في RahaL TV`);
@@ -2572,13 +2552,11 @@ export function LoginModal({
       <div className="relative z-10 w-full max-w-md rounded-3xl bg-[#0c1821] border border-white/10 p-6 shadow-2xl">
         <div className="flex items-center justify-between mb-5">
           <h2 className="font-display text-lg font-extrabold text-white">
-            {isSignedIn
+            {firebaseUser
               ? 'حسابي على RahaL TV'
-              : mode === 'master'
-                ? 'دخول الأدمن الأساسي (بدون قاعدة بيانات)'
-                : mode === 'login'
-                  ? 'تسجيل الدخول إلى RahaL TV'
-                  : 'إنشاء حساب جديد'}
+              : mode === 'login'
+                ? 'تسجيل الدخول إلى RahaL TV'
+                : 'إنشاء حساب جديد'}
           </h2>
           <button
             type="button"
@@ -2590,9 +2568,9 @@ export function LoginModal({
           </button>
         </div>
 
-        {isSignedIn ? (
+        {firebaseUser ? (
           <div className="space-y-4 text-center">
-            {firebaseUser?.photoURL ? (
+            {firebaseUser.photoURL ? (
               <img
                 src={firebaseUser.photoURL}
                 alt={firebaseUser.displayName || 'User'}
@@ -2601,12 +2579,7 @@ export function LoginModal({
               />
             ) : (
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[#D92321]/20 border border-[#D92321] text-xl font-black text-white">
-                {(
-                  firebaseUser?.displayName ||
-                  firebaseUser?.email ||
-                  masterAdminSession?.username ||
-                  'RT'
-                )
+                {(firebaseUser.displayName || firebaseUser.email || 'RT')
                   .slice(0, 2)
                   .toUpperCase()}
               </div>
@@ -2614,17 +2587,9 @@ export function LoginModal({
 
             <div>
               <p className="text-base font-extrabold text-white">
-                أهلاً بك،{' '}
-                {firebaseUser?.displayName ||
-                  masterAdminSession?.displayName ||
-                  'عضو RahaL TV'}
+                أهلاً بك، {firebaseUser.displayName || 'عضو RahaL TV'}
               </p>
-              <p className="text-xs text-[#b7c9ef] mt-1">
-                {firebaseUser?.email ||
-                  (masterAdminSession
-                    ? `${masterAdminSession.username} • حساب أساسي مستقل عن قاعدة البيانات`
-                    : '')}
-              </p>
+              <p className="text-xs text-[#b7c9ef] mt-1">{firebaseUser.email}</p>
               {isAdmin && (
                 <span
                   className={`mt-2 inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-black border ${
@@ -2636,9 +2601,7 @@ export function LoginModal({
                   <ShieldCheck className="w-3.5 h-3.5" />
                   {adminRole === 'moderator'
                     ? 'مشرف — النشر والتعديل والجلب'
-                    : masterAdminSession && !firebaseUser
-                      ? 'أدمن أساسي مستقل — صلاحيات كاملة'
-                      : 'مسؤول — صلاحيات كاملة'}
+                    : 'مسؤول — صلاحيات كاملة'}
                 </span>
               )}
             </div>
@@ -2671,43 +2634,10 @@ export function LoginModal({
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-3.5">
-            <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-[#1a242e] p-1 border border-white/10">
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthError(null);
-                  setMode('login');
-                }}
-                className={`rounded-lg py-2 text-[11px] font-extrabold transition-colors cursor-pointer ${
-                  mode !== 'master'
-                    ? 'bg-[#D92321] text-white'
-                    : 'text-[#b7c9ef] hover:text-white'
-                }`}
-              >
-                حساب الأعضاء / Google
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthError(null);
-                  setMode('master');
-                  if (!identifier) setIdentifier('admin');
-                }}
-                className={`rounded-lg py-2 text-[11px] font-extrabold transition-colors cursor-pointer ${
-                  mode === 'master'
-                    ? 'bg-[#f9c400] text-[#06131c]'
-                    : 'text-[#b7c9ef] hover:text-white'
-                }`}
-              >
-                الأدمن الأساسي المستقل
-              </button>
-            </div>
             <p className="text-xs text-[#b7c9ef] leading-relaxed">
-              {mode === 'master'
-                ? 'دخول مباشر لإدارة المنصة وإضافة أو ربط قاعدة البيانات بدون الحاجة لاتصال Firebase.'
-                : mode === 'login'
-                  ? 'أدخل البريد الإلكتروني (أو اسم المستخدم) وكلمة المرور للدخول إلى حسابك أو لوحة الإدارة.'
-                  : 'أنشئ حسابًا جديدًا بالبريد الإلكتروني وكلمة المرور لحفظ قائمتك ومتابعة طلباتك.'}
+              {mode === 'login'
+                ? 'أدخل البريد الإلكتروني (أو اسم المستخدم) وكلمة المرور للدخول إلى حسابك أو لوحة الإدارة.'
+                : 'أنشئ حسابًا جديدًا بالبريد الإلكتروني وكلمة المرور لحفظ قائمتك ومتابعة طلباتك.'}
             </p>
 
             {mode === 'register' && (
@@ -2774,38 +2704,34 @@ export function LoginModal({
               </span>
             </button>
 
-            {mode !== 'master' && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAuthError(null);
-                    setMode((m) => (m === 'login' ? 'register' : 'login'));
-                  }}
-                  className="w-full text-center text-xs font-bold text-[#b7c9ef] hover:text-white pt-1 cursor-pointer"
-                >
-                  {mode === 'login'
-                    ? 'ليس لديك حساب؟ إنشاء حساب عضو جديد'
-                    : 'لديك حساب بالفعل؟ العودة لتسجيل الدخول'}
-                </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAuthError(null);
+                setMode((m) => (m === 'login' ? 'register' : 'login'));
+              }}
+              className="w-full text-center text-xs font-bold text-[#b7c9ef] hover:text-white pt-1 cursor-pointer"
+            >
+              {mode === 'login'
+                ? 'ليس لديك حساب؟ إنشاء حساب عضو جديد'
+                : 'لديك حساب بالفعل؟ العودة لتسجيل الدخول'}
+            </button>
 
-                <div className="flex items-center gap-3 pt-1">
-                  <div className="h-px flex-1 bg-white/10" />
-                  <span className="text-[11px] font-bold text-[#b7c9ef]/60">أو</span>
-                  <div className="h-px flex-1 bg-white/10" />
-                </div>
+            <div className="flex items-center gap-3 pt-1">
+              <div className="h-px flex-1 bg-white/10" />
+              <span className="text-[11px] font-bold text-[#b7c9ef]/60">أو</span>
+              <div className="h-px flex-1 bg-white/10" />
+            </div>
 
-                <button
-                  type="button"
-                  disabled={signingIn}
-                  onClick={() => void handleGoogleSignIn()}
-                  className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-[#1a242e] hover:bg-[#23313f] border border-white/15 disabled:opacity-60 py-3 text-xs font-extrabold text-white transition-colors cursor-pointer"
-                >
-                  <Globe className="w-4 h-4 text-[#f9c400]" />
-                  <span>تسجيل الدخول بحساب Google</span>
-                </button>
-              </>
-            )}
+            <button
+              type="button"
+              disabled={signingIn}
+              onClick={() => void handleGoogleSignIn()}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-[#1a242e] hover:bg-[#23313f] border border-white/15 disabled:opacity-60 py-3 text-xs font-extrabold text-white transition-colors cursor-pointer"
+            >
+              <Globe className="w-4 h-4 text-[#f9c400]" />
+              <span>تسجيل الدخول بحساب Google</span>
+            </button>
           </form>
         )}
       </div>

@@ -3,7 +3,6 @@ import fs from 'fs';
 import path from 'path';
 import type { Request, Response, NextFunction } from 'express';
 import type { DatabaseServerSecretStatus } from '../src/types/database';
-import { verifyMasterAdminToken } from './masterAdminAuth.ts';
 
 const VAULT_FILE = path.resolve(process.cwd(), '.rahaltv-secrets.json');
 const CONFIG_FILE = path.resolve(process.cwd(), 'firebase-applet-config.json');
@@ -217,15 +216,6 @@ export async function verifyOwnerAdminMiddleware(
       });
     }
     const idToken = match[1].trim();
-    const masterSession = verifyMasterAdminToken(idToken);
-    if (masterSession) {
-      req.adminAuth = {
-        uid: `master:${masterSession.username}`,
-        email: masterSession.username,
-      };
-      return next();
-    }
-
     const apiKey = getDefaultWebApiKey();
     if (!apiKey) {
       return res.status(500).json({

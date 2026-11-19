@@ -63,13 +63,6 @@ import {
   subscribeActiveDatabaseChange,
 } from './lib/dbConnectionManager';
 import {
-  loadStoredMasterAdminSession,
-  logoutMasterAdmin,
-  MasterAdminSession,
-  subscribeMasterAdminSession,
-  validateMasterAdminSession,
-} from './lib/masterAdminAuth';
-import {
   classifyFirestoreConnectionError,
   FirestoreConnectionStatus,
   getActiveAuth,
@@ -166,26 +159,13 @@ export default function App() {
   const clientCapabilities = useMemo(() => detectClientCapabilities(), []);
   const [compatBannerDismissed, setCompatBannerDismissed] = useState(false);
 
-  // Firebase Auth, Master Admin & RBAC State
+  // Firebase Auth & RBAC State
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [adminRole, setAdminRole] = useState<AdminPrivilegeRole | null>(null);
-  const [masterAdminSession, setMasterAdminSession] = useState<MasterAdminSession | null>(() =>
-    loadStoredMasterAdminSession()
-  );
-  const effectiveAdminRole: AdminPrivilegeRole | null =
-    adminRole || (masterAdminSession ? 'owner' : null);
+  const effectiveAdminRole = adminRole;
   const canAccessAdmin = effectiveAdminRole !== null;
   const isOwnerAdmin = effectiveAdminRole === 'owner';
-
-  useEffect(() => {
-    const syncLocal = () => setMasterAdminSession(loadStoredMasterAdminSession());
-    const unsub = subscribeMasterAdminSession(syncLocal);
-    void validateMasterAdminSession().then((valid) => {
-      setMasterAdminSession(valid);
-    });
-    return unsub;
-  }, []);
 
   // Live Firestore Data State
   const [firestoreCatalog, setFirestoreCatalog] = useState<MediaItem[]>([]);
@@ -876,8 +856,7 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    await logoutMasterAdmin();
-    await signOutFirebase().catch(() => undefined);
+    await signOutFirebase();
     showToast('تم تسجيل الخروج بنجاح');
   };
 
@@ -948,10 +927,9 @@ export default function App() {
         >
           <AdminDashboardView
             user={firebaseUser}
-            masterAdminSession={masterAdminSession}
             isAdmin={canAccessAdmin}
             adminRole={effectiveAdminRole}
-            authLoading={authLoading && !masterAdminSession}
+            authLoading={authLoading}
             catalog={activeCatalog}
             isFirestoreSeeded={isFirestoreSeeded}
             dbConnectionStatus={dbConnectionStatus}
@@ -1027,7 +1005,6 @@ export default function App() {
           isOpen={loginOpen}
           onClose={() => setLoginOpen(false)}
           firebaseUser={firebaseUser}
-          masterAdminSession={masterAdminSession}
           isAdmin={canAccessAdmin}
           adminRole={effectiveAdminRole}
           onLogout={handleLogout}
@@ -1094,7 +1071,7 @@ export default function App() {
         onOpenAdmin={() => openAdminPage()}
         onSelectMedia={handleSelectMedia}
         watchlistCount={watchlistItems.length}
-        username={firebaseUser?.displayName || masterAdminSession?.displayName || null}
+        username={firebaseUser?.displayName || firebaseUser?.email || null}
         userPhoto={firebaseUser?.photoURL || null}
         isAdmin={canAccessAdmin}
         activeCategory={filters.category}
@@ -1203,7 +1180,6 @@ export default function App() {
         isOpen={loginOpen}
         onClose={() => setLoginOpen(false)}
         firebaseUser={firebaseUser}
-        masterAdminSession={masterAdminSession}
         isAdmin={canAccessAdmin}
         adminRole={effectiveAdminRole}
         onLogout={handleLogout}

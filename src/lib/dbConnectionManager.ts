@@ -17,7 +17,6 @@ import {
 } from 'firebase/firestore';
 import defaultFirebaseConfig from '../../firebase-applet-config.json';
 import { resolveApiEndpoint, shouldSkipBackendApiCalls } from './clientScraper';
-import { getMasterAdminToken, loadStoredMasterAdminSession } from './masterAdminAuth';
 import {
   DatabaseBackupBundle,
   DatabaseConnectionHealthStatus,
@@ -35,10 +34,8 @@ import {
 } from '../types/database';
 
 export const BUILTIN_DEFAULT_CONNECTION_ID = 'builtin-default-firestore';
-export const PRESET_RAHALTV_CONNECTION_ID = 'preset-rahaltv-firestore';
 const STORAGE_DB_REGISTRY = 'rahaltv_db_connections_v1';
 const STORAGE_DB_LOGS = 'rahaltv_db_logs_v1';
-const STORAGE_DISMISSED_PRESETS = 'rahaltv_db_dismissed_presets_v1';
 const MAX_DB_LOGS = 120;
 
 const SECRET_KEY_PATTERN =
@@ -132,64 +129,6 @@ export function buildDefaultBuiltInProfile(): DatabaseConnectionProfile {
   };
 }
 
-export function buildRahaltvPresetProfile(): DatabaseConnectionProfile {
-  const ts = '2026-01-01T00:00:00.000Z';
-  return {
-    id: PRESET_RAHALTV_CONNECTION_ID,
-    name: 'قاعدة بياناتك الجديدة (rahaltv)',
-    description:
-      'مشروع Firebase (rahaltv) — انشر قواعد firestore.rules في Firebase Console ثم اضغط اختبار الاتصال والتفعيل',
-    providerType: 'firebase_firestore',
-    isBuiltIn: false,
-    firebaseConfig: {
-      projectId: 'rahaltv',
-      apiKey: 'AIzaSyCkaiWGZZ06-FswbvNH8N1ysgkiIjeknVQ',
-      authDomain: 'rahaltv.firebaseapp.com',
-      firestoreDatabaseId: '(default)',
-      databaseURL: 'https://rahaltv-default-rtdb.firebaseio.com',
-      storageBucket: 'rahaltv.firebasestorage.app',
-      messagingSenderId: '258640370330',
-      appId: '1:258640370330:web:563e881faddcccc61add23',
-      measurementId: 'G-CGLPSM3C6Z',
-    },
-    lastStatus: 'untested',
-    createdAt: ts,
-    updatedAt: ts,
-  };
-}
-
-let inMemoryDismissedPresets = new Set<string>();
-
-function loadDismissedPresetIds(): Set<string> {
-  if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
-    return inMemoryDismissedPresets;
-  }
-  try {
-    const raw = localStorage.getItem(STORAGE_DISMISSED_PRESETS);
-    if (!raw) return inMemoryDismissedPresets;
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      inMemoryDismissedPresets = new Set(parsed.map((x) => String(x)));
-    }
-  } catch {
-    // Ignore storage read error
-  }
-  return inMemoryDismissedPresets;
-}
-
-function markPresetDismissed(id: string): void {
-  const next = loadDismissedPresetIds();
-  next.add(id);
-  inMemoryDismissedPresets = next;
-  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
-    try {
-      localStorage.setItem(STORAGE_DISMISSED_PRESETS, JSON.stringify(Array.from(next)));
-    } catch {
-      // Ignore
-    }
-  }
-}
-
 function normalizeFirebaseFields(
   raw?: Partial<FirebaseConnectionFields>
 ): FirebaseConnectionFields {
@@ -262,11 +201,6 @@ export function normalizeConnectionProfile(
 
 function getDefaultRegistryState(): DatabaseConnectionRegistryState {
   const builtIn = buildDefaultBuiltInProfile();
-  const dismissed = loadDismissedPresetIds();
-  const profiles = [builtIn];
-  if (!dismissed.has(PRESET_RAHALTV_CONNECTION_ID)) {
-    profiles.push(buildRahaltvPresetProfile());
-  }
   return {
     version: 1,
     activeConnectionId: builtIn.id,
@@ -274,7 +208,7 @@ function getDefaultRegistryState(): DatabaseConnectionRegistryState {
     defaultConnectionId: builtIn.id,
     lastGoodConnectionId: builtIn.id,
     autoRetryEnabled: true,
-    profiles,
+    profiles: [builtIn],
   };
 }
 
@@ -297,18 +231,34 @@ export function loadDatabaseRegistry(): DatabaseConnectionRegistryState {
     const parsed = JSON.parse(raw) as Partial<DatabaseConnectionRegistryState>;
     const builtIn = buildDefaultBuiltInProfile();
     const rawProfiles = Array.isArray(parsed.profiles) ? parsed.profiles : [];
-    const normalizedProfiles = rawProfiles.map((p) => normalizeConnectionProfile(p));
+    const normalizedProfiles = rawProfiles.map((p) => {
+      const norm = normalizeConnectionProfile(p);
+      if (norm.id !== BUILTIN_DEFAULT_CONNECTION_ID) return norm;
+      const sameTarget =
+        norm.firebaseConfig.projectId === builtIn.firebaseConfig.projectId &&
+        norm.firebaseConfig.firestoreDatabaseId === builtIn.firebaseConfig.firestoreDatabaseId &&
+        norm.firebaseConfig.apiKey === builtIn.firebaseConfig.apiKey;
+      return {
+        ...norm,
+        name: builtIn.name,
+        description: builtIn.description,
+        providerType: builtIn.providerType,
+        isBuiltIn: true,
+        firebaseConfig: builtIn.firebaseConfig,
+        ...(sameTarget
+          ? {}
+          : {
+              lastStatus: 'untested' as const,
+              lastStatusMessage: undefined,
+              lastLatencyMs: undefined,
+              lastTestedAt: undefined,
+            }),
+      };
+    });
 
     // Always guarantee built-in fallback exists and stays protected
     if (!normalizedProfiles.some((p) => p.id === BUILTIN_DEFAULT_CONNECTION_ID)) {
       normalizedProfiles.unshift(builtIn);
-    }
-    const dismissed = loadDismissedPresetIds();
-    if (
-      !dismissed.has(PRESET_RAHALTV_CONNECTION_ID) &&
-      !normalizedProfiles.some((p) => p.id === PRESET_RAHALTV_CONNECTION_ID)
-    ) {
-      normalizedProfiles.push(buildRahaltvPresetProfile());
     }
 
     const idSet = new Set(normalizedProfiles.map((p) => p.id));
@@ -1325,10 +1275,6 @@ export function deleteConnectionProfile(
     };
   }
 
-  if (connectionId === PRESET_RAHALTV_CONNECTION_ID) {
-    markPresetDismissed(connectionId);
-  }
-
   const nextReg = saveDatabaseRegistry({
     ...reg,
     previousConnectionId:
@@ -1782,12 +1728,7 @@ async function getAuthHeaders(user: User | null): Promise<Record<string, string>
     const token = await user.getIdToken().catch(() => '');
     if (token) {
       headers.Authorization = `Bearer ${token}`;
-      return headers;
     }
-  }
-  const masterToken = getMasterAdminToken();
-  if (masterToken && !masterToken.startsWith('local:')) {
-    headers.Authorization = `Bearer ${masterToken}`;
   }
   return headers;
 }
@@ -1800,17 +1741,8 @@ export async function fetchServerSecretStatuses(
   statuses: Record<string, DatabaseServerSecretStatus>;
   note?: string;
 }> {
-  const masterSession = loadStoredMasterAdminSession();
-  const hasMasterServerToken = Boolean(getMasterAdminToken() && !getMasterAdminToken().startsWith('local:'));
-  if (!user && !hasMasterServerToken) {
-    return {
-      available: false,
-      source: 'none',
-      statuses: {},
-      note: masterSession?.source === 'local_offline'
-        ? 'أنت في وضع الطوارئ المحلي بدون خادم — مخزن الأسرار يتطلب خادم Node.js أو Cloudflare Worker.'
-        : 'يلزم تسجيل الدخول.',
-    };
+  if (!user) {
+    return { available: false, source: 'none', statuses: {}, note: 'يلزم تسجيل الدخول.' };
   }
   if (shouldSkipBackendApiCalls()) {
     return {
@@ -1865,9 +1797,7 @@ export async function saveServerSecrets(
   },
   user: User | null
 ): Promise<{ ok: boolean; status?: DatabaseServerSecretStatus; error?: string }> {
-  const masterSession = loadStoredMasterAdminSession();
-  const hasMasterServerToken = Boolean(getMasterAdminToken() && !getMasterAdminToken().startsWith('local:'));
-  if (!user && !hasMasterServerToken) {
+  if (!user) {
     return { ok: false, error: 'يجب تسجيل الدخول كمسؤول مالك لحفظ الأسرار على السيرفر.' };
   }
   if (shouldSkipBackendApiCalls()) {
@@ -1898,8 +1828,8 @@ export async function saveServerSecrets(
       connectionId,
       connectionName: prof?.name || connectionId,
       status: 'success',
-      actorUid: user?.uid || (masterSession ? `master:${masterSession.username}` : 'master-admin'),
-      actorName: user?.displayName || user?.email || masterSession?.displayName || 'Owner',
+      actorUid: user.uid,
+      actorName: user.displayName || user.email || 'Owner',
       message: 'تم تحديث الأسرار السرية في مخزن السيرفر المشفر بنجاح (بدون عرضها في المتصفح).',
     });
     return { ok: true, status: data.status };
@@ -1915,8 +1845,7 @@ export async function deleteServerSecrets(
   connectionId: string,
   user: User | null
 ): Promise<{ ok: boolean; error?: string }> {
-  const hasMasterServerToken = Boolean(getMasterAdminToken() && !getMasterAdminToken().startsWith('local:'));
-  if ((!user && !hasMasterServerToken) || shouldSkipBackendApiCalls()) return { ok: false };
+  if (!user || shouldSkipBackendApiCalls()) return { ok: false };
   try {
     const resp = await fetch(resolveApiEndpoint(`/api/db/secrets/${encodeURIComponent(connectionId)}`), {
       method: 'DELETE',
