@@ -241,7 +241,23 @@
   color: var(--rtv-admin-text, #e8edf5);
 }
 
-.rtv-admin-root[data-admin-theme] .rtv-admin-tone-target {
+.rtv-admin-viewport {
+  height: 100vh;
+  height: 100dvh;
+}
+
+.rtv-admin-main-scroll {
+  overflow-anchor: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+.rtv-admin-sidebar-scroll {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+.rtv-admin-root[data-admin-theme].rtv-admin-tone-target {
   filter: contrast(var(--rtv-admin-contrast, 100%)) brightness(var(--rtv-admin-brightness, 100%));
 }
 
@@ -450,6 +466,7 @@
     animation: none !important;
   }
   .rtv-hero-cinematic-in,
+  .rtv-hero-contain-in,
   .rtv-hero-content-in {
     animation: none !important;
   }
@@ -628,6 +645,19 @@
   animation: rtv-hero-cinematic-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+@keyframes rtv-hero-contain-in {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.rtv-hero-contain-in {
+  animation: rtv-hero-contain-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 @keyframes rtv-hero-content-in {
   from {
     opacity: 0;
@@ -761,6 +791,7 @@ html[data-rtv-low-spec="true"] [class*="backdrop-blur"] {
 html[data-rtv-low-spec="true"] .rtv-fade-in,
 html[data-rtv-low-spec="true"] .moov-server-enter,
 html[data-rtv-low-spec="true"] .rtv-hero-cinematic-in,
+html[data-rtv-low-spec="true"] .rtv-hero-contain-in,
 html[data-rtv-low-spec="true"] .rtv-hero-content-in {
   animation: none !important;
 }

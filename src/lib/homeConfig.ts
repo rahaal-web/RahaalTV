@@ -1,4 +1,5 @@
 import {
+  HeroImageFitMode,
   HeroInfoPosition,
   HeroTextAlign,
   HomeHeroMode,
@@ -58,6 +59,9 @@ export const DEFAULT_HOME_CONFIG: HomeLayoutConfig = {
   heroPauseOnHover: true,
   heroMaxSlides: 8,
   heroSlideIds: [],
+  heroImageFit: 'contain',
+  heroBackdropBlurPx: 24,
+  heroBackdropDimPct: 45,
   heroShowDescription: true,
   heroTitleSizePx: 26,
   heroDescriptionSizePx: 13,
@@ -84,6 +88,7 @@ export const DEFAULT_HOME_CONFIG: HomeLayoutConfig = {
 };
 
 const VALID_HERO_MODES: HomeHeroMode[] = ['auto', 'manual', 'brand'];
+const VALID_HERO_IMAGE_FITS: HeroImageFitMode[] = ['contain', 'cover', 'contain_blur'];
 const VALID_HERO_ALIGNS: HeroTextAlign[] = ['right', 'center', 'left'];
 const VALID_HERO_POSITIONS: HeroInfoPosition[] = [
   'bottom-right',
@@ -222,6 +227,22 @@ export function normalizeHomeConfig(
     ? Math.min(860, Math.max(320, Math.round(maxWidthNum)))
     : DEFAULT_HOME_CONFIG.heroTextMaxWidthPx!;
 
+  const heroImageFit: HeroImageFitMode = VALID_HERO_IMAGE_FITS.includes(
+    raw.heroImageFit as HeroImageFitMode
+  )
+    ? (raw.heroImageFit as HeroImageFitMode)
+    : DEFAULT_HOME_CONFIG.heroImageFit!;
+
+  const blurNum = Number(raw.heroBackdropBlurPx);
+  const heroBackdropBlurPx = Number.isFinite(blurNum)
+    ? Math.min(48, Math.max(0, Math.round(blurNum)))
+    : DEFAULT_HOME_CONFIG.heroBackdropBlurPx!;
+
+  const dimNum = Number(raw.heroBackdropDimPct);
+  const heroBackdropDimPct = Number.isFinite(dimNum)
+    ? Math.min(85, Math.max(0, Math.round(dimNum)))
+    : DEFAULT_HOME_CONFIG.heroBackdropDimPct!;
+
   return {
     showHero: raw.showHero ?? true,
     heroMode,
@@ -247,6 +268,9 @@ export function normalizeHomeConfig(
     heroPauseOnHover: raw.heroPauseOnHover ?? true,
     heroMaxSlides,
     heroSlideIds,
+    heroImageFit,
+    heroBackdropBlurPx,
+    heroBackdropDimPct,
     heroShowDescription: raw.heroShowDescription ?? true,
     heroTitleSizePx,
     heroDescriptionSizePx,

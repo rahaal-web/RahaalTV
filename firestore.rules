@@ -215,7 +215,8 @@ service cloud.firestore {
           'heroMaxSlides', 'heroSlideIds',
           'heroShowDescription', 'heroTitleSizePx', 'heroDescriptionSizePx',
           'heroDescriptionLines', 'heroTextAlign', 'heroInfoPosition',
-          'heroTextMaxWidthPx', 'heroShowBadge', 'heroShowRating',
+          'heroTextMaxWidthPx', 'heroImageFit', 'heroBackdropBlurPx', 'heroBackdropDimPct',
+          'heroShowBadge', 'heroShowRating',
           'heroShowYear', 'heroShowDuration', 'heroShowGenres',
           'heroShowQuality', 'heroShowWatchBtn', 'heroShowDetailsBtn',
           'heroShowWatchlistBtn',
@@ -245,6 +246,9 @@ service cloud.firestore {
         && (!('heroTextAlign' in cfg) || cfg.heroTextAlign in ['right', 'center', 'left'])
         && (!('heroInfoPosition' in cfg) || cfg.heroInfoPosition in ['bottom-right', 'bottom-center', 'bottom-left', 'middle-right', 'middle-center', 'middle-left'])
         && (!('heroTextMaxWidthPx' in cfg) || ((cfg.heroTextMaxWidthPx is int || cfg.heroTextMaxWidthPx is float) && cfg.heroTextMaxWidthPx >= 320 && cfg.heroTextMaxWidthPx <= 860))
+        && (!('heroImageFit' in cfg) || cfg.heroImageFit in ['contain', 'cover', 'contain_blur'])
+        && (!('heroBackdropBlurPx' in cfg) || ((cfg.heroBackdropBlurPx is int || cfg.heroBackdropBlurPx is float) && cfg.heroBackdropBlurPx >= 0 && cfg.heroBackdropBlurPx <= 48))
+        && (!('heroBackdropDimPct' in cfg) || ((cfg.heroBackdropDimPct is int || cfg.heroBackdropDimPct is float) && cfg.heroBackdropDimPct >= 0 && cfg.heroBackdropDimPct <= 85))
         && (!('heroShowBadge' in cfg) || cfg.heroShowBadge is bool)
         && (!('heroShowRating' in cfg) || cfg.heroShowRating is bool)
         && (!('heroShowYear' in cfg) || cfg.heroShowYear is bool)

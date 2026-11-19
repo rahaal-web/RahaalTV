@@ -1,4 +1,4 @@
-import { CSSProperties, FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CSSProperties, FormEvent, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -840,6 +840,27 @@ export function AdminDashboardView({
     }
     return isOwner ? 'overview' : 'catalog';
   });
+
+  const mainScrollRef = useRef<HTMLElement | null>(null);
+  const prevActiveTabRef = useRef<AdminTab>(activeTab);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.scrollY !== 0) {
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    if (prevActiveTabRef.current !== activeTab) {
+      prevActiveTabRef.current = activeTab;
+      if (mainScrollRef.current) {
+        mainScrollRef.current.scrollTop = 0;
+      }
+      if (typeof window !== 'undefined' && window.scrollY !== 0) {
+        window.scrollTo({ top: 0, behavior: 'auto' });
+      }
+    }
+  }, [activeTab]);
 
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
@@ -4125,10 +4146,10 @@ export function AdminDashboardView({
       data-rtv-scope="admin"
       data-admin-theme={adminAppearance.colorMode}
       style={adminCssVars}
-      className="rtv-admin-root min-h-screen bg-[#06131c] text-white flex flex-col"
+      className="rtv-admin-root rtv-admin-tone-target rtv-admin-viewport w-full overflow-hidden bg-[#06131c] text-white flex flex-col"
     >
-      {/* Dedicated Standalone Admin Top Bar */}
-      <header className="rtv-admin-tone-target sticky top-0 z-40 border-b border-white/10 bg-[#0c1821]/95 backdrop-blur-md">
+      {/* Dedicated Standalone Admin Top Bar (Pinned at Top) */}
+      <header className="shrink-0 z-40 border-b border-white/10 bg-[#0c1821]/95 backdrop-blur-md">
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-3">
           <div className="flex items-center gap-3 min-w-0">
             <button
@@ -4298,7 +4319,7 @@ export function AdminDashboardView({
             className="fixed inset-0 bg-black/75 backdrop-blur-sm"
             onClick={() => setMobileDrawerOpen(false)}
           />
-          <aside className="rtv-admin-sidebar-shell relative z-10 w-80 max-w-[85vw] h-full bg-[#0c1821] border-l border-white/10 p-4 overflow-y-auto space-y-4 shadow-2xl">
+          <aside className="rtv-admin-sidebar-shell rtv-admin-sidebar-scroll relative z-10 w-80 max-w-[85vw] h-full bg-[#0c1821] border-l border-white/10 p-4 overflow-y-auto space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
               <span className="font-display text-sm font-extrabold text-white">أقسام RahaL TV</span>
               <button
@@ -4315,20 +4336,25 @@ export function AdminDashboardView({
         </div>
       )}
 
-      {/* Main Split Workspace */}
-      <div className="mx-auto w-full max-w-[1600px] flex-1 px-4 sm:px-6 py-6">
-        <div className="rtv-admin-stack flex flex-col lg:flex-row gap-6 items-start">
-          {/* Desktop 9-Group Collapsible Sidebar */}
-          <aside
-            className={`rtv-admin-sidebar-shell rtv-admin-tone-target hidden lg:block shrink-0 rounded-3xl bg-[#0c1821] border border-white/[0.08] p-3 lg:sticky lg:top-20 max-h-[calc(100vh-6rem)] overflow-y-auto transition-all ${
-              workspacePrefs.sidebarCollapsed ? 'w-24' : 'rtv-admin-sidebar-expanded'
-            }`}
-          >
-            {renderSidebarNavContent(workspacePrefs.sidebarCollapsed)}
+      {/* Main Split App-Shell Workspace (Independent Sidebar Scroll + Independent Main Scroll) */}
+      <div className="flex-1 min-h-0 w-full overflow-hidden">
+        <div className="mx-auto h-full w-full max-w-[1600px] px-3 sm:px-6 flex flex-col lg:flex-row gap-4 lg:gap-6 items-stretch">
+          {/* Desktop 9-Group Collapsible Sidebar (Independent Scroll) */}
+          <aside className="hidden lg:flex lg:flex-col shrink-0 h-full py-4">
+            <div
+              className={`rtv-admin-sidebar-shell rtv-admin-sidebar-scroll flex-1 min-h-0 rounded-3xl bg-[#0c1821] border border-white/[0.08] p-3 overflow-y-auto overflow-x-hidden transition-all ${
+                workspacePrefs.sidebarCollapsed ? 'w-24' : 'rtv-admin-sidebar-expanded'
+              }`}
+            >
+              {renderSidebarNavContent(workspacePrefs.sidebarCollapsed)}
+            </div>
           </aside>
 
-          {/* Active Tab Workspace */}
-          <main className="rtv-admin-tone-target flex-1 min-w-0 w-full space-y-6">
+          {/* Active Tab Workspace (Independent Scroll, Always Resets to Top on Tab Switch) */}
+          <main
+            ref={mainScrollRef}
+            className="rtv-admin-main-scroll flex-1 min-w-0 min-h-0 h-full overflow-y-auto overflow-x-hidden py-4 sm:py-6 space-y-6"
+          >
             {dbConnectionStatus && dbConnectionStatus !== 'connected' && (() => {
               const activeFirebaseConfig = getActiveFirebaseConfig();
               const dbReg = loadDatabaseRegistry();
@@ -4486,6 +4512,7 @@ export function AdminDashboardView({
                 </button>
               </div>
             )}
+            <div key={activeTab} className="space-y-6">
             <Suspense
               fallback={
                 <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-12 flex flex-col items-center justify-center gap-3 text-xs font-bold text-[#b7c9ef]">
@@ -6766,6 +6793,7 @@ export function AdminDashboardView({
               </form>
             )}
             </Suspense>
+            </div>
           </main>
         </div>
       </div>

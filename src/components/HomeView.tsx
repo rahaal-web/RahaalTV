@@ -481,7 +481,7 @@ export function HomeView({
         </div>
       )}
 
-      {/* 1. Cinematic Hero Section (High-Res 16:9 Backdrop + Right Info Panel + 8 Bottom Square Thumbnails) */}
+      {/* 1. Cinematic Hero Section (Uncropped Contain Default / Ambient Blur + Contain / Cover + Controls) */}
       {homeConfig.showHero && (() => {
         const backdropInfo = getBackdropInfo(activeHero);
         const heroBgSrc = backdropInfo.hasDedicatedBackdrop
@@ -491,10 +491,15 @@ export function HomeView({
           ? buildBackdropSrcSet(backdropInfo.url)
           : undefined;
         const ambientPoster = getPosterUrl(activeHero);
+        const imageFitMode = homeConfig.heroImageFit || 'contain';
+        const blurPx = homeConfig.heroBackdropBlurPx ?? 24;
+        const dimPct = homeConfig.heroBackdropDimPct ?? 45;
+        const isCoverMode = imageFitMode === 'cover';
+        const isAmbientBlurMode = imageFitMode === 'contain_blur';
 
         return (
           <section
-            className="relative overflow-hidden bg-[#0f0f0f]"
+            className="relative overflow-hidden bg-[#0a0b0e]"
             onMouseEnter={() => setHeroHovered(true)}
             onMouseLeave={() => setHeroHovered(false)}
             onTouchStart={(e) => {
@@ -520,13 +525,34 @@ export function HomeView({
             }}
           >
             <div
-              className={`relative min-h-[430px] sm:min-h-[470px] max-md:landscape:min-h-[330px] md:min-h-[600px] lg:min-h-[660px] flex flex-col ${
+              className={`relative min-h-[430px] sm:min-h-[470px] max-md:landscape:min-h-[330px] md:min-h-[560px] lg:min-h-[620px] xl:min-h-[660px] flex flex-col ${
                 (homeConfig.heroInfoPosition || 'bottom-right').startsWith('middle-')
                   ? 'md:justify-center justify-end'
                   : 'justify-end'
               }`}
             >
-              {/* Background Visual Layer */}
+              {/* Layer 1: Optional Ambient Scaled + Blurred Background Copy (when heroImageFit === 'contain_blur') */}
+              {isAmbientBlurMode && (
+                <>
+                  <img
+                    key={`hero-blur-bg-${activeHero.id}`}
+                    src={heroBgSrc}
+                    alt=""
+                    aria-hidden="true"
+                    referrerPolicy="no-referrer"
+                    onError={handleBackdropError}
+                    style={{ filter: `blur(${blurPx}px)` }}
+                    className="pointer-events-none select-none absolute inset-0 h-full w-full object-cover object-center scale-[1.14]"
+                  />
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 bg-[#07080c] transition-opacity duration-300"
+                    style={{ opacity: Math.min(0.85, Math.max(0, dimPct / 100)) }}
+                  />
+                </>
+              )}
+
+              {/* Layer 2: Foreground Hero Image (Contain Default / Cover / Sharp Contain over Blur) */}
               <img
                 key={activeHero.id}
                 src={heroBgSrc}
@@ -536,11 +562,15 @@ export function HomeView({
                 fetchPriority="high"
                 referrerPolicy="no-referrer"
                 onError={handleBackdropError}
-                className="rtv-hero-cinematic-in absolute inset-0 h-full w-full object-cover object-center transition-opacity duration-700"
+                className={
+                  isCoverMode
+                    ? 'rtv-hero-cinematic-in absolute inset-0 h-full w-full object-cover object-center transition-opacity duration-700'
+                    : 'rtv-hero-contain-in pointer-events-none absolute inset-0 z-[1] h-full w-full object-contain object-center transition-opacity duration-500'
+                }
               />
 
-              {/* Subtle blurred poster accent overlay only when item lacks a genuine 16:9 backdrop */}
-              {!backdropInfo.hasDedicatedBackdrop && (
+              {/* Subtle blurred poster accent overlay in Cover mode when item lacks a dedicated backdrop */}
+              {isCoverMode && !backdropInfo.hasDedicatedBackdrop && (
                 <img
                   src={ambientPoster}
                   alt=""
@@ -552,13 +582,13 @@ export function HomeView({
               )}
 
               {/* Mobile Cinematic Edge Vignette & Clean Bottom Scrim (< 768px) */}
-              <div className="md:hidden pointer-events-none absolute inset-0 bg-gradient-to-b from-[#0f0f0f]/55 via-transparent via-28% to-transparent" />
-              <div className="md:hidden pointer-events-none absolute inset-0 bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/80 via-42% to-transparent" />
+              <div className="md:hidden pointer-events-none absolute inset-0 z-[2] bg-gradient-to-b from-[#0f0f0f]/55 via-transparent via-28% to-transparent" />
+              <div className="md:hidden pointer-events-none absolute inset-0 z-[2] bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/80 via-42% to-transparent" />
 
-              {/* Desktop & Tablet Original Edge Scrims (>= 768px — Preserved Untouched) */}
-              <div className="hidden md:block absolute inset-0 bg-gradient-to-b from-black/25 via-transparent via-20% to-transparent" />
-              <div className="hidden md:block absolute inset-0 bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/20 via-30% to-transparent" />
-              <div className="hidden md:block absolute inset-0 bg-gradient-to-l from-[#0f0f0f]/65 via-[#0f0f0f]/15 via-38% to-transparent" />
+              {/* Desktop & Tablet Edge Scrims (>= 768px) */}
+              <div className="hidden md:block pointer-events-none absolute inset-0 z-[2] bg-gradient-to-b from-black/25 via-transparent via-20% to-transparent" />
+              <div className="hidden md:block pointer-events-none absolute inset-0 z-[2] bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/25 via-30% to-transparent" />
+              <div className="hidden md:block pointer-events-none absolute inset-0 z-[2] bg-gradient-to-l from-[#0f0f0f]/65 via-[#0f0f0f]/15 via-38% to-transparent" />
 
               {/* Mobile Cinematic Hero Foreground (< 768px): Minimalist Netflix/Shahid Style */}
               <div

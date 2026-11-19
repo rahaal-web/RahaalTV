@@ -2,6 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
   Eye,
+  Image as ImageIcon,
+  Layers,
+  Maximize2,
+  Minimize2,
   Monitor,
   Play,
   RotateCcw,
@@ -11,6 +15,7 @@ import {
   Star,
 } from 'lucide-react';
 import {
+  HeroImageFitMode,
   HeroInfoPosition,
   HeroTextAlign,
   HomeLayoutConfig,
@@ -39,6 +44,30 @@ const POSITION_OPTIONS: Array<{ id: HeroInfoPosition; label: string }> = [
   { id: 'bottom-right', label: 'أسفل يمين' },
   { id: 'bottom-center', label: 'أسفل منتصف' },
   { id: 'bottom-left', label: 'أسفل يسار' },
+];
+
+const IMAGE_FIT_OPTIONS: Array<{
+  id: HeroImageFitMode;
+  label: string;
+  badge?: string;
+  desc: string;
+}> = [
+  {
+    id: 'contain',
+    label: 'إظهار الصورة كاملة (Contain)',
+    badge: 'الافتراضي',
+    desc: 'يعرض الصورة الأصلية كاملة مع الحفاظ على نسبة الأبعاد دون أي قص.',
+  },
+  {
+    id: 'contain_blur',
+    label: 'خلفية مموهة مكبرة + الصورة كاملة',
+    desc: 'يملأ الفراغات بنسخة مكبرة ومموهة مع طبقة تعتيم ويُظهر الصورة الأصلية كاملة وواضحة.',
+  },
+  {
+    id: 'cover',
+    label: 'ملء مساحة السلايدر (Cover)',
+    desc: 'يمدد الصورة لتغطية كامل المساحة المتاحة مع قص الحواف عند الحاجة.',
+  },
 ];
 
 const ELEMENT_TOGGLES: Array<{
@@ -116,6 +145,9 @@ export function SliderCustomizationPanel({
   const handleResetSliderOnly = async () => {
     const resetConfig = normalizeHomeConfig({
       ...draft,
+      heroImageFit: DEFAULT_HOME_CONFIG.heroImageFit,
+      heroBackdropBlurPx: DEFAULT_HOME_CONFIG.heroBackdropBlurPx,
+      heroBackdropDimPct: DEFAULT_HOME_CONFIG.heroBackdropDimPct,
       heroShowDescription: DEFAULT_HOME_CONFIG.heroShowDescription,
       heroTitleSizePx: DEFAULT_HOME_CONFIG.heroTitleSizePx,
       heroDescriptionSizePx: DEFAULT_HOME_CONFIG.heroDescriptionSizePx,
@@ -271,18 +303,46 @@ export function SliderCustomizationPanel({
 
         {/* Isolated Cinema Site Preview */}
         <div
-          className={`rtv-site-preview mx-auto rounded-2xl overflow-hidden border border-white/15 bg-[#0f0f0f] relative transition-all ${
-            previewDevice === 'mobile' ? 'max-w-[360px] h-[400px]' : 'w-full h-[360px]'
+          className={`rtv-site-preview mx-auto rounded-2xl overflow-hidden border border-white/15 bg-[#0a0b0e] relative transition-all ${
+            previewDevice === 'mobile' ? 'max-w-[360px] h-[420px]' : 'w-full h-[380px]'
           }`}
         >
-          {activeSlide && (
-            <img
-              src={activeSlide.backdrop || activeSlide.poster}
-              alt={activeSlide.title}
-              className="absolute inset-0 h-full w-full object-cover object-center opacity-75"
-            />
-          )}
-          <div className="absolute inset-0 bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/55 to-black/25" />
+          {activeSlide && (() => {
+            const fitMode = draft.heroImageFit || 'contain';
+            const previewImg = activeSlide.backdrop || activeSlide.poster;
+            const blurPx = draft.heroBackdropBlurPx ?? 24;
+            const dimOpacity = Math.min(0.85, Math.max(0, (draft.heroBackdropDimPct ?? 45) / 100));
+            return (
+              <>
+                {fitMode === 'contain_blur' && (
+                  <>
+                    <img
+                      src={previewImg}
+                      alt=""
+                      aria-hidden="true"
+                      style={{ filter: `blur(${blurPx}px)` }}
+                      className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center scale-[1.14]"
+                    />
+                    <div
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-0 bg-[#07080c]"
+                      style={{ opacity: dimOpacity }}
+                    />
+                  </>
+                )}
+                <img
+                  src={previewImg}
+                  alt={activeSlide.title}
+                  className={
+                    fitMode === 'cover'
+                      ? 'absolute inset-0 h-full w-full object-cover object-center opacity-80'
+                      : 'pointer-events-none absolute inset-0 z-[1] h-full w-full object-contain object-center'
+                  }
+                />
+              </>
+            );
+          })()}
+          <div className="pointer-events-none absolute inset-0 z-[2] bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/45 to-black/20" />
           <div
             className={`relative z-10 h-full w-full p-6 flex flex-col ${posVerticalClass} ${posHorizontalClass}`}
           >
@@ -422,13 +482,117 @@ export function SliderCustomizationPanel({
         </div>
       </div>
 
-      {/* Section 1: Description Visibility & Typography */}
+      {/* Section 0: Hero Image Display Mode & Ambient Backdrop */}
+      <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
+          <div className="flex items-center gap-2">
+            <ImageIcon className="w-5 h-5 rtv-admin-accent-text" />
+            <h3 className="font-display text-base font-extrabold text-white">
+              1. طريقة عرض صورة السلايدر والخلفية (بدون قص)
+            </h3>
+          </div>
+          <span className="text-[11px] font-bold text-[#b7c9ef]">
+            الوضع الافتراضي يحفظ كامل الصورة دون قص أو تشويه
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+          {IMAGE_FIT_OPTIONS.map((opt) => {
+            const active = (draft.heroImageFit || 'contain') === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => updateDraft({ heroImageFit: opt.id })}
+                className={`rounded-2xl border p-4 text-right transition-all cursor-pointer flex flex-col gap-2 ${
+                  active
+                    ? 'rtv-admin-accent-soft'
+                    : 'bg-[#1a242e]/65 border-white/[0.08] hover:border-white/20'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {opt.id === 'contain' ? (
+                      <Minimize2 className="w-4 h-4 rtv-admin-accent-text shrink-0" />
+                    ) : opt.id === 'contain_blur' ? (
+                      <Layers className="w-4 h-4 rtv-admin-accent-text shrink-0" />
+                    ) : (
+                      <Maximize2 className="w-4 h-4 rtv-admin-accent-text shrink-0" />
+                    )}
+                    <span className="text-xs font-extrabold text-white">{opt.label}</span>
+                  </div>
+                  {opt.badge && (
+                    <span className="shrink-0 rounded-md bg-emerald-500/15 border border-emerald-400/30 px-2 py-0.5 text-[10px] font-extrabold text-emerald-300">
+                      {opt.badge}
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-[#b7c9ef] leading-relaxed">{opt.desc}</p>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Backdrop Blur & Dim Sliders */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="rounded-2xl bg-[#1a242e]/80 border border-white/[0.07] p-4 space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold text-white">درجة Blur للخلفية المموهة</span>
+              <span className="font-latin font-black rtv-admin-accent-text">
+                {draft.heroBackdropBlurPx ?? 24}px
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={48}
+              step={2}
+              value={draft.heroBackdropBlurPx ?? 24}
+              onChange={(e) => {
+                const nextBlur = Number(e.target.value);
+                updateDraft({
+                  heroBackdropBlurPx: nextBlur,
+                  heroImageFit:
+                    draft.heroImageFit === 'contain_blur' ? 'contain_blur' : draft.heroImageFit,
+                });
+              }}
+              className="w-full accent-[var(--rtv-admin-accent)] cursor-pointer"
+            />
+            <p className="text-[11px] text-[#b7c9ef]/75">
+              يُطبّق عند اختيار وضع «خلفية مموهة مكبرة + الصورة كاملة» لمنع أي تشتيت عن الصورة الأصلية.
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-[#1a242e]/80 border border-white/[0.07] p-4 space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold text-white">درجة تعتيم الخلفية المموهة</span>
+              <span className="font-latin font-black rtv-admin-accent-text">
+                {draft.heroBackdropDimPct ?? 45}%
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={85}
+              step={1}
+              value={draft.heroBackdropDimPct ?? 45}
+              onChange={(e) => updateDraft({ heroBackdropDimPct: Number(e.target.value) })}
+              className="w-full accent-[var(--rtv-admin-accent)] cursor-pointer"
+            />
+            <p className="text-[11px] text-[#b7c9ef]/75">
+              يتحكم في تعتيم الخلفية المموهة فقط، مع إبقاء الصورة الأصلية في المقدمة واضحة بالكامل.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Section 2: Description Visibility & Typography */}
       <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
           <div className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-sky-400" />
             <h3 className="font-display text-base font-extrabold text-white">
-              1. التحكم في وصف الفيلم والخطوط والمحاذاة
+              2. التحكم في وصف الفيلم والخطوط والمحاذاة
             </h3>
           </div>
         </div>
@@ -577,11 +741,11 @@ export function SliderCustomizationPanel({
         </div>
       </div>
 
-      {/* Section 2: Elements Visibility */}
+      {/* Section 3: Elements Visibility */}
       <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-6 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
           <h3 className="font-display text-base font-extrabold text-white">
-            2. إظهار وإخفاء عناصر السلايدر بشكل مستقل
+            3. إظهار وإخفاء عناصر السلايدر بشكل مستقل
           </h3>
           <span className="text-[11px] font-bold text-[#b7c9ef]">
             كل خيار يعمل باستقلال كامل

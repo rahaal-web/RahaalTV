@@ -185,6 +185,7 @@ export interface HomeSectionConfig {
 }
 
 export type HeroTextAlign = 'right' | 'center' | 'left';
+export type HeroImageFitMode = 'contain' | 'cover' | 'contain_blur';
 export type HeroInfoPosition =
   | 'bottom-right'
   | 'bottom-center'
@@ -211,6 +212,9 @@ export interface HomeLayoutConfig {
   heroMaxSlides?: number;
   heroSlideIds?: string[];
   // Dedicated Hero Slider Customization controls
+  heroImageFit?: HeroImageFitMode;
+  heroBackdropBlurPx?: number;
+  heroBackdropDimPct?: number;
   heroShowDescription?: boolean;
   heroTitleSizePx?: number;
   heroDescriptionSizePx?: number;
