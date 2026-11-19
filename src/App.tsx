@@ -1228,18 +1228,20 @@ export default function App() {
         onWatchFull={(item) => setPlayerState({ item, episode: 1 })}
       />
 
-      <PlayerModal
-        item={playerState?.item || null}
-        initialEpisode={playerState?.episode || 1}
-        initialServerIndex={playerState?.serverIndex || 0}
-        playerTheme={siteSettings.playerTheme}
-        popupShieldConfig={siteSettings.popupShield}
-        onUpdateHostRule={handleUpdateHostRule}
-        isInWatchlist={playerState?.item ? watchlistIds.includes(playerState.item.id) : false}
-        onToggleWatchlist={handleToggleWatchlist}
-        onNotify={showToast}
-        onClose={() => setPlayerState(null)}
-      />
+      {playerState && (
+        <PlayerModal
+          item={playerState.item}
+          initialEpisode={playerState.episode || 1}
+          initialServerIndex={playerState.serverIndex || 0}
+          playerTheme={siteSettings.playerTheme}
+          popupShieldConfig={siteSettings.popupShield}
+          onUpdateHostRule={handleUpdateHostRule}
+          isInWatchlist={watchlistIds.includes(playerState.item.id)}
+          onToggleWatchlist={handleToggleWatchlist}
+          onNotify={showToast}
+          onClose={() => setPlayerState(null)}
+        />
+      )}
 
       <LoginModal
         isOpen={loginOpen}

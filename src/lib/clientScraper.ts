@@ -2355,7 +2355,7 @@ function evaluateFetchedServerResponse(
     /<title>\s*(?:403\s+Forbidden|Access\s+Denied|Just\s+a\s+moment|Attention\s+Required|404\s+Not\s+Found)/i.test(
       snippet
     ) ||
-    /file\s*(?:was|has been)?\s*(?:deleted|removed)|video\s*(?:was|has been)?\s*(?:deleted|removed|not found)|file\s*not\s*found|404\s*not\s*found|no\s*longer\s*available|تم\s*حذف\s*(?:الملف|الفيديو)|الفيديو\s*غير\s*موجود|الملف\s*غير\s*موجود/i.test(
+    /file\s*(?:was|has been)?\s*(?:deleted|removed)|video\s*(?:was|has been|is)?\s*(?:deleted|removed|not found|unavailable|blocked)|file\s*(?:not\s*found|does\s*not\s*exist)|404\s*not\s*found|no\s*longer\s*available|no\s*video\s*found|this\s*video\s*does\s*not\s*exist|embed\s*(?:is\s*)?(?:disabled|unavailable)|account\s*(?:has been\s*)?suspended|تم\s*حذف\s*(?:الملف|الفيديو)|الفيديو\s*غير\s*موجود|الملف\s*غير\s*موجود/i.test(
       snippet
     )
   ) {
@@ -2447,15 +2447,15 @@ export async function filterServersInBrowser(urls: string[]): Promise<ServerFilt
             );
           }
         } catch {
-          // Worker unreachable or blocked -> fall through to AllOrigins / no-cors fallback below
+          // Worker unreachable or blocked -> fall through to public CORS relays / no-cors fallback below
         }
       }
 
-      // No Cloudflare Worker configured: probe via AllOrigins JSON or no-cors reachability
+      // No Cloudflare Worker configured: probe via AllOrigins JSON or secondary CodeTabs relay
       try {
         const relayRes = await fetchWithTimeout(
           `https://api.allorigins.win/get?url=${encodeURIComponent(rawUrl)}`,
-          5000
+          4000
         );
         if (relayRes.ok) {
           const json = (await relayRes.json()) as {
@@ -2468,12 +2468,27 @@ export async function filterServersInBrowser(urls: string[]): Promise<ServerFilt
           return evaluateFetchedServerResponse(rawUrl, finalUrl, upstreamStatus, '', '', snippet);
         }
       } catch {
+        // Try secondary CORS relay below
+      }
+
+      try {
+        const secondaryRes = await fetchWithTimeout(
+          `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(rawUrl)}`,
+          4000
+        );
+        if (secondaryRes.ok) {
+          const snippet = (await secondaryRes.text().catch(() => '')).slice(0, 28000);
+          if (snippet) {
+            return evaluateFetchedServerResponse(rawUrl, rawUrl, secondaryRes.status, '', '', snippet);
+          }
+        }
+      } catch {
         // Fall through to network reachability check
       }
 
       try {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 4500);
+        const timer = setTimeout(() => controller.abort(), 4000);
         try {
           await fetch(rawUrl, { mode: 'no-cors', signal: controller.signal });
           return {

@@ -93,7 +93,7 @@ export function resolveProactiveFilterDecision({
   hasEpisodeOverrideUrl,
   episodeUrlOk,
 }: ProactiveFilterDecisionParams): ProactiveFilterDecision {
-  // Never disrupt a server whose playback or iframe load has already succeeded
+  // Never disrupt a server whose playback or verified embed load has already succeeded
   if (playbackConfirmed || totalServers <= 0) {
     return { action: 'none' };
   }
@@ -163,3 +163,46 @@ export function resolveProactiveFilterDecision({
 
   return { action: 'none' };
 }
+
+export type FaultFailoverTransition =
+  | { action: 'switch'; nextIndex: number; nextTriedIndices: number[] }
+  | { action: 'all_failed'; nextTriedIndices: number[] };
+
+/**
+ * Computes the next server transition synchronously without side effects inside React state updaters.
+ */
+export function computeFaultFailoverTransition({
+  faultIndex,
+  totalServers,
+  triedIndices,
+  filterMap,
+}: {
+  faultIndex: number;
+  totalServers: number;
+  triedIndices: ReadonlySet<number>;
+  filterMap: Record<number, { ok: boolean }>;
+}): FaultFailoverTransition {
+  const nextTried = new Set<number>(triedIndices);
+  if (faultIndex >= 0 && faultIndex < totalServers) {
+    nextTried.add(faultIndex);
+  }
+  const nextIdx = findNextAvailableServerIndex({
+    currentIndex: faultIndex,
+    totalServers,
+    triedIndices: nextTried,
+    filterMap,
+  });
+  if (nextIdx !== -1) {
+    nextTried.add(nextIdx);
+    return {
+      action: 'switch',
+      nextIndex: nextIdx,
+      nextTriedIndices: Array.from(nextTried),
+    };
+  }
+  return {
+    action: 'all_failed',
+    nextTriedIndices: Array.from(nextTried),
+  };
+}
+
