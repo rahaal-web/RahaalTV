@@ -12,6 +12,7 @@ import {
   Database,
   Download,
   Edit3,
+  ExternalLink,
   History,
   KeyRound,
   Layers,
@@ -61,6 +62,7 @@ import {
   MasterAdminSession,
 } from '../../lib/masterAdminAuth';
 import { safeCopyToClipboard } from '../../lib/browserCompat';
+import firestoreRulesTemplate from '../../../firestore.rules?raw';
 import {
   DatabaseConnectionHealthStatus,
   DatabaseConnectionLogEntry,
@@ -848,6 +850,17 @@ export function AdminDatabaseManagerPanel({
               <Upload className="w-3.5 h-3.5 text-[#f9c400]" />
               <span>استيراد إعدادات الاتصال</span>
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                void safeCopyToClipboard(firestoreRulesTemplate);
+                onNotify('تم نسخ قواعد الأمان (firestore.rules) — الصقها في تبويب Rules بقاعدتك الجديدة ثم اضغط Publish');
+              }}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 px-3.5 py-2 text-xs font-bold text-white cursor-pointer"
+            >
+              <Copy className="w-3.5 h-3.5 text-[#f9c400]" />
+              <span>نسخ قواعد الأمان (firestore.rules)</span>
+            </button>
             <input
               ref={backupFileInputRef}
               type="file"
@@ -973,6 +986,74 @@ export function AdminDatabaseManagerPanel({
               </button>
             </div>
           )}
+
+          {!lastTestResult.result.ok &&
+            lastTestResult.result.status === 'permission_denied' &&
+            (() => {
+              const testedProfile = registry.profiles.find(
+                (p) => p.id === lastTestResult.connectionId
+              );
+              if (!testedProfile || testedProfile.providerType !== 'firebase_firestore') {
+                return null;
+              }
+              const targetProjId = testedProfile.firebaseConfig.projectId;
+              return (
+                <div className="rounded-2xl bg-[#f9c400]/10 border border-[#f9c400]/40 p-4 space-y-2.5 text-xs text-amber-100">
+                  <p className="font-extrabold text-[#f9c400]">
+                    كيف تصلح مشكلة الصلاحيات وتفعّل قاعدة {targetProjId} في خطوتين؟
+                  </p>
+                  <ol className="list-decimal list-inside space-y-1 text-[11px] leading-relaxed text-white/90">
+                    <li>
+                      انسخ قواعد الأمان الكاملة من الزر أدناه والصقها في{' '}
+                      <span className="font-latin text-white">Firestore Database → Rules</span> داخل مشروعك في Firebase Console ثم اضغط <strong className="text-white">Publish</strong>.
+                    </li>
+                    <li>
+                      فعّل <span className="font-latin text-white">Google</span> و<span className="font-latin text-white">Email/Password</span> من <span className="font-latin text-white">Authentication → Sign-in method</span> وأضف نطاق الموقع في <span className="font-latin text-white">Authorized domains</span>.
+                    </li>
+                  </ol>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void safeCopyToClipboard(firestoreRulesTemplate);
+                        onNotify('تم نسخ محتوى firestore.rules بنجاح — الصقه في Firebase Console واضغط Publish');
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] px-3.5 py-2 text-xs font-black text-[#06131c] cursor-pointer"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>نسخ firestore.rules</span>
+                    </button>
+                    <a
+                      href={`https://console.firebase.google.com/project/${targetProjId}/firestore/rules`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/15 border border-white/15 px-3.5 py-2 text-xs font-bold text-white"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5 text-[#f9c400]" />
+                      <span>فتح صفحة Rules في Firebase</span>
+                    </a>
+                    <a
+                      href={`https://console.firebase.google.com/project/${targetProjId}/authentication/providers`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/15 border border-white/15 px-3.5 py-2 text-xs font-bold text-white"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5 text-sky-300" />
+                      <span>إعدادات تسجيل الدخول (Auth)</span>
+                    </a>
+                    <button
+                      type="button"
+                      disabled={testingId !== null}
+                      onClick={() => void handleRunTest(testedProfile)}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-[#4CAF50] hover:bg-emerald-600 px-3.5 py-2 text-xs font-extrabold text-white cursor-pointer"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>إعادة اختبار الاتصال الآن</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
         </div>
       )}
 

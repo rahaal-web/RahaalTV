@@ -35,8 +35,10 @@ import {
 } from '../types/database';
 
 export const BUILTIN_DEFAULT_CONNECTION_ID = 'builtin-default-firestore';
+export const PRESET_RAHALTV_CONNECTION_ID = 'preset-rahaltv-firestore';
 const STORAGE_DB_REGISTRY = 'rahaltv_db_connections_v1';
 const STORAGE_DB_LOGS = 'rahaltv_db_logs_v1';
+const STORAGE_DISMISSED_PRESETS = 'rahaltv_db_dismissed_presets_v1';
 const MAX_DB_LOGS = 120;
 
 const SECRET_KEY_PATTERN =
@@ -130,6 +132,64 @@ export function buildDefaultBuiltInProfile(): DatabaseConnectionProfile {
   };
 }
 
+export function buildRahaltvPresetProfile(): DatabaseConnectionProfile {
+  const ts = '2026-01-01T00:00:00.000Z';
+  return {
+    id: PRESET_RAHALTV_CONNECTION_ID,
+    name: 'قاعدة بياناتك الجديدة (rahaltv)',
+    description:
+      'مشروع Firebase (rahaltv) — انشر قواعد firestore.rules في Firebase Console ثم اضغط اختبار الاتصال والتفعيل',
+    providerType: 'firebase_firestore',
+    isBuiltIn: false,
+    firebaseConfig: {
+      projectId: 'rahaltv',
+      apiKey: 'AIzaSyCkaiWGZZ06-FswbvNH8N1ysgkiIjeknVQ',
+      authDomain: 'rahaltv.firebaseapp.com',
+      firestoreDatabaseId: '(default)',
+      databaseURL: 'https://rahaltv-default-rtdb.firebaseio.com',
+      storageBucket: 'rahaltv.firebasestorage.app',
+      messagingSenderId: '258640370330',
+      appId: '1:258640370330:web:563e881faddcccc61add23',
+      measurementId: 'G-CGLPSM3C6Z',
+    },
+    lastStatus: 'untested',
+    createdAt: ts,
+    updatedAt: ts,
+  };
+}
+
+let inMemoryDismissedPresets = new Set<string>();
+
+function loadDismissedPresetIds(): Set<string> {
+  if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+    return inMemoryDismissedPresets;
+  }
+  try {
+    const raw = localStorage.getItem(STORAGE_DISMISSED_PRESETS);
+    if (!raw) return inMemoryDismissedPresets;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      inMemoryDismissedPresets = new Set(parsed.map((x) => String(x)));
+    }
+  } catch {
+    // Ignore storage read error
+  }
+  return inMemoryDismissedPresets;
+}
+
+function markPresetDismissed(id: string): void {
+  const next = loadDismissedPresetIds();
+  next.add(id);
+  inMemoryDismissedPresets = next;
+  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(STORAGE_DISMISSED_PRESETS, JSON.stringify(Array.from(next)));
+    } catch {
+      // Ignore
+    }
+  }
+}
+
 function normalizeFirebaseFields(
   raw?: Partial<FirebaseConnectionFields>
 ): FirebaseConnectionFields {
@@ -202,6 +262,11 @@ export function normalizeConnectionProfile(
 
 function getDefaultRegistryState(): DatabaseConnectionRegistryState {
   const builtIn = buildDefaultBuiltInProfile();
+  const dismissed = loadDismissedPresetIds();
+  const profiles = [builtIn];
+  if (!dismissed.has(PRESET_RAHALTV_CONNECTION_ID)) {
+    profiles.push(buildRahaltvPresetProfile());
+  }
   return {
     version: 1,
     activeConnectionId: builtIn.id,
@@ -209,7 +274,7 @@ function getDefaultRegistryState(): DatabaseConnectionRegistryState {
     defaultConnectionId: builtIn.id,
     lastGoodConnectionId: builtIn.id,
     autoRetryEnabled: true,
-    profiles: [builtIn],
+    profiles,
   };
 }
 
@@ -237,6 +302,13 @@ export function loadDatabaseRegistry(): DatabaseConnectionRegistryState {
     // Always guarantee built-in fallback exists and stays protected
     if (!normalizedProfiles.some((p) => p.id === BUILTIN_DEFAULT_CONNECTION_ID)) {
       normalizedProfiles.unshift(builtIn);
+    }
+    const dismissed = loadDismissedPresetIds();
+    if (
+      !dismissed.has(PRESET_RAHALTV_CONNECTION_ID) &&
+      !normalizedProfiles.some((p) => p.id === PRESET_RAHALTV_CONNECTION_ID)
+    ) {
+      normalizedProfiles.push(buildRahaltvPresetProfile());
     }
 
     const idSet = new Set(normalizedProfiles.map((p) => p.id));
@@ -1251,6 +1323,10 @@ export function deleteConnectionProfile(
       error: 'لا يمكن حذف قاعدة البيانات المحددة كافتراضية. غيّر الافتراضية أولاً.',
       registry: reg,
     };
+  }
+
+  if (connectionId === PRESET_RAHALTV_CONNECTION_ID) {
+    markPresetDismissed(connectionId);
   }
 
   const nextReg = saveDatabaseRegistry({
