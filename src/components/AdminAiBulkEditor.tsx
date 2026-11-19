@@ -49,7 +49,7 @@ import { MediaItem, MediaKind } from '../types/media';
 import { AdminActivityLog } from './AdminActivityLog';
 
 interface AdminAiBulkEditorProps {
-  user: User;
+  user: User | null;
   catalog: MediaItem[];
   isFirestoreSeeded: boolean;
   onNotify: (msg: string) => void;
@@ -113,6 +113,8 @@ export function AdminAiBulkEditor({
   onPreviewMedia,
   onSavedToCatalog,
 }: AdminAiBulkEditorProps) {
+  const actorUid = user?.uid || 'master-admin';
+  const actorName = user?.displayName || user?.email || 'المسؤول الأساسي';
   const [scopeKind, setScopeKind] = useState<'all' | MediaKind>('all');
   const [scopeCategory, setScopeCategory] = useState<string>('all');
   const [scopeSearch, setScopeSearch] = useState<string>('');
@@ -235,8 +237,8 @@ export function AdminAiBulkEditor({
         setPreviewPlan(blockedPlan);
         setErrorMsg(parsed.blockedReason || 'تعذر فهم الأمر.');
         recordLog({
-          adminUid: user.uid,
-          adminName: user.displayName || user.email || 'مشرف',
+          adminUid: actorUid,
+          adminName: actorName,
           rawCommand: trimmed,
           understoodCommand: parsed.understoodCommand,
           operationType: parsed.operationType,
@@ -308,8 +310,8 @@ export function AdminAiBulkEditor({
 
       if (parsed.isReadOnly) {
         recordLog({
-          adminUid: user.uid,
-          adminName: user.displayName || user.email || 'مشرف',
+          adminUid: actorUid,
+          adminName: actorName,
           rawCommand: trimmed,
           understoodCommand: parsed.understoodCommand,
           operationType: parsed.operationType,
@@ -391,7 +393,7 @@ export function AdminAiBulkEditor({
         approvedProposals: approved.map((p) => ({ original: p.original, updated: p.updated })),
         fullCatalogFallback: catalog,
         isFirestoreSeeded,
-        uid: user.uid,
+        uid: actorUid,
       });
 
       setLastUndoSnapshot(result.undoSnapshot);
@@ -411,8 +413,8 @@ export function AdminAiBulkEditor({
       });
 
       recordLog({
-        adminUid: user.uid,
-        adminName: user.displayName || user.email || 'مشرف',
+        adminUid: actorUid,
+        adminName: actorName,
         rawCommand: previewPlan.command.rawInput,
         understoodCommand: previewPlan.command.understoodCommand,
         operationType: previewPlan.command.operationType,
@@ -431,8 +433,8 @@ export function AdminAiBulkEditor({
           : 'حدث خطأ أثناء تنفيذ العملية على قاعدة البيانات. تأكد من صلاحيات المشرف.';
       setErrorMsg(msg);
       recordLog({
-        adminUid: user.uid,
-        adminName: user.displayName || user.email || 'مشرف',
+        adminUid: actorUid,
+        adminName: actorName,
         rawCommand: previewPlan.command.rawInput,
         understoodCommand: previewPlan.command.understoodCommand,
         operationType: previewPlan.command.operationType,
@@ -455,15 +457,15 @@ export function AdminAiBulkEditor({
     setErrorMsg(null);
 
     try {
-      const restoredCount = await undoAssistantBatchInDatabase(lastUndoSnapshot, user.uid);
+      const restoredCount = await undoAssistantBatchInDatabase(lastUndoSnapshot, actorUid);
       const msg =
         lastUndoSnapshot.action === 'delete'
           ? `تم التراجع عن الحذف واستعادة ${restoredCount} عملًا إلى قاعدة البيانات!`
           : `تم التراجع عن آخر تعديل واسترجاع البيانات السابقة لـ ${restoredCount} عملًا!`;
 
       recordLog({
-        adminUid: user.uid,
-        adminName: user.displayName || user.email || 'مشرف',
+        adminUid: actorUid,
+        adminName: actorName,
         rawCommand: `تراجع عن: ${lastUndoSnapshot.commandText}`,
         understoodCommand: `استرجاع النسخة السابقة قبل (${lastUndoSnapshot.operationLabel})`,
         operationType: 'undo',

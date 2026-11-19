@@ -106,11 +106,123 @@ async function handleClientErrorLog(request) {
   }
 }
 
+async function workerSignMasterToken(username, displayName, secret, ver = 1) {
+  const enc = new TextEncoder();
+  const expMs = Date.now() + 12 * 60 * 60 * 1000;
+  const payloadStr = JSON.stringify({ sub: username, name: displayName, role: 'owner', ver, exp: expMs });
+  const bytes = enc.encode(payloadStr);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  const payloadB64 = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sigBuf = await crypto.subtle.sign('HMAC', key, enc.encode(payloadB64));
+  const sigBytes = new Uint8Array(sigBuf);
+  let sigBin = '';
+  for (let i = 0; i < sigBytes.length; i++) sigBin += String.fromCharCode(sigBytes[i]);
+  const sigB64 = btoa(sigBin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return { token: `wm1.${payloadB64}.${sigB64}`, expiresAt: new Date(expMs).toISOString() };
+}
+
+async function workerVerifyMasterToken(token, env) {
+  const clean = String(token || '').trim();
+  if (!clean.startsWith('wm1.')) return null;
+  const parts = clean.split('.');
+  if (parts.length !== 3) return null;
+  const secret = String((env && env.MASTER_ADMIN_SECRET) || (env && env.FIREBASE_WEB_API_KEY) || 'rahaltv-worker-master-secret');
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sigBuf = await crypto.subtle.sign('HMAC', key, enc.encode(parts[1]));
+  const sigBytes = new Uint8Array(sigBuf);
+  let sigBin = '';
+  for (let i = 0; i < sigBytes.length; i++) sigBin += String.fromCharCode(sigBytes[i]);
+  const expected = btoa(sigBin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  if (expected !== parts[2]) return null;
+  try {
+    const pad = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const json = atob(pad + '==='.slice((pad.length + 3) % 4));
+    const parsed = JSON.parse(json);
+    if (!parsed || Number(parsed.exp || 0) <= Date.now()) return null;
+    return {
+      username: String(parsed.sub || 'admin'),
+      displayName: String(parsed.name || 'المسؤول الأساسي'),
+      role: 'owner',
+      mustChangePassword: false,
+      expiresAt: new Date(Number(parsed.exp)).toISOString(),
+      source: 'worker_master',
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function handleWorkerMasterAdminApi(request, env, pathname) {
+  const jsonRes = (body, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: {
+        ...CORS_HEADERS,
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+      },
+    });
+
+  const secret = String((env && env.MASTER_ADMIN_SECRET) || (env && env.FIREBASE_WEB_API_KEY) || 'rahaltv-worker-master-secret');
+
+  if (pathname === '/api/master-admin/login' && request.method === 'POST') {
+    const body = await request.json().catch(() => ({}));
+    const id = String(body.identifier || '').trim().toLowerCase();
+    const pass = String(body.password || '');
+    const expectedUser = String((env && env.MASTER_ADMIN_USER) || 'admin').trim().toLowerCase();
+    const expectedPass = String((env && env.MASTER_ADMIN_PASSWORD) || '').trim();
+    if (!expectedPass) {
+      return jsonRes(
+        { ok: false, error: 'أضف MASTER_ADMIN_PASSWORD في متغيرات Cloudflare Worker لتفعيل الدخول المستقل عن السيرفر.' },
+        501
+      );
+    }
+    const normalizedId = id === 'admin@rahaltv.com' && expectedUser === 'admin' ? 'admin' : id;
+    if (normalizedId !== expectedUser || pass !== expectedPass) {
+      return jsonRes({ ok: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة.' }, 401);
+    }
+    const signed = await workerSignMasterToken(expectedUser, 'المسؤول الأساسي (Worker)', secret);
+    return jsonRes({
+      ok: true,
+      token: signed.token,
+      session: {
+        username: expectedUser,
+        displayName: 'المسؤول الأساسي (Worker)',
+        role: 'owner',
+        mustChangePassword: false,
+        expiresAt: signed.expiresAt,
+        source: 'worker_master',
+      },
+    });
+  }
+
+  if (pathname === '/api/master-admin/session' && request.method === 'GET') {
+    const authHeader = request.headers.get('Authorization') || '';
+    const match = authHeader.match(/^Bearer\s+(.+)$/i);
+    const session = match ? await workerVerifyMasterToken(match[1], env) : null;
+    if (!session) return jsonRes({ ok: false, error: 'جلسة غير صالحة' }, 401);
+    return jsonRes({ ok: true, session });
+  }
+
+  if (pathname === '/api/master-admin/logout' && request.method === 'POST') {
+    return jsonRes({ ok: true });
+  }
+
+  return jsonRes({ ok: false, error: 'قم بتحديث MASTER_ADMIN_PASSWORD من لوحة Cloudflare Worker.' }, 501);
+}
+
 async function verifyWorkerAdminRequest(request, env) {
   const authHeader = request.headers.get('Authorization') || '';
   const match = authHeader.match(/^Bearer\s+(.+)$/i);
   if (!match || !match[1]) {
     return { ok: false, status: 401, error: 'Missing Authorization Bearer Token' };
+  }
+  const masterSession = await workerVerifyMasterToken(match[1].trim(), env);
+  if (masterSession) {
+    return { ok: true, uid: `master:${masterSession.username}`, email: masterSession.username };
   }
   const webApiKey = env && env.FIREBASE_WEB_API_KEY ? String(env.FIREBASE_WEB_API_KEY).trim() : '';
   if (!webApiKey) {
@@ -271,6 +383,10 @@ export default {
 
     if (reqUrl.pathname === '/api/client-logs' && request.method === 'POST') {
       return handleClientErrorLog(request);
+    }
+
+    if (reqUrl.pathname.startsWith('/api/master-admin/')) {
+      return handleWorkerMasterAdminApi(request, env, reqUrl.pathname);
     }
 
     if (reqUrl.pathname.startsWith('/api/db/')) {

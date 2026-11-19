@@ -35,7 +35,7 @@ import {
 import { ImageQualityStatus, MediaItem } from '../types/media';
 
 interface AdminImageManagerPanelProps {
-  user: User;
+  user: User | null;
   catalog: MediaItem[];
   isFirestoreSeeded: boolean;
   onNotify: (msg: string) => void;
@@ -59,6 +59,7 @@ export function AdminImageManagerPanel({
   isFirestoreSeeded,
   onNotify,
 }: AdminImageManagerPanelProps) {
+  const actorUid = user?.uid || 'master-admin';
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<
     'all' | 'issues' | ImageQualityStatus
@@ -203,7 +204,7 @@ export function AdminImageManagerPanel({
         setScanProgress({ done: updatedItems.length, total: targets.length });
       }
 
-      await bulkUpdateMediaInFirestore(updatedItems, user.uid);
+      await bulkUpdateMediaInFirestore(updatedItems, actorUid);
       onNotify(`تم قياس الأبعاد الفعلية وتحديث حالة ${updatedItems.length} عمل في قاعدة البيانات.`);
     } catch (err) {
       onNotify(formatFirestoreWriteError(err, 'تعذر حفظ نتائج قياس الصور'));
@@ -313,7 +314,7 @@ export function AdminImageManagerPanel({
         };
       });
 
-      await bulkUpdateMediaInFirestore(patchedItems, user.uid);
+      await bulkUpdateMediaInFirestore(patchedItems, actorUid);
       onNotify(`تم ترقية وحفظ صور ${patchedItems.length} عمل بنجاح بدون المساس ببقية البيانات!`);
       setBatchCandidates(null);
     } catch (err) {
@@ -371,7 +372,7 @@ export function AdminImageManagerPanel({
         image_source: resolved.image_source || 'tmdb',
         image_quality_status: resolved.image_quality_status,
       };
-      const res = await saveMediaToFirestore(updatedItem, user.uid, false);
+      const res = await saveMediaToFirestore(updatedItem, actorUid, false);
       onNotify(
         `تم تحديث وحفظ صور "${item.title}" بجودة عالية!${
           res.usedLegacySchemaFallback ? ' (ملاحظة: حدّث firestore.rules لحفظ أبعاد الصور)' : ''
@@ -484,7 +485,7 @@ export function AdminImageManagerPanel({
         image_source: 'manual',
         image_quality_status: status,
       };
-      const res = await saveMediaToFirestore(updated, user.uid, false);
+      const res = await saveMediaToFirestore(updated, actorUid, false);
       onNotify(
         `تم حفظ البوستر والخلفية يدوياً لـ "${manualModalItem.title}".${
           res.usedLegacySchemaFallback ? ' (حدّث firestore.rules لحفظ الأبعاد الجديدة)' : ''

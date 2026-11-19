@@ -67,7 +67,7 @@ import {
 } from '../types/scraperAdapter';
 
 interface ScraperAdapterBuilderPanelProps {
-  user: User;
+  user: User | null;
   adapters: ScraperAdapter[];
   cloudSynced: boolean;
   onAdaptersChanged?: (next: ScraperAdapter[]) => void;
@@ -145,6 +145,7 @@ export function ScraperAdapterBuilderPanel({
   onOpenInSingleScraper,
   onNotify,
 }: ScraperAdapterBuilderPanelProps) {
+  const actorUid = user?.uid || 'master-admin';
   // Input & Analysis Form State
   const [targetUrl, setTargetUrl] = useState('');
   const [contentTypeHint, setContentTypeHint] = useState<AdapterContentTypeHint>('auto');
@@ -507,7 +508,7 @@ export function ScraperAdapterBuilderPanel({
       });
       const res = await saveScraperAdapterWithVersion({
         adapter: toSave,
-        uid: user.uid,
+        uid: actorUid,
         isNew: !isUpdateExisting,
         changeNote:
           changeNote.trim() ||
@@ -582,7 +583,7 @@ export function ScraperAdapterBuilderPanel({
           id: historyAdapter.id,
           domain: historyAdapter.domain,
         },
-        uid: user.uid,
+        uid: actorUid,
         isNew: false,
         changeNote: `استرجاع الإصدار السابق v${ver.version}`,
         previousAdapter: historyAdapter,
@@ -600,7 +601,7 @@ export function ScraperAdapterBuilderPanel({
   };
 
   const handleToggleEnabled = async (adp: ScraperAdapter) => {
-    const res = await toggleScraperAdapterEnabled(adp, !adp.enabled, user.uid);
+    const res = await toggleScraperAdapterEnabled(adp, !adp.enabled, actorUid);
     onAdaptersChanged?.(adapters.map((a) => (a.id === res.adapter.id ? res.adapter : a)));
     onNotify(
       res.adapter.enabled
@@ -654,7 +655,7 @@ export function ScraperAdapterBuilderPanel({
         const existing = current.find((x) => x.id === adp.id || x.domain === adp.domain) || null;
         const res = await saveScraperAdapterWithVersion({
           adapter: adp,
-          uid: user.uid,
+          uid: actorUid,
           isNew: !existing,
           changeNote: 'استيراد من ملف JSON',
           previousAdapter: existing,

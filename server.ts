@@ -38,6 +38,12 @@ import {
   type VerifiedAdminContext,
   verifyOwnerAdminMiddleware,
 } from './server/dbSecretVault.ts';
+import {
+  changeMasterAdminCredentials,
+  ensureMasterAdminRecord,
+  loginWithMasterAdmin,
+  verifyMasterAdminToken,
+} from './server/masterAdminAuth.ts';
 
 const PORT = 3000;
 
@@ -5521,6 +5527,64 @@ async function startServer() {
     } catch {
       return res.status(400).json({ ok: false });
     }
+  });
+
+  // Standalone Database-Independent Master Admin Auth Endpoints
+  ensureMasterAdminRecord();
+
+  app.post('/api/master-admin/login', (req, res) => {
+    const body = (req.body || {}) as { identifier?: string; password?: string };
+    const result = loginWithMasterAdmin({
+      identifier: String(body.identifier || ''),
+      password: String(body.password || ''),
+      clientIp: req.ip || req.socket?.remoteAddress || 'local',
+    });
+    if (!result.ok) {
+      return res.status(result.status).json({ ok: false, error: result.error });
+    }
+    return res.json({ ok: true, token: result.token, session: result.session });
+  });
+
+  app.get('/api/master-admin/session', (req, res) => {
+    const authHeader = req.headers.authorization || '';
+    const match = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (!match?.[1]) {
+      return res.status(401).json({ ok: false, error: 'Missing Authorization Bearer Token.' });
+    }
+    const session = verifyMasterAdminToken(match[1]);
+    if (!session) {
+      return res.status(401).json({ ok: false, error: 'انتهت صلاحية الجلسة أو الرمز غير صالح.' });
+    }
+    return res.json({ ok: true, session });
+  });
+
+  app.post('/api/master-admin/change-credentials', (req, res) => {
+    const authHeader = req.headers.authorization || '';
+    const match = authHeader.match(/^Bearer\s+(.+)$/i);
+    const active = match?.[1] ? verifyMasterAdminToken(match[1]) : null;
+    if (!active) {
+      return res.status(401).json({ ok: false, error: 'جلسة الحساب الأساسي غير صالحة.' });
+    }
+    const body = (req.body || {}) as {
+      currentPassword?: string;
+      newUsername?: string;
+      newPassword?: string;
+      displayName?: string;
+    };
+    const result = changeMasterAdminCredentials({
+      currentPassword: String(body.currentPassword || ''),
+      newUsername: body.newUsername ? String(body.newUsername) : undefined,
+      newPassword: body.newPassword ? String(body.newPassword) : undefined,
+      displayName: body.displayName ? String(body.displayName) : undefined,
+    });
+    if (!result.ok) {
+      return res.status(result.status).json({ ok: false, error: result.error });
+    }
+    return res.json({ ok: true, token: result.token, session: result.session });
+  });
+
+  app.post('/api/master-admin/logout', (_req, res) => {
+    return res.json({ ok: true });
   });
 
   // Database Connection Manager: Authenticated Server Secret Vault & Endpoint Probe

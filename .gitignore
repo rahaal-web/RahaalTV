@@ -8,5 +8,6 @@ coverage/
 !.env.example
 .rahaltv-adapters.json
 .rahaltv-secrets.json
+.rahaltv-master-admin.json
 
 

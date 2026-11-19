@@ -63,6 +63,13 @@ import {
   subscribeActiveDatabaseChange,
 } from './lib/dbConnectionManager';
 import {
+  loadStoredMasterAdminSession,
+  logoutMasterAdmin,
+  MasterAdminSession,
+  subscribeMasterAdminSession,
+  validateMasterAdminSession,
+} from './lib/masterAdminAuth';
+import {
   classifyFirestoreConnectionError,
   FirestoreConnectionStatus,
   getActiveAuth,
@@ -159,12 +166,26 @@ export default function App() {
   const clientCapabilities = useMemo(() => detectClientCapabilities(), []);
   const [compatBannerDismissed, setCompatBannerDismissed] = useState(false);
 
-  // Firebase Auth & RBAC State
+  // Firebase Auth, Master Admin & RBAC State
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [adminRole, setAdminRole] = useState<AdminPrivilegeRole | null>(null);
-  const canAccessAdmin = adminRole !== null;
-  const isOwnerAdmin = adminRole === 'owner';
+  const [masterAdminSession, setMasterAdminSession] = useState<MasterAdminSession | null>(() =>
+    loadStoredMasterAdminSession()
+  );
+  const effectiveAdminRole: AdminPrivilegeRole | null =
+    adminRole || (masterAdminSession ? 'owner' : null);
+  const canAccessAdmin = effectiveAdminRole !== null;
+  const isOwnerAdmin = effectiveAdminRole === 'owner';
+
+  useEffect(() => {
+    const syncLocal = () => setMasterAdminSession(loadStoredMasterAdminSession());
+    const unsub = subscribeMasterAdminSession(syncLocal);
+    void validateMasterAdminSession().then((valid) => {
+      setMasterAdminSession(valid);
+    });
+    return unsub;
+  }, []);
 
   // Live Firestore Data State
   const [firestoreCatalog, setFirestoreCatalog] = useState<MediaItem[]>([]);
@@ -794,7 +815,7 @@ export default function App() {
   const openAdminPage = (tab?: AdminTab) => {
     const prefs = loadAdminWorkspacePrefs();
     const moderatorPerms = prefs.moderatorSubPermissions;
-    const isOwner = adminRole === 'owner';
+    const isOwner = effectiveAdminRole === 'owner';
     const fallbackTab: AdminTab = isOwner ? 'overview' : 'catalog';
     const storedLast = prefs.lastTab as AdminTab | undefined;
     const desiredTab =
@@ -855,7 +876,8 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    await signOutFirebase();
+    await logoutMasterAdmin();
+    await signOutFirebase().catch(() => undefined);
     showToast('تم تسجيل الخروج بنجاح');
   };
 
@@ -926,9 +948,10 @@ export default function App() {
         >
           <AdminDashboardView
             user={firebaseUser}
+            masterAdminSession={masterAdminSession}
             isAdmin={canAccessAdmin}
-            adminRole={adminRole}
-            authLoading={authLoading}
+            adminRole={effectiveAdminRole}
+            authLoading={authLoading && !masterAdminSession}
             catalog={activeCatalog}
             isFirestoreSeeded={isFirestoreSeeded}
             dbConnectionStatus={dbConnectionStatus}
@@ -1004,8 +1027,9 @@ export default function App() {
           isOpen={loginOpen}
           onClose={() => setLoginOpen(false)}
           firebaseUser={firebaseUser}
+          masterAdminSession={masterAdminSession}
           isAdmin={canAccessAdmin}
-          adminRole={adminRole}
+          adminRole={effectiveAdminRole}
           onLogout={handleLogout}
           onOpenAdmin={() => openAdminPage()}
           onNotify={showToast}
@@ -1070,7 +1094,7 @@ export default function App() {
         onOpenAdmin={() => openAdminPage()}
         onSelectMedia={handleSelectMedia}
         watchlistCount={watchlistItems.length}
-        username={firebaseUser?.displayName || null}
+        username={firebaseUser?.displayName || masterAdminSession?.displayName || null}
         userPhoto={firebaseUser?.photoURL || null}
         isAdmin={canAccessAdmin}
         activeCategory={filters.category}
@@ -1179,8 +1203,9 @@ export default function App() {
         isOpen={loginOpen}
         onClose={() => setLoginOpen(false)}
         firebaseUser={firebaseUser}
+        masterAdminSession={masterAdminSession}
         isAdmin={canAccessAdmin}
-        adminRole={adminRole}
+        adminRole={effectiveAdminRole}
         onLogout={handleLogout}
         onOpenAdmin={() => openAdminPage()}
         onNotify={showToast}

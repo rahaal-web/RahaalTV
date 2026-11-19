@@ -17,6 +17,7 @@ import {
 } from 'firebase/firestore';
 import defaultFirebaseConfig from '../../firebase-applet-config.json';
 import { resolveApiEndpoint, shouldSkipBackendApiCalls } from './clientScraper';
+import { getMasterAdminToken, loadStoredMasterAdminSession } from './masterAdminAuth';
 import {
   DatabaseBackupBundle,
   DatabaseConnectionHealthStatus,
@@ -1703,7 +1704,14 @@ async function getAuthHeaders(user: User | null): Promise<Record<string, string>
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (user) {
     const token = await user.getIdToken().catch(() => '');
-    if (token) headers.Authorization = `Bearer ${token}`;
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+      return headers;
+    }
+  }
+  const masterToken = getMasterAdminToken();
+  if (masterToken && !masterToken.startsWith('local:')) {
+    headers.Authorization = `Bearer ${masterToken}`;
   }
   return headers;
 }
@@ -1716,8 +1724,17 @@ export async function fetchServerSecretStatuses(
   statuses: Record<string, DatabaseServerSecretStatus>;
   note?: string;
 }> {
-  if (!user) {
-    return { available: false, source: 'none', statuses: {}, note: 'يلزم تسجيل الدخول.' };
+  const masterSession = loadStoredMasterAdminSession();
+  const hasMasterServerToken = Boolean(getMasterAdminToken() && !getMasterAdminToken().startsWith('local:'));
+  if (!user && !hasMasterServerToken) {
+    return {
+      available: false,
+      source: 'none',
+      statuses: {},
+      note: masterSession?.source === 'local_offline'
+        ? 'أنت في وضع الطوارئ المحلي بدون خادم — مخزن الأسرار يتطلب خادم Node.js أو Cloudflare Worker.'
+        : 'يلزم تسجيل الدخول.',
+    };
   }
   if (shouldSkipBackendApiCalls()) {
     return {
@@ -1772,7 +1789,9 @@ export async function saveServerSecrets(
   },
   user: User | null
 ): Promise<{ ok: boolean; status?: DatabaseServerSecretStatus; error?: string }> {
-  if (!user) {
+  const masterSession = loadStoredMasterAdminSession();
+  const hasMasterServerToken = Boolean(getMasterAdminToken() && !getMasterAdminToken().startsWith('local:'));
+  if (!user && !hasMasterServerToken) {
     return { ok: false, error: 'يجب تسجيل الدخول كمسؤول مالك لحفظ الأسرار على السيرفر.' };
   }
   if (shouldSkipBackendApiCalls()) {
@@ -1803,8 +1822,8 @@ export async function saveServerSecrets(
       connectionId,
       connectionName: prof?.name || connectionId,
       status: 'success',
-      actorUid: user.uid,
-      actorName: user.displayName || user.email || 'Owner',
+      actorUid: user?.uid || (masterSession ? `master:${masterSession.username}` : 'master-admin'),
+      actorName: user?.displayName || user?.email || masterSession?.displayName || 'Owner',
       message: 'تم تحديث الأسرار السرية في مخزن السيرفر المشفر بنجاح (بدون عرضها في المتصفح).',
     });
     return { ok: true, status: data.status };
@@ -1820,7 +1839,8 @@ export async function deleteServerSecrets(
   connectionId: string,
   user: User | null
 ): Promise<{ ok: boolean; error?: string }> {
-  if (!user || shouldSkipBackendApiCalls()) return { ok: false };
+  const hasMasterServerToken = Boolean(getMasterAdminToken() && !getMasterAdminToken().startsWith('local:'));
+  if ((!user && !hasMasterServerToken) || shouldSkipBackendApiCalls()) return { ok: false };
   try {
     const resp = await fetch(resolveApiEndpoint(`/api/db/secrets/${encodeURIComponent(connectionId)}`), {
       method: 'DELETE',

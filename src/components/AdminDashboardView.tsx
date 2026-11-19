@@ -20,6 +20,7 @@ import {
   Film,
   Globe,
   Image as ImageIcon,
+  KeyRound,
   Layers,
   LayoutDashboard,
   Link2,
@@ -248,6 +249,13 @@ import {
   rollbackDatabaseConnection,
 } from '../lib/dbConnectionManager';
 import {
+  hasOfflineLocalMasterAccount,
+  loginMasterAdmin,
+  logoutMasterAdmin,
+  MasterAdminSession,
+  setupOfflineLocalMasterAccount,
+} from '../lib/masterAdminAuth';
+import {
   AdminPrivilegeRole,
   AdminRoleRecord,
   CastMember,
@@ -314,6 +322,7 @@ const MODERATOR_PERM_LABELS: {
 
 interface AdminDashboardViewProps {
   user: User | null;
+  masterAdminSession?: MasterAdminSession | null;
   isAdmin: boolean;
   adminRole?: AdminPrivilegeRole | null;
   authLoading: boolean;
@@ -608,6 +617,7 @@ function scrapedToMediaItem(scraped: ScrapedPayload, indexOffset = 0): MediaItem
 
 export function AdminDashboardView({
   user,
+  masterAdminSession = null,
   isAdmin,
   adminRole,
   authLoading,
@@ -635,6 +645,24 @@ export function AdminDashboardView({
   const effectiveRole: AdminPrivilegeRole | null =
     adminRole !== undefined ? adminRole : isAdmin ? 'owner' : null;
   const isOwner = effectiveRole === 'owner';
+  const activeActorUid =
+    user?.uid || (masterAdminSession ? `master:${masterAdminSession.username}` : 'master-admin');
+  const activeActorName =
+    user?.displayName ||
+    user?.email ||
+    masterAdminSession?.displayName ||
+    (isOwner ? 'المسؤول الأساسي' : 'مشرف');
+  const activeActorEmail =
+    user?.email ||
+    (masterAdminSession
+      ? `${masterAdminSession.username} • مستقل عن قاعدة البيانات`
+      : '');
+  const hasActor = Boolean(user || masterAdminSession);
+
+  const handleCombinedSignOut = async () => {
+    await logoutMasterAdmin();
+    await signOutFirebase().catch(() => undefined);
+  };
 
   const [workspacePrefs, setWorkspacePrefs] = useState<AdminWorkspacePrefs>(() =>
     loadAdminWorkspacePrefs()
@@ -745,7 +773,7 @@ export function AdminDashboardView({
   const navigateToTab = useCallback(
     (target: AdminTab) => {
       if (!isTabAccessible(target, isOwner, workspacePrefs.moderatorSubPermissions)) {
-        const sig = `${user?.uid || 'anon'}:${target}`;
+        const sig = `${activeActorUid || 'anon'}:${target}`;
         if (!loggedUnauthorizedRef.current.has(sig)) {
           loggedUnauthorizedRef.current.add(sig);
           reportClientError({
@@ -764,7 +792,7 @@ export function AdminDashboardView({
       setMobileDrawerOpen(false);
       updateWorkspacePrefs({ lastTab: target });
     },
-    [isOwner, workspacePrefs.moderatorSubPermissions, user?.uid, effectiveRole, updateWorkspacePrefs]
+    [isOwner, workspacePrefs.moderatorSubPermissions, activeActorUid, effectiveRole, updateWorkspacePrefs]
   );
 
   const lastHandledNonceRef = useRef<number>(requestedTab?.nonce || 0);
@@ -783,7 +811,7 @@ export function AdminDashboardView({
 
   useEffect(() => {
     if (!isTabAccessible(activeTab, isOwner, workspacePrefs.moderatorSubPermissions)) {
-      const sig = `${user?.uid || 'anon'}:${activeTab}`;
+      const sig = `${activeActorUid || 'anon'}:${activeTab}`;
       if (!loggedUnauthorizedRef.current.has(sig)) {
         loggedUnauthorizedRef.current.add(sig);
         reportClientError({
@@ -795,7 +823,7 @@ export function AdminDashboardView({
       }
       setActiveTab('catalog');
     }
-  }, [activeTab, isOwner, workspacePrefs.moderatorSubPermissions, user?.uid, effectiveRole]);
+  }, [activeTab, isOwner, workspacePrefs.moderatorSubPermissions, activeActorUid, effectiveRole]);
 
   useEffect(() => {
     const syncTasks = () => {
@@ -832,7 +860,7 @@ export function AdminDashboardView({
   }, []);
 
   useEffect(() => {
-    if (!authLoading && user && !isAdmin) {
+    if (!authLoading && user && !masterAdminSession && !isAdmin) {
       const sig = `admin_gate:${user.uid}`;
       if (!loggedUnauthorizedRef.current.has(sig)) {
         loggedUnauthorizedRef.current.add(sig);
@@ -844,14 +872,19 @@ export function AdminDashboardView({
         });
       }
     }
-  }, [authLoading, user, isAdmin]);
+  }, [authLoading, user, masterAdminSession, isAdmin]);
 
   const [busyAction, setBusyAction] = useState(false);
   const [reconnectingDb, setReconnectingDb] = useState(false);
   const [adminSigningIn, setAdminSigningIn] = useState(false);
   const [adminAuthError, setAdminAuthError] = useState<string | null>(null);
+  const [adminLoginMode, setAdminLoginMode] = useState<'master' | 'firebase'>('master');
   const [adminLoginEmail, setAdminLoginEmail] = useState('');
   const [adminLoginPassword, setAdminLoginPassword] = useState('');
+  const [showOfflineMasterSetup, setShowOfflineMasterSetup] = useState(false);
+  const [offlineMasterUsername, setOfflineMasterUsername] = useState('admin');
+  const [offlineMasterDisplayName, setOfflineMasterDisplayName] = useState('المسؤول الأساسي');
+  const [offlineMasterPassword, setOfflineMasterPassword] = useState('');
 
   // Catalog tab states
   const [searchQuery, setSearchQuery] = useState('');
@@ -1333,11 +1366,11 @@ export function AdminDashboardView({
   };
 
   const handleSeedDatabase = async () => {
-    if (!user) return;
+    if (!hasActor) return;
     const sourceToSeed = catalog.length > 0 ? catalog : CATALOG_ITEMS;
     setBusyAction(true);
     try {
-      await seedCatalogToFirestore(sourceToSeed, user.uid);
+      await seedCatalogToFirestore(sourceToSeed, activeActorUid);
       onNotify(`تم استيراد جميع الأعمال (${sourceToSeed.length} عمل) إلى قاعدة بيانات Firestore بنجاح`);
     } catch {
       onNotify('تعذر استيراد البيانات — تأكد من صلاحيات المشرف');
@@ -1486,7 +1519,7 @@ export function AdminDashboardView({
 
   const commitSaveEditorMedia = async () => {
     const finalItem = buildFinalItemFromEditor();
-    if (!user || !finalItem) return;
+    if (!hasActor || !finalItem) return;
     setBusyAction(true);
     try {
       const verification = await verifyAndFilterItemServers(finalItem);
@@ -1502,7 +1535,7 @@ export function AdminDashboardView({
       const existsInDb = isFirestoreSeeded && !isCreatingNew;
       const saveResult = await saveMediaToFirestore(
         verification.cleanedItem,
-        user.uid,
+        activeActorUid,
         !existsInDb
       );
       const removedNote =
@@ -1726,7 +1759,7 @@ export function AdminDashboardView({
   };
 
   const handlePublishScrapedDirectly = async () => {
-    if (!user || !scrapedResult) return;
+    if (!hasActor || !scrapedResult) return;
     setBusyAction(true);
     try {
       const item = scrapedToMediaItem(scrapedResult);
@@ -1748,7 +1781,7 @@ export function AdminDashboardView({
         return;
       }
 
-      const saveResult = await saveMediaToFirestore(verification.cleanedItem, user.uid, true);
+      const saveResult = await saveMediaToFirestore(verification.cleanedItem, activeActorUid, true);
       const removedNote =
         verification.removedCount > 0
           ? ` (تم حظر ${verification.removedCount} سيرفر معطل أو صفحة موقع)`
@@ -1940,7 +1973,7 @@ export function AdminDashboardView({
   }, [siteScrapedItems, siteKindFilter]);
 
   const handleBulkPublishSelected = async () => {
-    if (!user) return;
+    if (!hasActor) return;
     const chosen = siteScrapedItems.filter((i) => i.selected);
     if (chosen.length === 0) {
       onNotify('يرجى تحديد عمل واحد على الأقل قبل النشر.');
@@ -1988,7 +2021,7 @@ export function AdminDashboardView({
         return;
       }
 
-      const count = await bulkSaveMediaToFirestore(readyItems, user.uid);
+      const count = await bulkSaveMediaToFirestore(readyItems, activeActorUid);
       const extraNotes: string[] = [];
       if (strippedServersCount > 0) {
         extraNotes.push(`استُبعد ${strippedServersCount} سيرفر معطل/موقع`);
@@ -2010,13 +2043,13 @@ export function AdminDashboardView({
   };
 
   const handleTogglePin = async (item: MediaItem) => {
-    if (!user) return;
+    if (!hasActor) return;
     if (!isFirestoreSeeded) {
       onNotify('قم أولاً باستيراد المكتبة لقاعدة البيانات لتفعيل التعديلات المباشرة');
       return;
     }
     try {
-      await saveMediaToFirestore({ ...item, pinned: !item.pinned }, user.uid, false);
+      await saveMediaToFirestore({ ...item, pinned: !item.pinned }, activeActorUid, false);
       onNotify(
         !item.pinned ? `تم تثبيت "${item.title}" في السلايدر` : `تم إلغاء تثبيت "${item.title}"`
       );
@@ -2161,10 +2194,10 @@ export function AdminDashboardView({
 
   const handleGrantAdmin = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user || !isOwner || !newAdminUid.trim()) return;
+    if (!hasActor || !isOwner || !newAdminUid.trim()) return;
     setBusyAction(true);
     try {
-      await grantAdminRoleInFirestore(newAdminUid, newAdminName, user.uid, newAdminRole);
+      await grantAdminRoleInFirestore(newAdminUid, newAdminName, activeActorUid, newAdminRole);
       setNewAdminUid('');
       setNewAdminName('');
       onNotify(
@@ -2181,7 +2214,7 @@ export function AdminDashboardView({
 
   const handleCreateAdminAccount = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user || !isOwner || !createAdminEmail.trim() || createAdminPassword.length < 6) {
+    if (!hasActor || !isOwner || !createAdminEmail.trim() || createAdminPassword.length < 6) {
       setCreateAdminError('يرجى إدخال البريد/اسم المستخدم وكلمة مرور لا تقل عن 6 أحرف.');
       return;
     }
@@ -2192,7 +2225,7 @@ export function AdminDashboardView({
         createAdminEmail,
         createAdminPassword,
         createAdminName,
-        user.uid,
+        activeActorUid,
         createAdminRole
       );
       setCreateAdminName('');
@@ -2211,7 +2244,7 @@ export function AdminDashboardView({
   };
 
   const handleToggleExistingAdminRole = async (adm: AdminRoleRecord) => {
-    if (!isOwner || adm.uid === user?.uid) return;
+    if (!isOwner || adm.uid === activeActorUid) return;
     const currentRole: AdminPrivilegeRole = adm.role === 'moderator' ? 'moderator' : 'owner';
     const nextRole: AdminPrivilegeRole = currentRole === 'owner' ? 'moderator' : 'owner';
     setBusyAction(true);
@@ -2231,7 +2264,7 @@ export function AdminDashboardView({
 
   const handleSaveSettings = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+    if (!hasActor) return;
     setBusyAction(true);
     try {
       const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
@@ -2247,7 +2280,7 @@ export function AdminDashboardView({
           typography: normalizedTypography,
           popupShield: normalizedShield,
         },
-        user.uid
+        activeActorUid
       );
       onNotify(
         res?.syncedHomeToCloud === false
@@ -2264,7 +2297,7 @@ export function AdminDashboardView({
   const handleSaveHomeConfig = async (nextHome: HomeLayoutConfig) => {
     const cleanHome = saveStoredHomeConfig(nextHome);
     setSettingsForm((prev) => ({ ...prev, homeConfig: cleanHome }));
-    if (!user) {
+    if (!hasActor) {
       onNotify('تم حفظ تخطيط الصفحة الرئيسية محلياً — سجّل الدخول كمشرف للمزامنة');
       return;
     }
@@ -2281,7 +2314,7 @@ export function AdminDashboardView({
           typography: normalizedTypography,
           popupShield: normalizedShield,
         },
-        user.uid
+        activeActorUid
       );
       onNotify(
         res?.syncedHomeToCloud === false
@@ -2299,7 +2332,7 @@ export function AdminDashboardView({
     const cleanTypography = saveStoredTypographyConfig(nextTypography);
     setSettingsForm((prev) => ({ ...prev, typography: cleanTypography }));
     applyTypographyToDocument(cleanTypography, effectiveCustomFonts);
-    if (!user) {
+    if (!hasActor) {
       onNotify('تم تطبيق الخطوط وأحجام النصوص محلياً — سجّل الدخول كمشرف لحفظها للجميع');
       return;
     }
@@ -2316,7 +2349,7 @@ export function AdminDashboardView({
           typography: cleanTypography,
           popupShield: normalizedShield,
         },
-        user.uid
+        activeActorUid
       );
       onNotify(
         res?.syncedHomeToCloud === false
@@ -2334,7 +2367,7 @@ export function AdminDashboardView({
     const cleanShield = saveStoredPopupShieldConfig(nextShield);
     setSettingsForm((prev) => ({ ...prev, popupShield: cleanShield }));
     onPopupShieldChange?.(cleanShield);
-    if (!user) {
+    if (!hasActor) {
       onNotify('تم تطبيق إعدادات درع النوافذ المنبثقة محلياً — سجّل الدخول للمزامنة السحابية');
       return;
     }
@@ -2351,7 +2384,7 @@ export function AdminDashboardView({
           typography: normalizedTypography,
           popupShield: cleanShield,
         },
-        user.uid
+        activeActorUid
       );
       onNotify(
         res?.syncedHomeToCloud === false
@@ -2379,13 +2412,13 @@ export function AdminDashboardView({
     setSettingsForm((prev) => ({ ...prev, typography: nextTypo }));
     applyTypographyToDocument(nextTypo, nextFonts);
 
-    if (!user) {
+    if (!hasActor) {
       onNotify(`تم تفعيل الخط "${font.fileName}" محلياً — سجّل الدخول للمزامنة السحابية`);
       return;
     }
     setBusyAction(true);
     try {
-      await saveCustomFontToFirestore(font, user.uid);
+      await saveCustomFontToFirestore(font, activeActorUid);
       const normalizedTheme = saveStoredPlayerTheme(activePlayerTheme);
       const normalizedHome = saveStoredHomeConfig(activeHomeConfig);
       const normalizedShield = saveStoredPopupShieldConfig(activePopupShield);
@@ -2397,7 +2430,7 @@ export function AdminDashboardView({
           typography: nextTypo,
           popupShield: normalizedShield,
         },
-        user.uid
+        activeActorUid
       );
       onNotify(`تم رفع وحفظ الخط "${font.fileName}" في السحابة وتفعيله بنجاح!`);
     } catch {
@@ -2416,7 +2449,7 @@ export function AdminDashboardView({
     onCustomFontsChange?.(nextFonts);
     applyTypographyToDocument(activeTypography, nextFonts);
 
-    if (!user) {
+    if (!hasActor) {
       onNotify('تم حذف الخط المخصص محلياً');
       return;
     }
@@ -2434,7 +2467,7 @@ export function AdminDashboardView({
   const handleSavePlayerThemeOnly = async (themeToSave: PlayerThemeConfig) => {
     const clean = saveStoredPlayerTheme(themeToSave);
     setSettingsForm((prev) => ({ ...prev, playerTheme: clean }));
-    if (!user) {
+    if (!hasActor) {
       onNotify('تم تطبيق الثيم محلياً — سجّل الدخول كمشرف لحفظه لكل الزوار');
       return;
     }
@@ -2451,7 +2484,7 @@ export function AdminDashboardView({
           typography: normalizedTypography,
           popupShield: normalizedShield,
         },
-        user.uid
+        activeActorUid
       );
       onNotify('تم حفظ وتطبيق ثيم المشغّل الداخلي تلقائياً على جميع مشغّلات الموقع!');
     } catch {
@@ -2769,7 +2802,7 @@ export function AdminDashboardView({
   };
 
   const handleRefreshRealRatings = async (mode: '7.8' | 'all' | 'selected') => {
-    if (!user || refreshingRatings) return;
+    if (!hasActor || refreshingRatings) return;
     if (!isFirestoreSeeded) {
       onNotify('قم أولاً باستيراد المكتبة لقاعدة البيانات لتفعيل تحديث التقييمات');
       return;
@@ -2824,7 +2857,7 @@ export function AdminDashboardView({
       }
 
       if (updates.length > 0) {
-        await bulkUpdateMediaInFirestore(updates, user.uid);
+        await bulkUpdateMediaInFirestore(updates, activeActorUid);
         onNotify(
           `تم تحديث التقييم الحقيقي لـ ${updates.length} عمل بنجاح (من أصل ${targets.length} تم فحصها).`
         );
@@ -3103,7 +3136,9 @@ export function AdminDashboardView({
     );
   }
 
-  if (!user || !isAdmin) {
+  if ((!user && !masterAdminSession) || !isAdmin) {
+    const isStaticHost = shouldSkipBackendApiCalls();
+    const hasOfflineAccount = isStaticHost ? hasOfflineLocalMasterAccount() : false;
     return (
       <div className="min-h-screen bg-[#06131c] flex flex-col items-center justify-center p-4">
         <div className="w-full max-w-lg rounded-3xl bg-[#0c1821] border border-white/10 p-8 shadow-2xl text-center space-y-5">
@@ -3120,12 +3155,252 @@ export function AdminDashboardView({
             </h1>
             <p className="mt-2 text-sm text-[#b7c9ef] leading-relaxed">
               {!user
-                ? 'سجّل الدخول بالبريد الإلكتروني (أو اسم المستخدم) وكلمة المرور للوصول إلى لوحة تحكم الإدارة.'
-                : `الحساب الحالي (${user.email}) لا يمتلك صلاحيات المشرف بعد.`}
+                ? 'يمكنك الدخول بالحساب الأساسي المستقل لإضافة وربط قاعدة البيانات في أي وقت، أو تسجيل الدخول بحساب Firebase.'
+                : `الحساب الحالي (${user.email}) لا يمتلك صلاحيات المشرف في قاعدة البيانات، ويمكنك التبديل للحساب الأساسي المستقل.`}
             </p>
           </div>
 
-          {!user ? (
+          {user && (
+            <div className="space-y-3 text-right rounded-2xl bg-[#1a242e]/80 border border-white/10 p-4">
+              <p className="font-bold text-xs text-white">معرّف الحساب الحالي (UID) في Firebase:</p>
+              <div className="flex items-center justify-between gap-2 rounded-lg bg-[#06131c] px-3 py-2 border border-white/10">
+                <span className="font-latin text-xs font-bold text-[#f9c400] select-all truncate" dir="ltr">
+                  {user.uid}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(user.uid);
+                    onNotify('تم نسخ UID بنجاح');
+                  }}
+                  className="shrink-0 rounded-md bg-white/10 hover:bg-white/20 px-2.5 py-1 text-[11px] font-bold text-white cursor-pointer"
+                >
+                  نسخ
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleCombinedSignOut()}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-[#06131c] hover:bg-[#D92321] border border-white/10 py-2.5 text-xs font-extrabold text-white transition-colors cursor-pointer"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>تسجيل الخروج من Firebase</span>
+              </button>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-1.5 rounded-2xl bg-[#1a242e] p-1 border border-white/10">
+            <button
+              type="button"
+              onClick={() => {
+                setAdminLoginMode('master');
+                setAdminAuthError(null);
+              }}
+              className={`rounded-xl py-2.5 px-3 text-xs font-extrabold transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
+                adminLoginMode === 'master'
+                  ? 'bg-[#D92321] text-white shadow'
+                  : 'text-[#b7c9ef] hover:text-white'
+              }`}
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              <span>الحساب الأساسي (بدون قاعدة)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAdminLoginMode('firebase');
+                setAdminAuthError(null);
+              }}
+              className={`rounded-xl py-2.5 px-3 text-xs font-extrabold transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
+                adminLoginMode === 'firebase'
+                  ? 'bg-[#D92321] text-white shadow'
+                  : 'text-[#b7c9ef] hover:text-white'
+              }`}
+            >
+              <Database className="w-3.5 h-3.5" />
+              <span>حساب Firebase / Google</span>
+            </button>
+          </div>
+
+          {adminLoginMode === 'master' ? (
+            <div className="space-y-3 text-right">
+              <div className="rounded-xl bg-[#4CAF50]/10 border border-[#4CAF50]/30 p-3 text-xs text-emerald-100 leading-relaxed">
+                هذا الحساب مستقل تماماً عن Firestore وFirebase Auth، ويتيح لك الدخول لإضافة واختبار وتبديل قواعد البيانات بحرية.
+              </div>
+
+              {isStaticHost && !hasOfflineAccount && showOfflineMasterSetup ? (
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    setAdminAuthError(null);
+                    setAdminSigningIn(true);
+                    try {
+                      const res = await setupOfflineLocalMasterAccount({
+                        username: offlineMasterUsername,
+                        password: offlineMasterPassword,
+                        displayName: offlineMasterDisplayName,
+                      });
+                      if (!res.ok) {
+                        setAdminAuthError(res.error);
+                        return;
+                      }
+                      setOfflineMasterPassword('');
+                      setShowOfflineMasterSetup(false);
+                      if (dbConnectionStatus && dbConnectionStatus !== 'connected') {
+                        setActiveTab('database_manager');
+                      }
+                      onNotify('تم إنشاء وتفعيل حساب الطوارئ المحلي على هذا المتصفح بنجاح');
+                    } finally {
+                      setAdminSigningIn(false);
+                    }
+                  }}
+                  className="space-y-3 rounded-2xl bg-[#1a242e] border border-white/10 p-4"
+                >
+                  <p className="text-xs font-extrabold text-[#f9c400]">
+                    تجهيز حساب الطوارئ المحلي (للاستضافة الثابتة بدون خادم خلفي)
+                  </p>
+                  <div>
+                    <label className="block text-xs font-bold text-[#b7c9ef] mb-1">اسم المستخدم</label>
+                    <input
+                      type="text"
+                      required
+                      dir="ltr"
+                      value={offlineMasterUsername}
+                      onChange={(e) => setOfflineMasterUsername(e.target.value)}
+                      className="w-full rounded-xl bg-[#06131c] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-[#b7c9ef] mb-1">الاسم المعروض</label>
+                    <input
+                      type="text"
+                      value={offlineMasterDisplayName}
+                      onChange={(e) => setOfflineMasterDisplayName(e.target.value)}
+                      className="w-full rounded-xl bg-[#06131c] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-[#b7c9ef] mb-1">
+                      كلمة المرور (8 أحرف على الأقل)
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      minLength={8}
+                      dir="ltr"
+                      value={offlineMasterPassword}
+                      onChange={(e) => setOfflineMasterPassword(e.target.value)}
+                      className="w-full rounded-xl bg-[#06131c] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="submit"
+                      disabled={adminSigningIn}
+                      className="flex-1 rounded-xl bg-[#4CAF50] hover:bg-emerald-600 py-2.5 text-xs font-extrabold text-white cursor-pointer"
+                    >
+                      إنشاء والدخول الآن
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowOfflineMasterSetup(false)}
+                      className="rounded-xl bg-white/10 px-4 py-2.5 text-xs font-bold text-white cursor-pointer"
+                    >
+                      رجوع
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    if (!adminLoginEmail.trim() || !adminLoginPassword) {
+                      setAdminAuthError('يرجى إدخال اسم المستخدم وكلمة المرور.');
+                      return;
+                    }
+                    setAdminAuthError(null);
+                    setAdminSigningIn(true);
+                    try {
+                      const res = await loginMasterAdmin(adminLoginEmail, adminLoginPassword);
+                      if (!res.ok) {
+                        setAdminAuthError(res.error);
+                        return;
+                      }
+                      setAdminLoginPassword('');
+                      if (dbConnectionStatus && dbConnectionStatus !== 'connected') {
+                        setActiveTab('database_manager');
+                      }
+                      onNotify('تم تسجيل الدخول بالحساب الأساسي المستقل بنجاح');
+                    } finally {
+                      setAdminSigningIn(false);
+                    }
+                  }}
+                  className="space-y-3"
+                >
+                  <div>
+                    <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
+                      اسم المستخدم الأساسي
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      dir="ltr"
+                      value={adminLoginEmail}
+                      onChange={(e) => setAdminLoginEmail(e.target.value)}
+                      placeholder="admin"
+                      className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-4 py-3 text-sm text-white focus:border-[#D92321] focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-[#b7c9ef] mb-1.5">
+                      كلمة المرور
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      dir="ltr"
+                      value={adminLoginPassword}
+                      onChange={(e) => setAdminLoginPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-4 py-3 text-sm text-white focus:border-[#D92321] focus:outline-none"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={adminSigningIn}
+                    className="w-full inline-flex items-center justify-center gap-2.5 rounded-2xl bg-[#D92321] hover:bg-[#dc0e30] disabled:opacity-60 py-3.5 px-6 text-sm font-extrabold text-white shadow-lg transition-colors cursor-pointer"
+                  >
+                    {adminSigningIn ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <KeyRound className="w-5 h-5" />
+                    )}
+                    <span>
+                      {adminSigningIn ? 'جاري التحقق والدخول...' : 'دخول بالحساب الأساسي المستقل'}
+                    </span>
+                  </button>
+
+                  {isStaticHost && !hasOfflineAccount && (
+                    <button
+                      type="button"
+                      onClick={() => setShowOfflineMasterSetup(true)}
+                      className="w-full rounded-xl border border-amber-400/35 bg-amber-500/10 py-2.5 text-xs font-bold text-amber-200 hover:bg-amber-500/20 cursor-pointer"
+                    >
+                      استضافة ثابتة بدون خادم؟ اضغط هنا لإعداد حساب الطوارئ المحلي لأول مرة
+                    </button>
+                  )}
+                </form>
+              )}
+
+              {adminAuthError && (
+                <div className="rounded-xl bg-[#D92321]/15 border border-[#D92321]/40 p-3 text-xs leading-relaxed text-red-200">
+                  {adminAuthError}
+                </div>
+              )}
+            </div>
+          ) : (
             <div className="space-y-3 text-right">
               <form
                 onSubmit={async (e) => {
@@ -3225,39 +3500,6 @@ export function AdminDashboardView({
               <p className="text-[11px] text-[#b7c9ef]/70 text-center leading-relaxed pt-1">
                 إذا كتبت اسم مستخدم بدون @ سيتم إلحاق <span className="font-latin text-white/90">@rahaltv.com</span> تلقائيًا.
               </p>
-            </div>
-          ) : (
-            <div className="space-y-3 text-right">
-              <div className="rounded-xl bg-[#1a242e] p-3.5 text-xs text-[#b7c9ef] space-y-2">
-                <p className="font-bold text-white">معرّف الحساب (UID) في Firebase:</p>
-                <div className="flex items-center justify-between gap-2 rounded-lg bg-[#06131c] px-3 py-2 border border-white/10">
-                  <span className="font-latin text-xs font-bold text-[#f9c400] select-all truncate" dir="ltr">
-                    {user.uid}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void navigator.clipboard?.writeText(user.uid);
-                      onNotify('تم نسخ UID بنجاح');
-                    }}
-                    className="shrink-0 rounded-md bg-white/10 hover:bg-white/20 px-2.5 py-1 text-[11px] font-bold text-white cursor-pointer"
-                  >
-                    نسخ
-                  </button>
-                </div>
-                <p className="text-[11px] leading-relaxed text-[#b7c9ef]/85">
-                  لتفعيل هذا الحساب كمدير رئيسي: أنشئ مستندًا في Firestore داخل مجموعة{' '}
-                  <span className="font-latin text-white">admins</span> بنفس معرف الـ UID أعلاه، أو اطلب من المدير الحالي إضافتك من تبويب إدارة المشرفين.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => void signOutFirebase()}
-                className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-[#1a242e] hover:bg-[#D92321] border border-white/10 py-3 text-xs font-extrabold text-white transition-colors cursor-pointer"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>تسجيل الخروج / تبديل الحساب</span>
-              </button>
             </div>
           )}
 
@@ -3520,25 +3762,29 @@ export function AdminDashboardView({
             </button>
 
             <div className="hidden xl:flex items-center gap-2 rounded-xl bg-[#1a242e] border border-white/10 px-3 py-1.5">
-              {user.photoURL && (
+              {user?.photoURL ? (
                 <img
                   src={user.photoURL}
-                  alt={user.displayName || 'Admin'}
+                  alt={activeActorName}
                   referrerPolicy="no-referrer"
                   className="h-6 w-6 rounded-full object-cover"
                 />
-              )}
+              ) : masterAdminSession ? (
+                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#4CAF50]/20 text-[#4CAF50]">
+                  <KeyRound className="w-3.5 h-3.5" />
+                </span>
+              ) : null}
               <div className="text-right leading-tight">
-                <p className="text-[11px] font-extrabold text-white truncate max-w-[110px]">
-                  {user.displayName || (isOwner ? 'مسؤول' : 'مشرف')}
+                <p className="text-[11px] font-extrabold text-white truncate max-w-[130px]">
+                  {activeActorName}
                 </p>
-                <p className="font-latin text-[10px] text-[#b7c9ef] truncate max-w-[130px]">
-                  {user.email}
+                <p className="font-latin text-[10px] text-[#b7c9ef] truncate max-w-[160px]">
+                  {activeActorEmail}
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => void signOutFirebase()}
+                onClick={() => void handleCombinedSignOut()}
                 title="تسجيل الخروج"
                 aria-label="تسجيل الخروج"
                 className="mr-1 rounded-lg p-1 text-[#b7c9ef] hover:bg-[#D92321] hover:text-white cursor-pointer"
@@ -3594,6 +3840,25 @@ export function AdminDashboardView({
 
           {/* Active Tab Workspace */}
           <main className="flex-1 min-w-0 w-full space-y-6">
+            {masterAdminSession?.mustChangePassword && (
+              <div className="rounded-2xl border border-amber-400/40 bg-amber-500/15 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs text-amber-100 shadow-lg">
+                <div className="flex items-center gap-2.5">
+                  <KeyRound className="w-4 h-4 text-[#f9c400] shrink-0" />
+                  <span>
+                    <strong className="text-white">تنبيه أمني:</strong> أنت تستخدم كلمة المرور المبدئية للحساب الأساسي المستقل — يُرجى تغييرها فوراً لحماية لوحة التحكم.
+                  </span>
+                </div>
+                {activeTab !== 'database_manager' && (
+                  <button
+                    type="button"
+                    onClick={() => navigateToTab('database_manager')}
+                    className="rounded-xl bg-[#f9c400] hover:bg-amber-300 text-[#06131c] px-3.5 py-1.5 text-xs font-extrabold cursor-pointer whitespace-nowrap"
+                  >
+                    تغيير كلمة المرور الآن
+                  </button>
+                )}
+              </div>
+            )}
             {dbConnectionStatus && dbConnectionStatus !== 'connected' && (() => {
               const activeFirebaseConfig = getActiveFirebaseConfig();
               const dbReg = loadDatabaseRegistry();
@@ -3653,8 +3918,8 @@ export function AdminDashboardView({
                         setReconnectingDb(true);
                         try {
                           const res = await rollbackDatabaseConnection({
-                            uid: user.uid,
-                            name: user.displayName || user.email || 'Admin',
+                            uid: activeActorUid,
+                            name: activeActorName,
                           });
                           if (res.ok) {
                             onNotify(
@@ -3874,8 +4139,8 @@ export function AdminDashboardView({
                 isTabAccessible('categories', isOwner, workspacePrefs.moderatorSubPermissions) && (
                   <AdminCategoriesPanel
                     catalog={catalog}
-                    adminUid={user.uid}
-                    adminName={user.displayName || user.email || 'Admin'}
+                    adminUid={activeActorUid}
+                    adminName={activeActorName}
                     isFirestoreSeeded={isFirestoreSeeded}
                     onNavigateTab={navigateToTab}
                     onNotify={onNotify}
@@ -3886,8 +4151,8 @@ export function AdminDashboardView({
                 isTabAccessible('bulk_editor', isOwner, workspacePrefs.moderatorSubPermissions) && (
                   <AdminBulkEditorPanel
                     catalog={catalog}
-                    adminUid={user.uid}
-                    adminName={user.displayName || user.email || 'Admin'}
+                    adminUid={activeActorUid}
+                    adminName={activeActorName}
                     isFirestoreSeeded={isFirestoreSeeded}
                     onDeleteStarterItems={onDeleteStarterItems}
                     onNotify={onNotify}
@@ -4037,6 +4302,7 @@ export function AdminDashboardView({
               {isOwner && activeTab === 'database_manager' && (
                 <AdminDatabaseManagerPanel
                   user={user}
+                  masterAdminSession={masterAdminSession}
                   dbConnectionStatus={dbConnectionStatus}
                   dbConnectionError={dbConnectionError}
                   customApiUrl={customApiUrl}
@@ -4061,8 +4327,8 @@ export function AdminDashboardView({
                   siteSettings={siteSettings}
                   adapters={scraperAdapters}
                   requests={requests}
-                  adminUid={user.uid}
-                  adminName={user.displayName || user.email || 'Admin'}
+                  adminUid={activeActorUid}
+                  adminName={activeActorName}
                   onNotify={onNotify}
                 />
               )}
@@ -5160,7 +5426,7 @@ export function AdminDashboardView({
             )}
 
             {/* TAB 3C: SMART SCRAPER ADAPTER BUILDER */}
-            {activeTab === 'scraper_adapters' && user && (
+            {activeTab === 'scraper_adapters' && (
               <ScraperAdapterBuilderPanel
                 user={user}
                 adapters={scraperAdapters}
@@ -5464,7 +5730,7 @@ export function AdminDashboardView({
                               >
                                 {roleVal === 'owner' ? 'مسؤول (كامل)' : 'مشرف (نشر وجلب)'}
                               </span>
-                              {adm.uid === user.uid && (
+                              {adm.uid === activeActorUid && (
                                 <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-black text-white">
                                   حسابك الحالي
                                 </span>
@@ -5473,7 +5739,7 @@ export function AdminDashboardView({
                                 ({adm.uid})
                               </span>
                             </div>
-                            {adm.uid !== user.uid && (
+                            {adm.uid !== activeActorUid && (
                               <div className="flex items-center gap-3">
                                 <button
                                   type="button"
