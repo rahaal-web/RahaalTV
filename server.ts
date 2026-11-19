@@ -6,6 +6,7 @@ import http from 'http';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import {
+  buildExternalSearchQueries,
   cleanExternalSearchTitle,
   extractBackgroundImageUrl,
   extractCleanEnglishTitleCandidate,
@@ -550,23 +551,7 @@ function buildCandidateSearchQueriesServer(
   englishTitle: string,
   extraTitle?: string
 ): string[] {
-  const candidates = [
-    cleanExternalSearchTitle(title, englishTitle),
-    extraTitle ? cleanExternalSearchTitle(extraTitle, extraTitle) : '',
-    extractCleanEnglishTitleCandidate(title),
-    cleanExternalSearchTitle(title, ''),
-  ];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const q of candidates) {
-    const clean = q.trim();
-    const key = clean.toLowerCase();
-    if (clean.length >= 2 && !seen.has(key)) {
-      seen.add(key);
-      out.push(clean);
-    }
-  }
-  return out;
+  return buildExternalSearchQueries(title, englishTitle, extraTitle);
 }
 
 const WIKIDATA_FILM_QIDS_SERVER = new Set([
@@ -586,6 +571,64 @@ const WIKIDATA_SERIES_QIDS_SERVER = new Set([
   'Q15416',
 ]);
 
+const WIKIMEDIA_SERVER_CACHE = new Map<string, { imdbId: string; englishTitle: string; year: string } | null>();
+let serverWikimediaQueue: Promise<unknown> = Promise.resolve();
+let serverLastWikimediaAt = 0;
+
+function enqueueServerWikimediaCall<T>(task: () => Promise<T>): Promise<T> {
+  const run = serverWikimediaQueue.then(async () => {
+    const waitMs = Math.max(0, 420 - (Date.now() - serverLastWikimediaAt));
+    if (waitMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+    serverLastWikimediaAt = Date.now();
+    return task();
+  });
+  serverWikimediaQueue = run.catch(() => undefined);
+  return run;
+}
+
+const WIKIMEDIA_HEADERS = {
+  'User-Agent': 'RahaLTV/1.0 (https://rahaaltv.app)',
+  'Api-User-Agent': 'RahaLTV/1.0 (https://rahaaltv.app)',
+  Accept: 'application/json',
+};
+
+async function fetchServerWikimediaJson<T>(url: string): Promise<T | null> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await enqueueServerWikimediaCall(() =>
+        fetch(url, { headers: WIKIMEDIA_HEADERS, signal: AbortSignal.timeout(7000) })
+      );
+      const text = await res.text();
+      if (
+        res.status === 429 ||
+        /too many requests/i.test(text) ||
+        (!res.ok && res.status >= 500)
+      ) {
+        if (attempt < 2) {
+          const retryAfterSec = Number(res.headers.get('retry-after') || '');
+          const delayMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0
+            ? Math.min(8000, retryAfterSec * 1000)
+            : 1600 * (attempt + 1);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
+        }
+        return null;
+      }
+      if (!res.ok || !text.trim().startsWith('{')) return null;
+      return JSON.parse(text) as T;
+    } catch {
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+        continue;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
 async function queryWikidataBridgeServer(params: {
   queries: string[];
   title: string;
@@ -594,94 +637,140 @@ async function queryWikidataBridgeServer(params: {
   kind: string;
 }): Promise<{ imdbId: string; englishTitle: string; year: string } | null> {
   const { queries, title, englishTitle, year, kind } = params;
-  for (const term of queries.slice(0, 2)) {
-    const hasArabic = /[\u0600-\u06FF]/.test(term);
-    const langs = hasArabic ? ['ar', 'en'] : ['en', 'ar'];
-    for (const lang of langs) {
-      try {
-        const sRes = await fetch(
-          `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(term)}&language=${lang}&limit=6&format=json`,
-          { signal: AbortSignal.timeout(5500) }
-        );
-        if (!sRes.ok) continue;
-        const sJson = (await sRes.json()) as { search?: Array<{ id?: string }> };
-        const ids = (sJson.search || []).map((s) => s.id).filter((id): id is string => Boolean(id));
-        if (!ids.length) continue;
+  if (queries.length === 0) return null;
 
-        const eRes = await fetch(
-          `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${ids.join('|')}&props=labels|aliases|claims&languages=ar|en&format=json`,
-          { signal: AbortSignal.timeout(5500) }
-        );
-        if (!eRes.ok) continue;
-        const eJson = (await eRes.json()) as {
-          entities?: Record<
+  const cacheKey = `${kind}|${queries.slice(0, 3).join('||').toLowerCase()}|${year}`;
+  if (WIKIMEDIA_SERVER_CACHE.has(cacheKey)) {
+    return WIKIMEDIA_SERVER_CACHE.get(cacheKey) || null;
+  }
+
+  const scoreEntityIds = async (ids: string[]) => {
+    if (!ids.length) return null;
+    const eJson = await fetchServerWikimediaJson<{
+      entities?: Record<
+        string,
+        {
+          labels?: { ar?: { value?: string }; en?: { value?: string }; mul?: { value?: string } };
+          aliases?: {
+            ar?: Array<{ value?: string }>;
+            en?: Array<{ value?: string }>;
+            mul?: Array<{ value?: string }>;
+          };
+          claims?: Record<
             string,
-            {
-              labels?: { ar?: { value?: string }; en?: { value?: string } };
-              aliases?: { ar?: Array<{ value?: string }>; en?: Array<{ value?: string }> };
-              claims?: Record<
-                string,
-                Array<{ mainsnak?: { datavalue?: { value?: string | { id?: string; time?: string } } } }>
-              >;
-            }
+            Array<{ mainsnak?: { datavalue?: { value?: string | { id?: string; time?: string } } } }>
           >;
-        };
-
-        let bestMatch: { score: number; imdbId: string; englishTitle: string; year: string } | null = null;
-        for (const id of ids) {
-          const ent = eJson.entities?.[id];
-          if (!ent?.claims) continue;
-          const imdbVal = ent.claims.P345?.[0]?.mainsnak?.datavalue?.value;
-          const imdbId = typeof imdbVal === 'string' && /^tt\d{6,10}$/i.test(imdbVal) ? imdbVal : '';
-          if (!imdbId) continue;
-
-          const p31Ids = (ent.claims.P31 || [])
-            .map((c) => {
-              const v = c?.mainsnak?.datavalue?.value;
-              return typeof v === 'object' && v?.id ? v.id : '';
-            })
-            .filter(Boolean);
-          const isSeriesQid = p31Ids.some((q) => WIKIDATA_SERIES_QIDS_SERVER.has(q));
-          const isFilmQid = p31Ids.some((q) => WIKIDATA_FILM_QIDS_SERVER.has(q));
-          if (kind === 'movie' && isSeriesQid && !isFilmQid) continue;
-          if (kind === 'series' && isFilmQid && !isSeriesQid) continue;
-
-          const dateVal =
-            ent.claims.P577?.[0]?.mainsnak?.datavalue?.value ||
-            ent.claims.P580?.[0]?.mainsnak?.datavalue?.value;
-          const candYear =
-            typeof dateVal === 'object' && dateVal?.time
-              ? dateVal.time.match(/(\d{4})/)?.[1] || ''
-              : '';
-
-          const check = scoreExternalTitleMatch({
-            queryTitle: title,
-            englishTitle,
-            expectedYear: year,
-            expectedYearExplicit: Boolean(year && year !== '2026'),
-            candidateTitles: [
-              ent.labels?.ar?.value,
-              ent.labels?.en?.value,
-              ...(ent.aliases?.ar || []).map((a) => a.value),
-              ...(ent.aliases?.en || []).map((a) => a.value),
-            ],
-            candidateYear: candYear,
-          });
-          if (check.matched && (!bestMatch || check.score > bestMatch.score)) {
-            bestMatch = {
-              score: check.score,
-              imdbId,
-              englishTitle: ent.labels?.en?.value || ent.labels?.ar?.value || '',
-              year: candYear,
-            };
-          }
         }
-        if (bestMatch) return { imdbId: bestMatch.imdbId, englishTitle: bestMatch.englishTitle, year: bestMatch.year };
-      } catch {
-        // ignore Wikidata error
+      >;
+    }>(
+      `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${ids.join('|')}&props=labels|aliases|claims&languages=ar|en|mul&format=json`
+    );
+    if (!eJson) return null;
+
+    let bestMatch: { score: number; imdbId: string; englishTitle: string; year: string } | null = null;
+    for (const id of ids) {
+      const ent = eJson.entities?.[id];
+      if (!ent?.claims) continue;
+      const imdbVal = ent.claims.P345?.[0]?.mainsnak?.datavalue?.value;
+      const imdbId = typeof imdbVal === 'string' && /^tt\d{6,10}$/i.test(imdbVal) ? imdbVal : '';
+      const enLabel = ent.labels?.en?.value || ent.labels?.mul?.value || '';
+      if (!imdbId && !enLabel) continue;
+
+      const p31Ids = (ent.claims.P31 || [])
+        .map((c) => {
+          const v = c?.mainsnak?.datavalue?.value;
+          return typeof v === 'object' && v?.id ? v.id : '';
+        })
+        .filter(Boolean);
+      const isSeriesQid = p31Ids.some((q) => WIKIDATA_SERIES_QIDS_SERVER.has(q));
+      const isFilmQid = p31Ids.some((q) => WIKIDATA_FILM_QIDS_SERVER.has(q));
+      if (kind === 'movie' && isSeriesQid && !isFilmQid) continue;
+      if (kind === 'series' && isFilmQid && !isSeriesQid) continue;
+
+      const dateVal =
+        ent.claims.P577?.[0]?.mainsnak?.datavalue?.value ||
+        ent.claims.P580?.[0]?.mainsnak?.datavalue?.value;
+      const candYear =
+        typeof dateVal === 'object' && dateVal?.time
+          ? dateVal.time.match(/(\d{4})/)?.[1] || ''
+          : '';
+
+      const check = scoreExternalTitleMatch({
+        queryTitle: title,
+        englishTitle,
+        expectedYear: year,
+        expectedYearExplicit: Boolean(year && year !== '2026'),
+        kind,
+        candidateTitles: [
+          ent.labels?.ar?.value,
+          enLabel,
+          ...(ent.aliases?.ar || []).map((a) => a.value),
+          ...(ent.aliases?.en || []).map((a) => a.value),
+          ...(ent.aliases?.mul || []).map((a) => a.value),
+        ],
+        candidateYear: candYear,
+      });
+      if (check.matched) {
+        const effectiveScore = imdbId ? check.score + 0.05 : check.score;
+        if (!bestMatch || effectiveScore > bestMatch.score) {
+          bestMatch = {
+            score: effectiveScore,
+            imdbId,
+            englishTitle: enLabel || ent.labels?.ar?.value || '',
+            year: candYear,
+          };
+        }
+      }
+    }
+    return bestMatch
+      ? { imdbId: bestMatch.imdbId, englishTitle: bestMatch.englishTitle, year: bestMatch.year }
+      : null;
+  };
+
+  for (const term of queries.slice(0, 3)) {
+    const lang = /[\u0600-\u06FF]/.test(term) ? 'ar' : 'en';
+    const sJson = await fetchServerWikimediaJson<{ search?: Array<{ id?: string }> }>(
+      `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(term)}&language=${lang}&limit=6&format=json`
+    );
+    if (sJson) {
+      const ids = (sJson.search || []).map((s) => s.id).filter((id): id is string => Boolean(id));
+      const matched = await scoreEntityIds(ids);
+      if (matched) {
+        if (WIKIMEDIA_SERVER_CACHE.size > 400) WIKIMEDIA_SERVER_CACHE.clear();
+        WIKIMEDIA_SERVER_CACHE.set(cacheKey, matched);
+        return matched;
       }
     }
   }
+
+  // Wikipedia full-text search fallback when wbsearchentities missed punctuation/subtitles
+  const primaryTerm = queries.find((q) => /[\u0600-\u06FF]/.test(q)) || queries[0];
+  if (primaryTerm) {
+    const wikiLang = /[\u0600-\u06FF]/.test(primaryTerm) ? 'ar' : 'en';
+    const wpJson = await fetchServerWikimediaJson<{
+      query?: { pages?: Record<string, { pageprops?: { wikibase_item?: string } }> };
+    }>(
+      `https://${wikiLang}.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(primaryTerm)}&gsrlimit=5&prop=pageprops&ppprop=wikibase_item&format=json`
+    );
+    if (wpJson) {
+      const ids = Array.from(
+        new Set(
+          Object.values(wpJson.query?.pages || {})
+            .map((p) => p.pageprops?.wikibase_item)
+            .filter((id): id is string => Boolean(id && /^Q\d+$/i.test(id)))
+        )
+      );
+      const matched = await scoreEntityIds(ids);
+      if (matched) {
+        if (WIKIMEDIA_SERVER_CACHE.size > 400) WIKIMEDIA_SERVER_CACHE.clear();
+        WIKIMEDIA_SERVER_CACHE.set(cacheKey, matched);
+        return matched;
+      }
+    }
+  }
+
+  if (WIKIMEDIA_SERVER_CACHE.size > 400) WIKIMEDIA_SERVER_CACHE.clear();
+  WIKIMEDIA_SERVER_CACHE.set(cacheKey, null);
   return null;
 }
 
@@ -918,45 +1007,43 @@ function normalizeRatingNumberServer(raw: unknown): number | null {
 }
 
 function buildRatingSearchQueriesServer(title: string, englishTitle = ''): string[] {
-  const cleanedFromTitleEng = extractCleanEnglishTitleCandidate(title);
-  const cleanedFromTitle = cleanExternalSearchTitle(title, '');
-  const cleanedFromEnglish = cleanExternalSearchTitle('', englishTitle);
+  return buildExternalSearchQueries(title, englishTitle);
+}
 
-  const rawList: string[] = [];
-  if (
-    cleanedFromTitleEng &&
-    cleanedFromEnglish &&
-    cleanedFromTitleEng.length > cleanedFromEnglish.length + 2 &&
-    cleanedFromTitleEng.toLowerCase().startsWith(cleanedFromEnglish.toLowerCase())
-  ) {
-    rawList.push(cleanedFromTitleEng, cleanedFromEnglish, cleanedFromTitle);
-  } else {
-    rawList.push(cleanedFromEnglish, cleanedFromTitleEng, cleanedFromTitle);
+async function fetchTvmazeRatingByImdbIdServer(
+  ttId: string
+): Promise<{ rating: number; name?: string; year?: string } | null> {
+  try {
+    const res = await fetch(
+      `https://api.tvmaze.com/lookup/shows?imdb=${encodeURIComponent(ttId)}`,
+      { signal: AbortSignal.timeout(5000) }
+    );
+    if (!res.ok) return null;
+    const show = (await res.json()) as {
+      name?: string;
+      premiered?: string;
+      rating?: { average?: number | null };
+    };
+    const rating = normalizeRatingNumberServer(show?.rating?.average);
+    if (rating === null) return null;
+    return {
+      rating,
+      name: show.name,
+      year: show.premiered?.slice(0, 4) || undefined,
+    };
+  } catch {
+    return null;
   }
-
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const q of rawList) {
-    const clean = q.trim();
-    const key = clean.toLowerCase();
-    if (clean.length >= 2 && !seen.has(key)) {
-      seen.add(key);
-      out.push(clean);
-    }
-  }
-  return out;
 }
 
 async function fetchCinemetaRatingByImdbIdServer(
   ttId: string,
   kind: string
-): Promise<{ rating: number; name?: string; year?: string } | null> {
+): Promise<{ rating: number; name?: string; year?: string; source: 'imdb' | 'tvmaze' } | null> {
   const typesToTry =
-    kind === 'series'
+    kind === 'series' || kind === 'tv' || kind === 'wrestling'
       ? ['series', 'movie']
-      : kind === 'tv' || kind === 'wrestling'
-        ? ['movie', 'series']
-        : ['movie'];
+      : ['movie', 'series'];
 
   for (const cmType of typesToTry) {
     try {
@@ -979,12 +1066,19 @@ async function fetchCinemetaRatingByImdbIdServer(
           rating,
           name: json.meta?.name,
           year: String(json.meta?.year || json.meta?.releaseInfo || '').slice(0, 4) || undefined,
+          source: 'imdb',
         };
       }
     } catch {
       // ignore Cinemeta meta lookup errors
     }
   }
+
+  if (kind === 'series' || kind === 'tv' || kind === 'wrestling') {
+    const tv = await fetchTvmazeRatingByImdbIdServer(ttId);
+    if (tv) return { ...tv, source: 'tvmaze' };
+  }
+
   return null;
 }
 
@@ -1001,7 +1095,7 @@ async function queryTmdbRatingServer(params: {
   const tmdbBearer = (process.env.TMDB_READ_ACCESS_TOKEN || '').trim();
   if ((!tmdbKey && !tmdbBearer) || queries.length === 0) return null;
 
-  const isSeries = kind === 'series';
+  const isSeries = kind === 'series' || kind === 'tv' || kind === 'wrestling';
   const searchType = isSeries ? 'tv' : 'movie';
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (tmdbBearer) headers.Authorization = `Bearer ${tmdbBearer}`;
@@ -1025,7 +1119,7 @@ async function queryTmdbRatingServer(params: {
     vote_count?: number;
   }
 
-  for (const query of queries.slice(0, 2)) {
+  for (const query of queries.slice(0, 3)) {
     try {
       const yearParam =
         yearExplicit && /^\d{4}$/.test(year)
@@ -1062,6 +1156,7 @@ async function queryTmdbRatingServer(params: {
           englishTitle,
           expectedYear: year,
           expectedYearExplicit: yearExplicit,
+          kind,
           candidateTitles: [item.title, item.original_title, item.name, item.original_name],
           candidateYear: candYear,
         });
@@ -1104,7 +1199,7 @@ async function queryTmdbRatingServer(params: {
             matchedTitle:
               cinemeta.name || best.entry.title || best.entry.name || best.entry.original_title,
             year: cinemeta.year || best.year || undefined,
-            source: 'imdb',
+            source: cinemeta.source,
           };
         }
       }
@@ -1139,6 +1234,7 @@ async function queryImdbSuggestionIdServer(params: {
   for (const rawQ of queries.slice(0, 3)) {
     const cleanQ = rawQ.trim();
     if (cleanQ.length < 2) continue;
+    if (!/[A-Za-z]/.test(cleanQ) && /[\u0600-\u06FF]/.test(cleanQ)) continue;
     const firstChar = cleanQ.charAt(0).toLowerCase();
     const prefix = /[a-z0-9]/.test(firstChar) ? firstChar : 'a';
     try {
@@ -1154,7 +1250,11 @@ async function queryImdbSuggestionIdServer(params: {
       for (const item of (json.d || []).slice(0, 10)) {
         if (!item?.id || !/^tt\d+$/i.test(item.id) || !item.l) continue;
         const qid = (item.qid || '').toLowerCase();
-        if (kind === 'movie' && qid && !['movie', 'feature', 'tvmovie', 'short', 'video'].includes(qid)) {
+        if (
+          kind === 'movie' &&
+          qid &&
+          !['movie', 'feature', 'tvmovie', 'short', 'video', 'tvspecial'].includes(qid)
+        ) {
           continue;
         }
         if (kind === 'series' && qid && !['tvseries', 'tvminiseries'].includes(qid)) {
@@ -1165,6 +1265,7 @@ async function queryImdbSuggestionIdServer(params: {
           englishTitle,
           expectedYear: year,
           expectedYearExplicit: yearExplicit,
+          kind,
           candidateTitles: [item.l],
           candidateYear: item.y ? String(item.y) : undefined,
         });
@@ -1175,6 +1276,149 @@ async function queryImdbSuggestionIdServer(params: {
       if (best?.id) return best.id;
     } catch {
       // ignore suggestion lookup errors
+    }
+  }
+  return null;
+}
+
+async function searchCinemetaRatingServer(params: {
+  queries: string[];
+  title: string;
+  englishTitle: string;
+  effectiveYear: string;
+  yearExplicit: boolean;
+  kind: string;
+  inputId?: string;
+}): Promise<ServerResolvedMediaRating | null> {
+  const { queries, title, englishTitle, effectiveYear, yearExplicit, kind, inputId } = params;
+  const cmTypes =
+    kind === 'series' || kind === 'tv' || kind === 'wrestling'
+      ? ['series', 'movie']
+      : ['movie', 'series'];
+
+  for (const cmType of cmTypes) {
+    for (const q of queries.slice(0, 3)) {
+      if (!/[A-Za-z]/.test(q) && /[\u0600-\u06FF]/.test(q)) continue;
+      try {
+        const res = await fetch(
+          `https://v3-cinemeta.strem.io/catalog/${cmType}/top/search=${encodeURIComponent(q)}.json`,
+          { signal: AbortSignal.timeout(5500) }
+        );
+        if (!res.ok) continue;
+        const json = (await res.json()) as {
+          metas?: Array<{ id?: string; name?: string; releaseInfo?: string; year?: string | number }>;
+        };
+        const matches: Array<{ id: string; score: number; name: string; year: string }> = [];
+        for (const m of (json.metas || []).slice(0, 12)) {
+          if (!m?.id || !/^tt\d+$/i.test(m.id) || !m.name) continue;
+          const candYear = String(m.year || m.releaseInfo || '').slice(0, 4);
+          const check = scoreExternalTitleMatch({
+            queryTitle: title,
+            englishTitle,
+            expectedYear: effectiveYear,
+            expectedYearExplicit: yearExplicit,
+            kind,
+            candidateTitles: [m.name],
+            candidateYear: candYear,
+          });
+          if (check.matched) {
+            matches.push({ id: m.id, score: check.score, name: m.name, year: candYear });
+          }
+        }
+        matches.sort((a, b) => b.score - a.score);
+        for (const cand of matches.slice(0, 2)) {
+          const meta = await fetchCinemetaRatingByImdbIdServer(cand.id, cmType);
+          if (meta) {
+            return {
+              id: inputId,
+              imdb: meta.rating,
+              imdbId: cand.id,
+              matchedTitle: meta.name || cand.name,
+              year: meta.year || cand.year || undefined,
+              source: meta.source,
+            };
+          }
+        }
+      } catch {
+        // ignore Cinemeta search errors
+      }
+    }
+  }
+  return null;
+}
+
+async function searchTvmazeRatingServer(params: {
+  queries: string[];
+  title: string;
+  englishTitle: string;
+  effectiveYear: string;
+  yearExplicit: boolean;
+  kind: string;
+  inputId?: string;
+}): Promise<ServerResolvedMediaRating | null> {
+  const { queries, title, englishTitle, effectiveYear, yearExplicit, kind, inputId } = params;
+  if (kind !== 'series' && kind !== 'tv' && kind !== 'wrestling') return null;
+  for (const q of queries.slice(0, 3)) {
+    if (!/[A-Za-z]/.test(q) && /[\u0600-\u06FF]/.test(q)) continue;
+    try {
+      const res = await fetch(
+        `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(q)}`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (!res.ok) continue;
+      const list = (await res.json()) as Array<{
+        show?: {
+          name?: string;
+          premiered?: string;
+          rating?: { average?: number | null };
+          externals?: { imdb?: string | null };
+        };
+      }>;
+      let best: { score: number; show: NonNullable<(typeof list)[number]['show']> } | null = null;
+      for (const entry of list.slice(0, 8)) {
+        const show = entry?.show;
+        if (!show?.name) continue;
+        const check = scoreExternalTitleMatch({
+          queryTitle: title,
+          englishTitle,
+          expectedYear: effectiveYear,
+          expectedYearExplicit: yearExplicit,
+          kind,
+          candidateTitles: [show.name],
+          candidateYear: show.premiered?.slice(0, 4),
+        });
+        if (check.matched && (!best || check.score > best.score)) {
+          best = { score: check.score, show };
+        }
+      }
+      if (!best) continue;
+      const extImdb = best.show.externals?.imdb || '';
+      if (extImdb && /^tt\d+$/i.test(extImdb)) {
+        const meta = await fetchCinemetaRatingByImdbIdServer(extImdb, kind);
+        if (meta) {
+          return {
+            id: inputId,
+            imdb: meta.rating,
+            imdbId: extImdb,
+            matchedTitle: meta.name || best.show.name,
+            year: meta.year || best.show.premiered?.slice(0, 4),
+            source: meta.source,
+          };
+        }
+      }
+      const tvRating = normalizeRatingNumberServer(best.show.rating?.average);
+      if (tvRating !== null) {
+        return {
+          id: inputId,
+          imdb: tvRating,
+          imdbId: extImdb || undefined,
+          matchedTitle: best.show.name,
+          year: best.show.premiered?.slice(0, 4),
+          source: 'tvmaze',
+        };
+      }
+    } catch {
+      // ignore TVmaze errors
     }
   }
   return null;
@@ -1199,7 +1443,7 @@ async function resolveMediaRatingServer(
         imdbId: existingImdbId,
         matchedTitle: direct.name,
         year: direct.year,
-        source: 'imdb',
+        source: direct.source,
       };
     }
   }
@@ -1220,61 +1464,18 @@ async function resolveMediaRatingServer(
   }
 
   // 2. Cinemeta catalog search -> meta.imdbRating
-  const cmTypes =
-    kind === 'series' ? ['series'] : kind === 'tv' || kind === 'wrestling' ? ['series', 'movie'] : ['movie'];
-  for (const cmType of cmTypes) {
-    for (const q of queries.slice(0, 2)) {
-      try {
-        const res = await fetch(
-          `https://v3-cinemeta.strem.io/catalog/${cmType}/top/search=${encodeURIComponent(q)}.json`,
-          { signal: AbortSignal.timeout(5500) }
-        );
-        if (!res.ok) continue;
-        const json = (await res.json()) as {
-          metas?: Array<{ id?: string; name?: string; releaseInfo?: string; year?: string | number }>;
-        };
-        let bestId = '';
-        let bestScore = 0;
-        let bestName = '';
-        let bestYear = '';
-        for (const m of (json.metas || []).slice(0, 10)) {
-          if (!m?.id || !/^tt\d+$/i.test(m.id) || !m.name) continue;
-          const candYear = String(m.year || m.releaseInfo || '').slice(0, 4);
-          const check = scoreExternalTitleMatch({
-            queryTitle: title,
-            englishTitle,
-            expectedYear: effectiveYear,
-            expectedYearExplicit: yearExplicit,
-            candidateTitles: [m.name],
-            candidateYear: candYear,
-          });
-          if (check.matched && check.score > bestScore) {
-            bestScore = check.score;
-            bestId = m.id;
-            bestName = m.name;
-            bestYear = candYear;
-          }
-        }
-        if (bestId) {
-          const meta = await fetchCinemetaRatingByImdbIdServer(bestId, cmType);
-          if (meta) {
-            return {
-              id: input.id,
-              imdb: meta.rating,
-              imdbId: bestId,
-              matchedTitle: meta.name || bestName,
-              year: meta.year || bestYear || undefined,
-              source: 'imdb',
-            };
-          }
-        }
-      } catch {
-        // ignore Cinemeta search errors
-      }
-    }
-  }
+  const cmRes = await searchCinemetaRatingServer({
+    queries,
+    title,
+    englishTitle,
+    effectiveYear,
+    yearExplicit,
+    kind,
+    inputId: input.id,
+  });
+  if (cmRes) return cmRes;
 
-  // 3. IMDb Suggestion ID discovery -> Cinemeta meta rating
+  // 3. IMDb Suggestion ID discovery -> Cinemeta / TVmaze meta rating
   const suggestedId = await queryImdbSuggestionIdServer({
     queries,
     title,
@@ -1292,12 +1493,12 @@ async function resolveMediaRatingServer(
         imdbId: suggestedId,
         matchedTitle: meta.name,
         year: meta.year,
-        source: 'imdb',
+        source: meta.source,
       };
     }
   }
 
-  // 4. Wikidata Arabic/English bridge -> Cinemeta meta rating
+  // 4. Wikidata & Wikipedia Arabic/English bridge -> Cinemeta / TVmaze / English retry
   const wiki = await queryWikidataBridgeServer({
     queries,
     title,
@@ -1314,71 +1515,69 @@ async function resolveMediaRatingServer(
         imdbId: wiki.imdbId,
         matchedTitle: meta.name || wiki.englishTitle,
         year: meta.year || wiki.year || undefined,
-        source: 'imdb',
+        source: meta.source,
       };
     }
   }
+  if (wiki?.englishTitle) {
+    const bridgedQueries = buildRatingSearchQueriesServer(wiki.englishTitle, wiki.englishTitle);
+    const effectiveBridgeTitle = englishTitle || wiki.englishTitle;
+    const cmBridge = await searchCinemetaRatingServer({
+      queries: bridgedQueries,
+      title,
+      englishTitle: effectiveBridgeTitle,
+      effectiveYear: wiki.year || effectiveYear,
+      yearExplicit,
+      kind,
+      inputId: input.id,
+    });
+    if (cmBridge) return cmBridge;
 
-  // 5. TVmaze fallback for TV series/programs
-  if (kind === 'series' || kind === 'tv') {
-    for (const q of queries.slice(0, 2)) {
-      try {
-        const res = await fetch(
-          `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(q)}`,
-          { signal: AbortSignal.timeout(5000) }
-        );
-        if (!res.ok) continue;
-        const list = (await res.json()) as Array<{
-          show?: {
-            name?: string;
-            premiered?: string;
-            rating?: { average?: number | null };
-            externals?: { imdb?: string | null };
-          };
-        }>;
-        for (const entry of list.slice(0, 6)) {
-          const show = entry?.show;
-          if (!show?.name) continue;
-          const check = scoreExternalTitleMatch({
-            queryTitle: title,
-            englishTitle,
-            expectedYear: effectiveYear,
-            expectedYearExplicit: yearExplicit,
-            candidateTitles: [show.name],
-            candidateYear: show.premiered?.slice(0, 4),
-          });
-          if (!check.matched) continue;
-          const extImdb = show.externals?.imdb || '';
-          if (extImdb && /^tt\d+$/i.test(extImdb)) {
-            const meta = await fetchCinemetaRatingByImdbIdServer(extImdb, 'series');
-            if (meta) {
-              return {
-                id: input.id,
-                imdb: meta.rating,
-                imdbId: extImdb,
-                matchedTitle: meta.name || show.name,
-                year: meta.year || show.premiered?.slice(0, 4),
-                source: 'imdb',
-              };
-            }
-          }
-          const tvRating = normalizeRatingNumberServer(show.rating?.average);
-          if (tvRating !== null) {
-            return {
-              id: input.id,
-              imdb: tvRating,
-              imdbId: extImdb || undefined,
-              matchedTitle: show.name,
-              year: show.premiered?.slice(0, 4),
-              source: 'tvmaze',
-            };
-          }
-        }
-      } catch {
-        // ignore TVmaze errors
+    const suggestBridgeId = await queryImdbSuggestionIdServer({
+      queries: bridgedQueries,
+      title,
+      englishTitle: effectiveBridgeTitle,
+      year: wiki.year || effectiveYear,
+      yearExplicit,
+      kind,
+    });
+    if (suggestBridgeId) {
+      const meta = await fetchCinemetaRatingByImdbIdServer(suggestBridgeId, kind);
+      if (meta) {
+        return {
+          id: input.id,
+          imdb: meta.rating,
+          imdbId: suggestBridgeId,
+          matchedTitle: meta.name || wiki.englishTitle,
+          year: meta.year || wiki.year || undefined,
+          source: meta.source,
+        };
       }
     }
+
+    const tvBridge = await searchTvmazeRatingServer({
+      queries: bridgedQueries,
+      title,
+      englishTitle: effectiveBridgeTitle,
+      effectiveYear: wiki.year || effectiveYear,
+      yearExplicit,
+      kind,
+      inputId: input.id,
+    });
+    if (tvBridge) return tvBridge;
   }
+
+  // 5. TVmaze fallback for TV series/programs/wrestling
+  const tvRes = await searchTvmazeRatingServer({
+    queries,
+    title,
+    englishTitle,
+    effectiveYear,
+    yearExplicit,
+    kind,
+    inputId: input.id,
+  });
+  if (tvRes) return tvRes;
 
   return null;
 }

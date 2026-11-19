@@ -86,7 +86,6 @@ const NOISE_ENGLISH_TOKENS = new Set([
   'shahed4u',
   'shahid4u',
   'shahid',
-  'wwe',
   'imdb',
   'mp4',
   'mkv',
@@ -288,11 +287,11 @@ function stripNoiseFromTitle(raw: string): string {
   const arabicNoisePatterns = [
     /(?:^|\s)(?:مشاهدة|تحميل|شاهد|تنزيل|حصريا|حصرياً|مباشرة|مباشر)(?=$|\s)/g,
     /(?:^|\s)(?:فيلم|مسلسل|انمي|أنمي|كارتون|كرتون|برنامج|مسرحية|عرض)(?=$|\s)/g,
-    /(?:^|\s)(?:مترجم|مدبلج|بالعربية|للعربية|كامل|الكامل|كاملة|اون\s*لاين|أون\s*لاين|اونلاين|أونلاين)(?=$|\s)/g,
-    /(?:^|\s)(?:بجودة\s*عالية|بجودة|جودة\s*عالية|عالية|النسخة|نسخة|الاصلية|الأصلية)(?=$|\s)/g,
+    /(?:^|\s)(?:مترجم|مترجمه|مترجمة|مدبلج|مدبلجه|مدبلجة|بالعربية|بالعربي|للعربية|كامل|الكامل|كاملة|كامله|اون\s*لاين|أون\s*لاين|اونلاين|أونلاين)(?=$|\s)/g,
+    /(?:^|\s)(?:بجودة\s*عالية|بجودة|جودة\s*عالية|عالية|النسخة\s*الأصلية|النسخه\s*الاصليه|النسخة|نسخة|الاصلية|الأصلية|بدون\s*إعلانات|بدون\s*اعلانات|بدون\s*حذف)(?=$|\s)/g,
     /(?:^|\s)(?:الموسم\s*(?:\d+|الأول|الاول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر)|موسم\s*\d+)(?=$|\s)/g,
-    /(?:^|\s)(?:الحلقة\s*\d+|حلقة\s*\d+|الاخيرة|الأخيرة)(?=$|\s)/g,
-    /(?:^|\s)(?:ماي\s*سيما|وي\s*سيما|فاصل\s*إعلاني|فاصل\s*اعلاني|ايجي\s*بست|إيجي\s*بست|اكوام|أكوام|سيما\s*فور\s*يو|سيما\s*ناو|عرب\s*سيد|لاروزا|شاهد\s*فور\s*يو)(?=$|\s)/g,
+    /(?:^|\s)(?:الحلقات|حلقات|الحلقة\s*\d+|حلقة\s*\d+|الاخيرة|الأخيرة|الاخيره)(?=$|\s)/g,
+    /(?:^|\s)(?:ماي\s*سيما|وي\s*سيما|فاصل\s*إعلاني|فاصل\s*اعلاني|ايجي\s*بست|ايجي\s*بيست|إيجي\s*بست|إيجي\s*بيست|اكوام|أكوام|سيما\s*فور\s*يو|سيما\s*ناو|سيما\s*كلوب|عرب\s*سيد|لاروزا|شاهد\s*فور\s*يو|توب\s*سيما|موفيز\s*لاند|تورنت)(?=$|\s)/g,
   ];
   for (const pat of arabicNoisePatterns) {
     text = text.replace(pat, ' ');
@@ -301,7 +300,7 @@ function stripNoiseFromTitle(raw: string): string {
   // Strip English release tags using explicit word boundaries so "Shahd" or "Richard" is never damaged
   text = text
     .replace(
-      /(?:^|[\s\-–|:\[\]().])(S\d{1,2}E\d{1,3}|E\d{1,3}|Season\s*\d+|Episode\s*\d+|Ep\.?\s*\d+)(?=$|[\s\-–|:\[\]().])/gi,
+      /(?:^|[\s\-–|:\[\]().])(S\d{1,2}E\d{1,3}|S\d{1,2}|E\d{1,3}|Season\s*\d+|Episode\s*\d+|Ep\.?\s*\d+)(?=$|[\s\-–|:\[\]().])/gi,
       ' '
     )
     .replace(
@@ -367,11 +366,70 @@ export function cleanExternalSearchTitle(title: string, englishTitle = ''): stri
   return cleaned;
 }
 
+export function buildExternalSearchQueries(
+  title: string,
+  englishTitle = '',
+  extraTitle?: string
+): string[] {
+  const cleanedFromTitleEng = extractCleanEnglishTitleCandidate(title);
+  const cleanedFromTitle = cleanExternalSearchTitle(title, '');
+  const cleanedFromEnglish = cleanExternalSearchTitle('', englishTitle);
+  const cleanedExtra = extraTitle ? cleanExternalSearchTitle(extraTitle, extraTitle) : '';
+
+  const primaryList: string[] = [];
+  if (
+    cleanedFromTitleEng &&
+    cleanedFromEnglish &&
+    cleanedFromTitleEng.length > cleanedFromEnglish.length + 2 &&
+    cleanedFromTitleEng.toLowerCase().startsWith(cleanedFromEnglish.toLowerCase())
+  ) {
+    primaryList.push(cleanedFromTitleEng, cleanedFromEnglish);
+  } else {
+    primaryList.push(cleanedFromEnglish, cleanedFromTitleEng);
+  }
+  if (cleanedExtra) primaryList.push(cleanedExtra);
+  if (cleanedFromTitle) primaryList.push(cleanedFromTitle);
+
+  // Add colon/dash subtitle-stripped base queries at the end as high-recall fallbacks
+  // (e.g. "الحريفة 2: الريمونتادا" -> "الحريفة 2", "ولاد رزق 3: القاضية" -> "ولاد رزق 3")
+  const baseVariants: string[] = [];
+  for (const item of primaryList) {
+    const clean = item.trim();
+    if (!clean) continue;
+    if (clean.includes(':')) {
+      baseVariants.push(clean.replace(/:\s*/g, ' ').replace(/\s+/g, ' ').trim());
+    }
+    const splitMatch = clean.match(/^(.{3,}?)\s*(?::|–|—|\s+-\s+)\s*(.+)$/);
+    if (splitMatch?.[1]) {
+      const prefix = splitMatch[1].trim();
+      const alnumCount = prefix.replace(/[^A-Za-z0-9\u0600-\u06FF]/g, '').length;
+      if (alnumCount >= 3) {
+        baseVariants.push(prefix);
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const q of [...primaryList, ...baseVariants]) {
+    const clean = q.trim();
+    const key = clean.toLowerCase();
+    const alnumCount = clean.replace(/[^A-Za-z0-9\u0600-\u06FF]/g, '').length;
+    if (alnumCount >= 2 && !seen.has(key)) {
+      seen.add(key);
+      out.push(clean);
+    }
+  }
+  return out;
+}
+
 const ARABIC_STOPWORDS = new Set(['من', 'في', 'على', 'عن', 'الى', 'مع', 'و', 'ال']);
 const LATIN_STOPWORDS = new Set(['the', 'a', 'an', 'of', 'and', 'in', 'on', 'at', 'to', 'for']);
 
 export function normalizeTitleForComparison(value: string): string {
   const stripped = stripNoiseFromTitle(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
     .replace(/[أإآٱ]/g, 'ا')
     .replace(/ى/g, 'ي')
     .replace(/ة/g, 'ه')
@@ -379,6 +437,18 @@ export function normalizeTitleForComparison(value: string): string {
     .replace(/ئ/g, 'ي')
     .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
     .toLowerCase()
+    .replace(/ı/g, 'i')
+    .replace(/ş/g, 's')
+    .replace(/ğ/g, 'g')
+    .replace(/ç/g, 'c')
+    .replace(/ö/g, 'o')
+    .replace(/ü/g, 'u')
+    .replace(/ø/g, 'o')
+    .replace(/æ/g, 'ae')
+    .replace(/œ/g, 'oe')
+    .replace(/ß/g, 'ss')
+    .replace(/ł/g, 'l')
+    .replace(/đ/g, 'd')
     .replace(/&/g, ' and ')
     .replace(/['’`":;,.!?/\\\-–—_]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -415,6 +485,25 @@ const SEQUEL_WORD_TO_DIGIT: Record<string, string> = {
   third: '3',
   fourth: '4',
   fifth: '5',
+  الاول: '1',
+  الثاني: '2',
+  ثاني: '2',
+  الثالث: '3',
+  ثالث: '3',
+  الرابع: '4',
+  رابع: '4',
+  الخامس: '5',
+  خامس: '5',
+  السادس: '6',
+  سادس: '6',
+  السابع: '7',
+  سابع: '7',
+  الثامن: '8',
+  ثامن: '8',
+  التاسع: '9',
+  تاسع: '9',
+  العاشر: '10',
+  عاشر: '10',
 };
 
 const SEQUEL_CONNECTOR_WORDS = new Set(['part', 'pt', 'chapter', 'vol', 'volume', 'الجزء', 'جزء']);
@@ -449,7 +538,8 @@ function scorePair(
   candidateNorm: string,
   expectedYearNum: number,
   candidateYearNum: number,
-  expectedYearExplicit: boolean
+  expectedYearExplicit: boolean,
+  isSeriesLike: boolean
 ): { score: number; reason: string } {
   if (!queryNorm || !candidateNorm) {
     return { score: 0, reason: 'empty' };
@@ -461,7 +551,10 @@ function scorePair(
       const diff = Math.abs(expectedYearNum - candidateYearNum);
       if (diff === 0) score += 0.1;
       else if (diff <= 1) score += 0.04;
-      else if (expectedYearExplicit && diff >= 4) score -= 0.35;
+      else if (isSeriesLike && candidateYearNum < expectedYearNum) {
+        // Multi-season series/programs often list latest season year while IMDb lists premiere year
+        if (diff >= 4) score -= 0.06;
+      } else if (expectedYearExplicit && diff >= 4) score -= 0.35;
       else if (!expectedYearExplicit && diff >= 12) score -= 0.2;
     }
     return { score, reason: 'exact' };
@@ -549,7 +642,9 @@ function scorePair(
     const diff = Math.abs(expectedYearNum - candidateYearNum);
     if (diff === 0) score += 0.08;
     else if (diff === 1) score += 0.03;
-    else if (expectedYearExplicit && diff >= 3) score -= 0.35;
+    else if (isSeriesLike && candidateYearNum < expectedYearNum) {
+      if (diff >= 3) score -= 0.08;
+    } else if (expectedYearExplicit && diff >= 3) score -= 0.35;
     else if (diff >= 10) score -= 0.3;
   }
 
@@ -566,6 +661,7 @@ export function scoreExternalTitleMatch(params: {
   englishTitle?: string;
   expectedYear?: string;
   expectedYearExplicit?: boolean;
+  kind?: string;
   candidateTitles: Array<string | undefined | null>;
   candidateYear?: string | undefined | null;
 }): { matched: boolean; score: number; reason: string } {
@@ -593,6 +689,8 @@ export function scoreExternalTitleMatch(params: {
   const expectedYearNum = extractValidYearNumber(params.expectedYear);
   const candidateYearNum = extractValidYearNumber(params.candidateYear);
   const expectedYearExplicit = Boolean(params.expectedYearExplicit);
+  const isSeriesLike =
+    params.kind === 'series' || params.kind === 'tv' || params.kind === 'wrestling';
 
   let bestScore = 0;
   let bestReason = 'mismatch';
@@ -604,7 +702,8 @@ export function scoreExternalTitleMatch(params: {
         cNorm,
         expectedYearNum,
         candidateYearNum,
-        expectedYearExplicit
+        expectedYearExplicit,
+        isSeriesLike
       );
       if (res.score > bestScore) {
         bestScore = res.score;

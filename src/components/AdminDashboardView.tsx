@@ -2836,13 +2836,28 @@ export function AdminDashboardView({
 
       if (updates.length > 0) {
         await bulkUpdateMediaInFirestore(updates, activeActorUid);
+        const unmatchedCount = Math.max(0, targets.length - matchedCount);
+        const alreadySynced = Math.max(0, matchedCount - updates.length);
+        const extras = [
+          alreadySynced > 0 ? `${alreadySynced} محدثة مسبقاً` : '',
+          unmatchedCount > 0 ? `${unmatchedCount} لم تتطابق` : '',
+        ]
+          .filter(Boolean)
+          .join(' • ');
         onNotify(
-          `تم تحديث التقييم الحقيقي لـ ${updates.length} عمل بنجاح (من أصل ${targets.length} تم فحصها).`
+          `تم تحديث التقييم الحقيقي لـ ${updates.length} عمل من أصل ${targets.length}${extras ? ` (${extras})` : ''}.`
         );
       } else if (matchedCount > 0) {
-        onNotify(`تقييمات الأعمال المطابقة (${matchedCount}) محدثة بالفعل.`);
+        const unmatchedCount = Math.max(0, targets.length - matchedCount);
+        onNotify(
+          unmatchedCount > 0
+            ? `تقييمات ${matchedCount} عمل مطابقة محدثة بالفعل، وتعذر مطابقة ${unmatchedCount} عمل.`
+            : `تقييمات الأعمال المطابقة (${matchedCount}) محدثة بالفعل.`
+        );
       } else {
-        onNotify('لم يُعثر على تقييمات جديدة مطابقة على IMDb/TMDb للأعمال المفحوصة.');
+        onNotify(
+          'لم يُعثر على تقييمات مطابقة على IMDb/TMDb/Wikidata للأعمال المفحوصة — تأكد من العنوان أو الاسم الإنجليزي وسنة الإصدار.'
+        );
       }
     } catch (err) {
       onNotify(formatFirestoreWriteError(err, 'تعذر حفظ التقييمات الجديدة في Firestore'));
