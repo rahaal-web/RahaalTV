@@ -62,6 +62,13 @@ import {
   resolveEffectiveShieldDecision,
   setActiveShieldPlayerContext,
 } from '../lib/popupShield';
+import {
+  classifyAutoplayPlayError,
+  findNextAvailableServerIndex,
+  LOAD_TIMEOUT_DIRECT_MS,
+  LOAD_TIMEOUT_IFRAME_MS,
+  resolveProactiveFilterDecision,
+} from '../lib/serverFailover';
 import { handlePosterError } from '../lib/mediaFilters';
 import {
   detectClientCapabilities,
@@ -557,6 +564,9 @@ export function PlayerModal({
   const [bypassEpisodeSrc, setBypassEpisodeSrc] = useState(false);
   const [manualBypassFault, setManualBypassFault] = useState<Record<number, boolean>>({});
   const [playerReloadKey, setPlayerReloadKey] = useState(0);
+  const [retryAllNonce, setRetryAllNonce] = useState(0);
+  const [allServersFailed, setAllServersFailed] = useState(false);
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [shieldSessionOverrides, setShieldSessionOverrides] = useState<
     Record<number, Exclude<PopupShieldProfileMode, 'direct_media'>>
   >({});
@@ -582,6 +592,13 @@ export function PlayerModal({
     destroy: () => void;
   } | null>(null);
   const lastBlurObservedRef = useRef<number>(0);
+  const selectedServerRef = useRef<number>(initialServerIndex);
+  const triedServersRef = useRef<Set<number>>(new Set([initialServerIndex]));
+  const attemptTokenRef = useRef<number>(0);
+  const playbackConfirmedRef = useRef<boolean>(false);
+  const hasStartedPlayingRef = useRef<boolean>(false);
+  const userPausedRef = useRef<boolean>(false);
+  const loadTimeoutRef = useRef<number | null>(null);
   const doubleTapRef = useRef<{ lastTime: number; side: 'left' | 'right' | null }>({
     lastTime: 0,
     side: null,
@@ -633,35 +650,92 @@ export function PlayerModal({
     setIsMobileCinemaFill((prev) => !prev);
   }, []);
 
+  const clearLoadTimeout = useCallback(() => {
+    if (loadTimeoutRef.current !== null) {
+      window.clearTimeout(loadTimeoutRef.current);
+      loadTimeoutRef.current = null;
+    }
+  }, []);
+
+  const confirmServerLoadReady = useCallback(
+    (serverIdx: number, expectedToken?: number) => {
+      if (expectedToken !== undefined && attemptTokenRef.current !== expectedToken) return;
+      playbackConfirmedRef.current = true;
+      clearLoadTimeout();
+      setAllServersFailed(false);
+      setFilterMap((prev) => {
+        const existing = prev[serverIdx];
+        if (existing && existing.ok) return prev;
+        return {
+          ...prev,
+          [serverIdx]: {
+            url: existing?.url || '',
+            ok: true,
+            faultType: null,
+            httpStatus: existing?.httpStatus || 200,
+            reason: 'السيرفر يعمل بنجاح',
+            directStreamUrl: existing?.directStreamUrl,
+          },
+        };
+      });
+    },
+    [clearLoadTimeout]
+  );
+
   // Reset selections when media item or initial props change
   useEffect(() => {
     const seasons = item?.seasons || [];
     const matchingSeason = seasons.findIndex((s) =>
       (s.episodes || []).some((e) => e.number === initialEpisode)
     );
+    clearLoadTimeout();
+    attemptTokenRef.current += 1;
+    selectedServerRef.current = initialServerIndex;
+    triedServersRef.current = new Set([initialServerIndex]);
+    playbackConfirmedRef.current = false;
+    hasStartedPlayingRef.current = false;
+    userPausedRef.current = false;
     setSeasonIdx(matchingSeason >= 0 ? matchingSeason : 0);
     setEpisodeNum(initialEpisode);
     setSelectedServer(initialServerIndex);
     setFilterMap({});
     setFilterAlert(null);
-    setBypassEpisodeSrc(false);
+    setBypassEpisodeSrc(initialServerIndex > 0);
     setManualBypassFault({});
+    setAllServersFailed(false);
+    setAutoplayBlocked(false);
     setPlayerReloadKey(0);
     setShieldSessionOverrides({});
     setShowMobileDetails(false);
     setIsMobileCinemaFill(false);
-  }, [item?.id, initialEpisode, initialServerIndex]);
+  }, [item?.id, initialEpisode, initialServerIndex, clearLoadTimeout]);
 
-  // Helper to mark a server faulty at runtime and auto-switch to next healthy server
+  // Keep selectedServerRef synchronized
+  useEffect(() => {
+    selectedServerRef.current = selectedServer;
+  }, [selectedServer]);
+
+  // Cleanup any load timer on unmount
+  useEffect(() => clearLoadTimeout, [clearLoadTimeout]);
+
+  // Helper to mark a server faulty at runtime and auto-switch to next untried healthy server in order
   const handleServerFaultFailover = useCallback(
-    (faultIdx: number, reason: string) => {
+    (faultIdx: number, reason: string, expectedToken?: number) => {
       if (!item) return;
+      if (expectedToken !== undefined && attemptTokenRef.current !== expectedToken) return;
+      if (playbackConfirmedRef.current && hasStartedPlayingRef.current) return;
+
+      clearLoadTimeout();
+
       const epList = item.seasons?.[seasonIdx]?.episodes || item.seasons?.[0]?.episodes || [];
       const activeEp = epList.find((e) => e.number === episodeNum);
       const itemServers = Array.isArray(item.servers) ? item.servers : [];
       const effectiveServers =
         activeEp?.servers && activeEp.servers.length > 0 ? activeEp.servers : itemServers;
       const total = effectiveServers.length;
+
+      triedServersRef.current.add(faultIdx);
+
       setFilterMap((prev) => {
         const next: Record<number, ServerFilterEntry> = {
           ...prev,
@@ -680,16 +754,25 @@ export function PlayerModal({
           },
         };
 
-        // Find first non-faulty alternative server
-        let candidateIdx = -1;
-        for (let i = 0; i < total; i++) {
-          if (i !== faultIdx && next[i]?.ok !== false) {
-            candidateIdx = i;
-            break;
-          }
-        }
+        const candidateIdx = findNextAvailableServerIndex({
+          currentIndex: faultIdx,
+          totalServers: total,
+          triedIndices: triedServersRef.current,
+          filterMap: next,
+        });
 
         if (candidateIdx !== -1) {
+          triedServersRef.current.add(candidateIdx);
+          attemptTokenRef.current += 1;
+          selectedServerRef.current = candidateIdx;
+          playbackConfirmedRef.current = false;
+          hasStartedPlayingRef.current = false;
+          userPausedRef.current = false;
+          setAutoplayBlocked(false);
+          setAllServersFailed(false);
+          setBypassEpisodeSrc(true);
+          setSelectedServer(candidateIdx);
+
           const faultName = formatShortServerName(
             effectiveServers[faultIdx]?.name,
             faultIdx,
@@ -700,30 +783,25 @@ export function PlayerModal({
             candidateIdx,
             effectiveServers[candidateIdx]?.url
           );
-          setSelectedServer(candidateIdx);
           setFilterAlert({
             kind: 'switched',
             message: `${faultName} غير متاح حالياً — تم التبديل تلقائياً إلى ${nextName}.`,
           });
         } else {
-          const faultName = formatShortServerName(
-            effectiveServers[faultIdx]?.name,
-            faultIdx,
-            effectiveServers[faultIdx]?.url
-          );
+          setAllServersFailed(true);
           setFilterAlert({
             kind: 'warning',
-            message: `تعذر تشغيل ${faultName} — يمكنك تجربة سيرفر آخر أو إعادة المحاولة.`,
+            message: 'تعذر تشغيل المحتوى حاليًا — لم تستجب السيرفرات المتاحة. يمكنك إعادة المحاولة.',
           });
         }
 
         return next;
       });
     },
-    [item, seasonIdx, episodeNum]
+    [item, seasonIdx, episodeNum, clearLoadTimeout]
   );
 
-  // Proactive Server Filtering scan on open / episode change (backend + browser/Worker fallback)
+  // Proactive Server Filtering scan on open / episode change / manual retry (backend + browser/Worker fallback)
   useEffect(() => {
     if (!item) return;
 
@@ -736,9 +814,10 @@ export function PlayerModal({
         ? item.servers
         : [];
 
-    const rawEpSrc = hasPerEpisodeServers
-      ? null
-      : extractSafeStreamSrc(activeEp?.embedCode, activeEp?.watchUrl);
+    const rawEpSrc =
+      hasPerEpisodeServers || bypassEpisodeSrc
+        ? null
+        : extractSafeStreamSrc(activeEp?.embedCode, activeEp?.watchUrl);
     const epSrc = rawEpSrc && !isLikelyNonVideoWebsiteUrl(rawEpSrc) ? rawEpSrc : null;
 
     const serverUrls = targetServers.map((srv) => extractSafeStreamSrc(srv.embedCode, srv.url) || '');
@@ -748,7 +827,6 @@ export function PlayerModal({
 
     let cancelled = false;
     setIsFiltering(true);
-    setBypassEpisodeSrc(false);
 
     (async () => {
       try {
@@ -778,66 +856,81 @@ export function PlayerModal({
         if (cancelled || !filterResults) return;
 
         const nextMap: Record<number, ServerFilterEntry> = {};
-        const faultyIndices: number[] = [];
 
         targetServers.forEach((_, idx) => {
           const entry = filterResults?.[idx];
           if (entry) {
             nextMap[idx] = entry;
-            if (!entry.ok) {
-              faultyIndices.push(idx + 1);
-            }
           }
         });
 
-        setFilterMap(nextMap);
-
-        // If episode-specific URL failed, bypass it if we have a working server
-        const epResult = epSrc ? filterResults[targetServers.length] : null;
-        const firstHealthyIdx = targetServers.findIndex((_, idx) => nextMap[idx]?.ok === true);
-
-        if (epSrc && epResult && !epResult.ok && firstHealthyIdx !== -1) {
-          const healthyName = formatShortServerName(
-            targetServers[firstHealthyIdx]?.name,
-            firstHealthyIdx,
-            targetServers[firstHealthyIdx]?.url
-          );
-          setBypassEpisodeSrc(true);
-          setSelectedServer(firstHealthyIdx);
-          setFilterAlert({
-            kind: 'switched',
-            message: `تم التبديل تلقائياً إلى ${healthyName} لضمان تشغيل الحلقة.`,
+        setFilterMap((prev) => {
+          const merged: Record<number, ServerFilterEntry> = { ...nextMap };
+          // Preserve runtime confirmations or runtime failures discovered while filter was running
+          Object.entries(prev).forEach(([k, v]) => {
+            const numIdx = Number(k);
+            if (!merged[numIdx] || (v && !v.ok)) {
+              merged[numIdx] = v;
+            }
           });
-          return;
-        }
+          return merged;
+        });
 
-        const safeCurrentIdx = selectedServer < targetServers.length ? selectedServer : 0;
-        const activeEntry = nextMap[safeCurrentIdx];
-        if (activeEntry && !activeEntry.ok) {
+        const safeCurrentIdx =
+          selectedServerRef.current < targetServers.length ? selectedServerRef.current : 0;
+        const epResult = epSrc ? filterResults[targetServers.length] : null;
+        const decision = resolveProactiveFilterDecision({
+          currentIndex: safeCurrentIdx,
+          totalServers: targetServers.length,
+          triedIndices: triedServersRef.current,
+          filterMap: nextMap,
+          playbackConfirmed: playbackConfirmedRef.current,
+          manuallyBypassedCurrent: Boolean(manualBypassFault[safeCurrentIdx]),
+          hasEpisodeOverrideUrl: Boolean(epSrc),
+          episodeUrlOk: Boolean(epResult?.ok),
+        });
+
+        if (decision.action === 'switch') {
+          decision.nextTriedIndices.forEach((i) => triedServersRef.current.add(i));
+          triedServersRef.current.add(decision.nextIndex);
+          attemptTokenRef.current += 1;
+          clearLoadTimeout();
+          playbackConfirmedRef.current = false;
+          hasStartedPlayingRef.current = false;
+          userPausedRef.current = false;
+          setAutoplayBlocked(false);
+          setAllServersFailed(false);
+          if (decision.bypassEpisodeUrl) {
+            setBypassEpisodeSrc(true);
+          }
+          selectedServerRef.current = decision.nextIndex;
+          setSelectedServer(decision.nextIndex);
+
           const currentName = formatShortServerName(
             targetServers[safeCurrentIdx]?.name,
             safeCurrentIdx,
             targetServers[safeCurrentIdx]?.url
           );
-          if (firstHealthyIdx !== -1 && firstHealthyIdx !== safeCurrentIdx) {
-            const healthyName = formatShortServerName(
-              targetServers[firstHealthyIdx]?.name,
-              firstHealthyIdx,
-              targetServers[firstHealthyIdx]?.url
-            );
-            setSelectedServer(firstHealthyIdx);
-            setFilterAlert({
-              kind: 'switched',
-              message: `${currentName} غير متاح حالياً — تم التبديل تلقائياً إلى ${healthyName}.`,
-            });
-          } else {
-            setFilterAlert({
-              kind: 'warning',
-              message: `${currentName} غير متاح حالياً — جرّب سيرفراً آخر.`,
-            });
-          }
-        } else if (faultyIndices.length > 0 && targetServers.length > 1) {
-          setFilterAlert(null);
+          const nextName = formatShortServerName(
+            targetServers[decision.nextIndex]?.name,
+            decision.nextIndex,
+            targetServers[decision.nextIndex]?.url
+          );
+          setFilterAlert({
+            kind: 'switched',
+            message:
+              decision.bypassEpisodeUrl
+                ? `تم التبديل تلقائياً إلى ${nextName} لضمان تشغيل الحلقة.`
+                : `${currentName} غير متاح حالياً — تم التبديل تلقائياً إلى ${nextName}.`,
+          });
+        } else if (decision.action === 'all_failed') {
+          decision.nextTriedIndices.forEach((i) => triedServersRef.current.add(i));
+          clearLoadTimeout();
+          setAllServersFailed(true);
+          setFilterAlert({
+            kind: 'warning',
+            message: 'تعذر تشغيل المحتوى حاليًا — لم تستجب السيرفرات المتاحة.',
+          });
         }
       } catch {
         // Silent fallback
@@ -849,7 +942,7 @@ export function PlayerModal({
     return () => {
       cancelled = true;
     };
-  }, [item?.id, seasonIdx, episodeNum, initialServerIndex]);
+  }, [item?.id, seasonIdx, episodeNum, initialServerIndex, retryAllNonce, clearLoadTimeout]);
 
   const effectiveShieldConfig = normalizePopupShieldConfig(
     popupShieldConfig || loadStoredPopupShieldConfig()
@@ -1066,6 +1159,99 @@ export function PlayerModal({
   const isHlsVideoStream = Boolean(finalStreamSrc && /\.m3u8(\?|$)/i.test(finalStreamSrc));
   const isDirectVideoFile = Boolean(finalStreamSrc && /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(finalStreamSrc));
 
+  const attemptVideoAutoplay = useCallback(
+    (videoEl: HTMLVideoElement | null, expectedToken: number, serverIdx: number) => {
+      if (!videoEl || attemptTokenRef.current !== expectedToken) return;
+      if (userPausedRef.current || !videoEl.paused) return;
+
+      const playResult = videoEl.play();
+      if (playResult && typeof playResult.then === 'function') {
+        playResult
+          .then(() => {
+            if (attemptTokenRef.current !== expectedToken) return;
+            setAutoplayBlocked(false);
+            confirmServerLoadReady(serverIdx, expectedToken);
+          })
+          .catch((err) => {
+            if (attemptTokenRef.current !== expectedToken) return;
+            const kind = classifyAutoplayPlayError(err);
+            if (kind === 'autoplay_blocked') {
+              // Browser blocked unmuted autoplay: keep server ready & show standard play button
+              setAutoplayBlocked(true);
+              confirmServerLoadReady(serverIdx, expectedToken);
+            } else if (kind === 'playback_error') {
+              handleServerFaultFailover(serverIdx, 'تعذر تشغيل ملف الفيديو', expectedToken);
+            }
+          });
+      }
+    },
+    [confirmServerLoadReady, handleServerFaultFailover]
+  );
+
+  // Automatic load timeout & invalid/DASH/faulty source failover for current server
+  useEffect(() => {
+    clearLoadTimeout();
+    if (!item || allServersFailed) return;
+
+    const currentToken = attemptTokenRef.current;
+    triedServersRef.current.add(safeServerIndex);
+
+    if (!finalStreamSrc || isBlockedHomepageUrl || isDashStream || isActiveServerFaulty) {
+      const reason = !finalStreamSrc
+        ? 'رابط التشغيل غير متوفر في السيرفر'
+        : isBlockedHomepageUrl
+          ? 'الرابط لا يحتوي على مشغل فيديو مباشر'
+          : isDashStream
+            ? 'صيغة البث غير مدعومة مباشرة'
+            : activeFilterEntry?.reason || 'السيرفر غير متاح';
+      const immediateTimer = window.setTimeout(() => {
+        handleServerFaultFailover(safeServerIndex, reason, currentToken);
+      }, 60);
+      loadTimeoutRef.current = immediateTimer;
+      return () => {
+        window.clearTimeout(immediateTimer);
+        if (loadTimeoutRef.current === immediateTimer) {
+          loadTimeoutRef.current = null;
+        }
+      };
+    }
+
+    if (playbackConfirmedRef.current) return;
+
+    const timeoutMs = isDirectVideoFile ? LOAD_TIMEOUT_DIRECT_MS : LOAD_TIMEOUT_IFRAME_MS;
+    const timerId = window.setTimeout(() => {
+      if (attemptTokenRef.current !== currentToken || playbackConfirmedRef.current) return;
+      handleServerFaultFailover(
+        safeServerIndex,
+        'انتهت مهلة انتظار استجابة السيرفر',
+        currentToken
+      );
+    }, timeoutMs);
+    loadTimeoutRef.current = timerId;
+
+    return () => {
+      window.clearTimeout(timerId);
+      if (loadTimeoutRef.current === timerId) {
+        loadTimeoutRef.current = null;
+      }
+    };
+  }, [
+    item?.id,
+    seasonIdx,
+    episodeNum,
+    safeServerIndex,
+    finalStreamSrc,
+    isBlockedHomepageUrl,
+    isDashStream,
+    isActiveServerFaulty,
+    isDirectVideoFile,
+    playerReloadKey,
+    allServersFailed,
+    activeFilterEntry?.reason,
+    clearLoadTimeout,
+    handleServerFaultFailover,
+  ]);
+
   // Dynamic HLS (.m3u8) Engine Loader — only fetched when playing an .m3u8 stream on non-native browsers
   useEffect(() => {
     const videoEl = videoElementRef.current;
@@ -1084,7 +1270,10 @@ export function PlayerModal({
     }
 
     if (!item || !finalStreamSrc || !isHlsVideoStream || !videoEl) return;
-    if (isBlockedHomepageUrl || isActiveServerFaulty) return;
+    if (isBlockedHomepageUrl || isActiveServerFaulty || allServersFailed) return;
+
+    const expectedToken = attemptTokenRef.current;
+    const currentIdx = safeServerIndex;
 
     // Safari / iOS supports HLS natively
     if (
@@ -1096,10 +1285,13 @@ export function PlayerModal({
     }
 
     let cancelled = false;
+    let networkRecoveryCount = 0;
+    let mediaRecoveryCount = 0;
+
     void (async () => {
       try {
         const { default: Hls } = await import('hls.js');
-        if (cancelled || !videoElementRef.current) return;
+        if (cancelled || !videoElementRef.current || attemptTokenRef.current !== expectedToken) return;
         if (!Hls.isSupported()) {
           videoElementRef.current.src = finalStreamSrc;
           return;
@@ -1113,7 +1305,7 @@ export function PlayerModal({
         hls.attachMedia(videoElementRef.current);
 
         hls.on(Hls.Events.MANIFEST_PARSED, (_evt, data) => {
-          if (cancelled) return;
+          if (cancelled || attemptTokenRef.current !== expectedToken) return;
           const lvls = (data.levels || []).map((lvl, idx) => ({
             index: idx,
             label: lvl.height ? `${lvl.height}p` : `جودة ${idx + 1}`,
@@ -1124,6 +1316,8 @@ export function PlayerModal({
             label: tr.name || tr.lang || `ترجمة ${idx + 1}`,
           }));
           setHlsSubtitles(subs);
+          confirmServerLoadReady(currentIdx, expectedToken);
+          attemptVideoAutoplay(videoElementRef.current, expectedToken, currentIdx);
         });
 
         hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_evt, data) => {
@@ -1136,18 +1330,20 @@ export function PlayerModal({
         });
 
         hls.on(Hls.Events.ERROR, (_evt, data) => {
-          if (cancelled || !data.fatal) return;
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          if (cancelled || !data.fatal || attemptTokenRef.current !== expectedToken) return;
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRecoveryCount < 1) {
+            networkRecoveryCount += 1;
             hls.startLoad();
-          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveryCount < 1) {
+            mediaRecoveryCount += 1;
             hls.recoverMediaError();
           } else {
             hls.destroy();
-            handleServerFaultFailover(safeServerIndex, 'تعذر تشغيل بث HLS');
+            handleServerFaultFailover(currentIdx, 'تعذر تشغيل بث HLS', expectedToken);
           }
         });
       } catch {
-        if (!cancelled && videoElementRef.current) {
+        if (!cancelled && videoElementRef.current && attemptTokenRef.current === expectedToken) {
           videoElementRef.current.src = finalStreamSrc;
         }
       }
@@ -1170,8 +1366,11 @@ export function PlayerModal({
     isHlsVideoStream,
     isBlockedHomepageUrl,
     isActiveServerFaulty,
+    allServersFailed,
     playerReloadKey,
     safeServerIndex,
+    confirmServerLoadReady,
+    attemptVideoAutoplay,
     handleServerFaultFailover,
   ]);
 
@@ -1300,42 +1499,91 @@ export function PlayerModal({
   };
 
   const handleManualServerSelect = (idx: number) => {
-    const entry = filterMap[idx];
-    if (entry && !entry.ok) {
-      const selectedName = formatShortServerName(serversList[idx]?.name, idx, serversList[idx]?.url);
-      const healthyAlt = serversList.findIndex((_, i) => i !== idx && filterMap[i]?.ok === true);
-      if (healthyAlt !== -1) {
-        const altName = formatShortServerName(serversList[healthyAlt]?.name, healthyAlt, serversList[healthyAlt]?.url);
-        setSelectedServer(healthyAlt);
-        setFilterAlert({
-          kind: 'switched',
-          message: `${selectedName} غير متاح حالياً — تم التبديل تلقائياً إلى ${altName}.`,
-        });
-        return;
-      }
-      setFilterAlert({
-        kind: 'warning',
-        message: `${selectedName} غير متاح حالياً — جرّب سيرفراً آخر.`,
-      });
+    clearLoadTimeout();
+    attemptTokenRef.current += 1;
+    triedServersRef.current = new Set([idx]);
+    selectedServerRef.current = idx;
+    playbackConfirmedRef.current = false;
+    hasStartedPlayingRef.current = false;
+    userPausedRef.current = false;
+    setAutoplayBlocked(false);
+    setAllServersFailed(false);
+    setBypassEpisodeSrc(idx > 0);
+    setFilterAlert(null);
+    if (filterMap[idx] && !filterMap[idx].ok) {
+      setManualBypassFault((prev) => ({ ...prev, [idx]: true }));
     }
     setSelectedServer(idx);
+    setPlayerReloadKey((k) => k + 1);
   };
 
   const handleSwitchToNextServer = () => {
     if (serversList.length <= 1) {
-      setManualBypassFault((prev) => ({ ...prev, [safeServerIndex]: true }));
-      setPlayerReloadKey((k) => k + 1);
+      handleRetryAllServers();
       return;
     }
-    const nextHealthy = serversList.findIndex(
-      (_, idx) => idx !== safeServerIndex && filterMap[idx]?.ok === true
-    );
-    const nextNonBroken = serversList.findIndex(
-      (_, idx) => idx !== safeServerIndex && filterMap[idx]?.ok !== false
-    );
-    const fallbackIdx = (safeServerIndex + 1) % serversList.length;
-    const targetIdx = nextHealthy !== -1 ? nextHealthy : nextNonBroken !== -1 ? nextNonBroken : fallbackIdx;
-    setSelectedServer(targetIdx);
+    const nextHealthy = findNextAvailableServerIndex({
+      currentIndex: safeServerIndex,
+      totalServers: serversList.length,
+      triedIndices: new Set([safeServerIndex]),
+      filterMap,
+    });
+    const targetIdx = nextHealthy !== -1 ? nextHealthy : (safeServerIndex + 1) % serversList.length;
+    handleManualServerSelect(targetIdx);
+  };
+
+  const handleRetryAllServers = () => {
+    clearLoadTimeout();
+    attemptTokenRef.current += 1;
+    const startIdx = initialServerIndex < serversList.length ? initialServerIndex : 0;
+    triedServersRef.current = new Set([startIdx]);
+    selectedServerRef.current = startIdx;
+    playbackConfirmedRef.current = false;
+    hasStartedPlayingRef.current = false;
+    userPausedRef.current = false;
+    setAutoplayBlocked(false);
+    setAllServersFailed(false);
+    setFilterAlert(null);
+    setBypassEpisodeSrc(startIdx > 0);
+    setManualBypassFault({});
+    setFilterMap({});
+    setSelectedServer(startIdx);
+    setPlayerReloadKey((k) => k + 1);
+    setRetryAllNonce((n) => n + 1);
+  };
+
+  const handleSelectEpisodeOrSeason = (nextSeasonIdx: number, nextEpisodeNum: number) => {
+    clearLoadTimeout();
+    attemptTokenRef.current += 1;
+    triedServersRef.current = new Set([0]);
+    selectedServerRef.current = 0;
+    playbackConfirmedRef.current = false;
+    hasStartedPlayingRef.current = false;
+    userPausedRef.current = false;
+    setAutoplayBlocked(false);
+    setAllServersFailed(false);
+    setBypassEpisodeSrc(false);
+    setSeasonIdx(nextSeasonIdx);
+    setEpisodeNum(nextEpisodeNum);
+    setSelectedServer(0);
+    setFilterMap({});
+    setFilterAlert(null);
+    setManualBypassFault({});
+    setPlayerReloadKey((k) => k + 1);
+  };
+
+  const handleReloadCurrentServer = () => {
+    if (allServersFailed) {
+      handleRetryAllServers();
+      return;
+    }
+    clearLoadTimeout();
+    attemptTokenRef.current += 1;
+    playbackConfirmedRef.current = false;
+    hasStartedPlayingRef.current = false;
+    userPausedRef.current = false;
+    setAutoplayBlocked(false);
+    setPlayerReloadKey((k) => k + 1);
   };
 
   const handleShareMedia = async () => {
@@ -1418,7 +1666,7 @@ export function PlayerModal({
           <div className="flex items-center gap-1 shrink-0">
             <button
               type="button"
-              onClick={() => setPlayerReloadKey((k) => k + 1)}
+              onClick={handleReloadCurrentServer}
               title="إعادة تحميل المشغل"
               aria-label="إعادة تحميل المشغل"
               className="inline-flex min-h-[44px] min-w-[44px] max-lg:landscape:min-h-[36px] max-lg:landscape:min-w-[36px] items-center justify-center rounded-lg text-white/90 hover:bg-white/10 active:scale-95 transition-transform cursor-pointer"
@@ -1721,7 +1969,7 @@ export function PlayerModal({
 
                       <button
                         type="button"
-                        onClick={() => setPlayerReloadKey((k) => k + 1)}
+                        onClick={handleReloadCurrentServer}
                         title="إعادة تحميل المشغل"
                         aria-label="إعادة تحميل المشغل"
                         className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-white/[0.06] border border-white/[0.08] text-white/85 hover:bg-white/[0.14] hover:text-white transition-colors cursor-pointer"
@@ -1780,7 +2028,40 @@ export function PlayerModal({
                       isMobileCinemaFill ? 'rtv-mobile-cinema-fill' : ''
                     }`}
                   >
-                    {isBlockedHomepageUrl || isActiveServerFaulty ? (
+                    {allServersFailed ? (
+                      <div className="h-full w-full flex flex-col items-center justify-center p-4 sm:p-6 text-center bg-[#090d14] gap-2.5">
+                        <div
+                          className="inline-flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl border shrink-0"
+                          style={{
+                            backgroundColor: 'var(--pt-accent-12)',
+                            borderColor: 'var(--pt-accent-35)',
+                            color: 'var(--pt-accent)',
+                          }}
+                        >
+                          <AlertTriangle className="w-6 h-6 sm:w-7 sm:h-7" />
+                        </div>
+                        <h4 className="font-display text-sm sm:text-base font-extrabold text-white">
+                          تعذر تشغيل المحتوى حاليًا
+                        </h4>
+                        <p className="max-w-md text-xs text-[#b7c9ef] leading-relaxed">
+                          لم تستجب سيرفرات المشاهدة المتاحة حاليًا. يمكنك إعادة المحاولة مرة أخرى.
+                        </p>
+                        <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={handleRetryAllServers}
+                            className="inline-flex items-center gap-1.5 rounded-xl px-4 min-h-[42px] py-2 text-xs font-extrabold cursor-pointer"
+                            style={{
+                              backgroundColor: 'var(--pt-accent)',
+                              color: 'var(--pt-accent-contrast)',
+                            }}
+                          >
+                            <RotateCw className="w-3.5 h-3.5" />
+                            <span>إعادة المحاولة</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : isBlockedHomepageUrl || isActiveServerFaulty ? (
                       <div className="h-full w-full flex flex-col items-center justify-center p-2.5 sm:p-6 text-center bg-[#090d14] gap-1.5 sm:gap-3">
                         <div
                           className="inline-flex h-8 w-8 sm:h-14 sm:w-14 items-center justify-center rounded-xl sm:rounded-2xl border shrink-0"
@@ -1879,7 +2160,7 @@ export function PlayerModal({
                         <div data-rtv-player-stage="true" data-rtv-player-controls="true" className="relative h-full w-full bg-black">
                           <video
                             ref={videoElementRef}
-                            key={`${finalStreamSrc}-${playerReloadKey}`}
+                            key={`${safeServerIndex}-${finalStreamSrc}-${playerReloadKey}`}
                             src={isHlsVideoStream ? undefined : finalStreamSrc}
                             controls
                             autoPlay
@@ -1887,7 +2168,35 @@ export function PlayerModal({
                             muted={isMuted}
                             crossOrigin={customVttUrl ? 'anonymous' : undefined}
                             onVolumeChange={(e) => setIsMuted(e.currentTarget.muted)}
-                            onError={() => handleServerFaultFailover(safeServerIndex, 'تعذر تحميل ملف الفيديو')}
+                            onLoadedData={() => {
+                              confirmServerLoadReady(safeServerIndex, attemptTokenRef.current);
+                            }}
+                            onCanPlay={(e) => {
+                              const expectedToken = attemptTokenRef.current;
+                              confirmServerLoadReady(safeServerIndex, expectedToken);
+                              attemptVideoAutoplay(e.currentTarget, expectedToken, safeServerIndex);
+                            }}
+                            onPlay={() => {
+                              setAutoplayBlocked(false);
+                              confirmServerLoadReady(safeServerIndex, attemptTokenRef.current);
+                            }}
+                            onPlaying={() => {
+                              hasStartedPlayingRef.current = true;
+                              setAutoplayBlocked(false);
+                              confirmServerLoadReady(safeServerIndex, attemptTokenRef.current);
+                            }}
+                            onPause={() => {
+                              if (hasStartedPlayingRef.current) {
+                                userPausedRef.current = true;
+                              }
+                            }}
+                            onError={() =>
+                              handleServerFaultFailover(
+                                safeServerIndex,
+                                'تعذر تحميل ملف الفيديو',
+                                attemptTokenRef.current
+                              )
+                            }
                             className="h-full w-full max-w-full block bg-black"
                           >
                             {customVttUrl && /^https?:\/\//i.test(customVttUrl.trim()) && (
@@ -1899,6 +2208,25 @@ export function PlayerModal({
                               />
                             )}
                           </video>
+
+                          {autoplayBlocked && (
+                            <button
+                              type="button"
+                              aria-label="تشغيل الفيديو"
+                              onClick={() => {
+                                const vid = videoElementRef.current;
+                                if (!vid) return;
+                                userPausedRef.current = false;
+                                setAutoplayBlocked(false);
+                                void vid.play().catch(() => {
+                                  setAutoplayBlocked(true);
+                                });
+                              }}
+                              className="absolute inset-0 z-20 m-auto flex h-16 w-16 items-center justify-center rounded-full bg-black/75 border border-white/30 text-white shadow-2xl backdrop-blur-md hover:scale-105 transition-transform cursor-pointer"
+                            >
+                              <Play className="w-7 h-7 fill-current translate-x-0.5" />
+                            </button>
+                          )}
 
                           {/* Mobile Double-Tap ±10s Seek Hotzones */}
                           <div
@@ -2064,13 +2392,39 @@ export function PlayerModal({
                         </div>
                       ) : (
                         <iframe
-                          key={`${finalStreamSrc}-${shieldDecision.mode}-${playerReloadKey}`}
+                          key={`${safeServerIndex}-${finalStreamSrc}-${shieldDecision.mode}-${playerReloadKey}`}
                           src={finalStreamSrc}
                           title={`${item.title} - ${activeServerLabel}`}
                           sandbox={shieldDecision.sandboxAttr}
                           allowFullScreen
                           referrerPolicy="no-referrer"
-                          onError={() => handleServerFaultFailover(safeServerIndex, 'تعذر تحميل المشغل المدمج')}
+                          onLoad={(e) => {
+                            const expectedToken = attemptTokenRef.current;
+                            let sameOriginError = false;
+                            try {
+                              const doc = e.currentTarget.contentDocument;
+                              if (doc) {
+                                const text = (doc.body?.innerText || '').trim();
+                                if (!text || /\b(404|403|502|503)\b|not found|forbidden/i.test(text)) {
+                                  sameOriginError = true;
+                                }
+                              }
+                            } catch {
+                              // Cross-origin frame loaded normally
+                            }
+                            if (sameOriginError) {
+                              handleServerFaultFailover(safeServerIndex, 'تعذر تحميل محتوى الإطار', expectedToken);
+                            } else {
+                              confirmServerLoadReady(safeServerIndex, expectedToken);
+                            }
+                          }}
+                          onError={() =>
+                            handleServerFaultFailover(
+                              safeServerIndex,
+                              'تعذر تحميل المشغل المدمج',
+                              attemptTokenRef.current
+                            )
+                          }
                           allow="autoplay; fullscreen; encrypted-media; picture-in-picture; accelerometer; gyroscope"
                           className="h-full w-full max-w-full block border-0 bg-black"
                         />
@@ -2110,11 +2464,11 @@ export function PlayerModal({
                           )}
                           <button
                             type="button"
-                            onClick={() => setPlayerReloadKey((k) => k + 1)}
+                            onClick={handleRetryAllServers}
                             className="inline-flex items-center gap-1.5 rounded-xl bg-white/[0.08] border border-white/15 px-3.5 py-2 text-xs font-bold text-white hover:bg-white/15 cursor-pointer"
                           >
                             <RotateCw className="w-3.5 h-3.5" />
-                            <span>إعادة التحميل</span>
+                            <span>إعادة المحاولة</span>
                           </button>
                         </div>
                       </div>
@@ -2137,9 +2491,7 @@ export function PlayerModal({
                     {serversList.length > 1 && (
                       <button
                         type="button"
-                        onClick={() =>
-                          handleManualServerSelect((safeServerIndex + 1) % serversList.length)
-                        }
+                        onClick={handleSwitchToNextServer}
                         className="inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-[11px] font-extrabold transition-opacity hover:opacity-90 cursor-pointer"
                         style={{
                           backgroundColor: 'var(--pt-accent)',
@@ -2233,14 +2585,7 @@ export function PlayerModal({
                         <button
                           key={ep.number}
                           type="button"
-                          onClick={() => {
-                            setEpisodeNum(ep.number);
-                            setSelectedServer(0);
-                            setFilterMap({});
-                            setFilterAlert(null);
-                            setManualBypassFault({});
-                            setPlayerReloadKey((k) => k + 1);
-                          }}
+                          onClick={() => handleSelectEpisodeOrSeason(seasonIdx, ep.number)}
                           className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors cursor-pointer ${
                             episodeNum === ep.number
                               ? ''
@@ -2350,14 +2695,8 @@ export function PlayerModal({
                           key={s.seasonNumber}
                           type="button"
                           onClick={() => {
-                            setSeasonIdx(sIdx);
                             const firstEp = s.episodes?.[0]?.number || 1;
-                            setEpisodeNum(firstEp);
-                            setSelectedServer(0);
-                            setFilterMap({});
-                            setFilterAlert(null);
-                            setManualBypassFault({});
-                            setPlayerReloadKey((k) => k + 1);
+                            handleSelectEpisodeOrSeason(sIdx, firstEp);
                           }}
                           className={`shrink-0 rounded-xl px-3.5 min-h-[44px] py-1.5 text-xs font-extrabold border transition-colors cursor-pointer ${
                             seasonIdx === sIdx
@@ -2386,14 +2725,7 @@ export function PlayerModal({
                         <button
                           key={ep.number}
                           type="button"
-                          onClick={() => {
-                            setEpisodeNum(ep.number);
-                            setSelectedServer(0);
-                            setFilterMap({});
-                            setFilterAlert(null);
-                            setManualBypassFault({});
-                            setPlayerReloadKey((k) => k + 1);
-                          }}
+                          onClick={() => handleSelectEpisodeOrSeason(seasonIdx, ep.number)}
                           className={`flex items-center justify-center rounded-xl border min-h-[44px] px-2 py-2 text-xs font-extrabold transition-colors cursor-pointer tabular-nums ${
                             isEpActive
                               ? 'border-transparent shadow-md'
