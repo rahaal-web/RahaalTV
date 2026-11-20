@@ -487,11 +487,21 @@ const REQUEST_STATUS_LABELS: Record<RequestStatus, { label: string; cls: string 
 };
 
 interface ServerStatusEntry {
-  status: 'checking' | 'working' | 'warning' | 'broken';
+  status:
+    | 'checking'
+    | 'confirmed_playing'
+    | 'page_available'
+    | 'needs_manual_check'
+    | 'broken'
+    | 'iframe_blocked'
+    | 'unknown_error'
+    | 'working'
+    | 'warning';
   httpStatus?: number;
   label: string;
   detail?: string;
   sandboxBlocked?: boolean;
+  latencyMs?: number;
 }
 
 function extractIframeSrcPreview(embedCode?: string): string | null {
@@ -1490,18 +1500,26 @@ export function AdminDashboardView({
     }
 
     const colorCls =
-      info.status === 'working'
+      info.status === 'confirmed_playing' || info.status === 'working'
         ? 'bg-[#4CAF50]/15 border-[#4CAF50]/40 text-[#4CAF50]'
-        : info.status === 'warning'
+        : info.status === 'page_available'
           ? 'bg-[#f9c400]/15 border-[#f9c400]/40 text-[#f9c400]'
-          : 'bg-[#D92321]/15 border-[#D92321]/40 text-[#ff8a88]';
+          : info.status === 'needs_manual_check' || info.status === 'warning'
+            ? 'bg-orange-500/15 border-orange-400/40 text-orange-300'
+            : info.status === 'unknown_error'
+              ? 'bg-white/10 border-white/25 text-[#b7c9ef]'
+              : 'bg-[#D92321]/15 border-[#D92321]/40 text-[#ff8a88]';
 
     const dotCls =
-      info.status === 'working'
+      info.status === 'confirmed_playing' || info.status === 'working'
         ? 'bg-[#4CAF50]'
-        : info.status === 'warning'
+        : info.status === 'page_available'
           ? 'bg-[#f9c400]'
-          : 'bg-[#D92321]';
+          : info.status === 'needs_manual_check' || info.status === 'warning'
+            ? 'bg-orange-400'
+            : info.status === 'unknown_error'
+              ? 'bg-white/60'
+              : 'bg-[#D92321]';
 
     return (
       <span
@@ -1510,6 +1528,9 @@ export function AdminDashboardView({
       >
         <span className={`h-2 w-2 rounded-full ${dotCls}`} />
         <span>{info.label}</span>
+        {typeof info.latencyMs === 'number' && info.latencyMs > 0 && (
+          <span className="font-latin text-[10px] opacity-80">{info.latencyMs}ms</span>
+        )}
         {!compact && (
           <button
             type="button"

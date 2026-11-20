@@ -64,12 +64,19 @@ import {
   setActiveShieldPlayerContext,
 } from '../lib/popupShield';
 import {
+  buildCompatibleModeChain,
   classifyAutoplayPlayError,
   computeFaultFailoverTransition,
   findNextAvailableServerIndex,
+  getSmartPlayStatusMessage,
+  getWatchModeDisplayInfo,
   LOAD_TIMEOUT_DIRECT_MS,
   LOAD_TIMEOUT_IFRAME_MS,
+  resolveManualModeStep,
+  resolveNextModeOnFailure,
   resolveProactiveFilterDecision,
+  type SmartPlayState,
+  type WatchMode,
 } from '../lib/serverFailover';
 import { handlePosterError } from '../lib/mediaFilters';
 import {
@@ -468,6 +475,7 @@ interface ServerFilterEntry {
   httpStatus: number;
   reason: string;
   directStreamUrl?: string | null;
+  sandboxRejected?: boolean;
 }
 
 function getFriendlyServerError(entry?: ServerFilterEntry | null): {
@@ -572,6 +580,10 @@ export function PlayerModal({
   const [shieldSessionOverrides, setShieldSessionOverrides] = useState<
     Record<number, Exclude<PopupShieldProfileMode, 'direct_media'>>
   >({});
+  const [bypassDirectUrlByServer, setBypassDirectUrlByServer] = useState<Record<number, boolean>>({});
+  const [smartPlayState, setSmartPlayState] = useState<SmartPlayState>('initializing');
+  const [smartPlayDetail, setSmartPlayDetail] = useState<string>('');
+  const [smartOverlayDismissed, setSmartOverlayDismissed] = useState<boolean>(false);
   const [showMobileDetails, setShowMobileDetails] = useState(false);
   const [isTheaterMode, setIsTheaterMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -587,6 +599,7 @@ export function PlayerModal({
   const [seekFeedback, setSeekFeedback] = useState<'forward' | 'backward' | null>(null);
   const playerBoxRef = useRef<HTMLDivElement | null>(null);
   const videoElementRef = useRef<HTMLVideoElement | null>(null);
+  const iframeElementRef = useRef<HTMLIFrameElement | null>(null);
   const hlsInstanceRef = useRef<{
     currentLevel: number;
     subtitleTracks?: Array<{ id?: number; name?: string; lang?: string }>;
@@ -596,6 +609,10 @@ export function PlayerModal({
   const lastBlurObservedRef = useRef<number>(0);
   const selectedServerRef = useRef<number>(initialServerIndex);
   const triedServersRef = useRef<Set<number>>(new Set([initialServerIndex]));
+  const triedModesByServerRef = useRef<Record<number, Set<WatchMode>>>({});
+  const activeModeChainRef = useRef<WatchMode[]>(['direct_unrestricted']);
+  const currentWatchModeRef = useRef<WatchMode>('direct_unrestricted');
+  const modeTransitionLockRef = useRef<boolean>(false);
   const attemptTokenRef = useRef<number>(0);
   const playbackConfirmedRef = useRef<boolean>(false);
   const hasStartedPlayingRef = useRef<boolean>(false);
@@ -661,23 +678,66 @@ export function PlayerModal({
     }
   }, []);
 
+  // Strictly release active video, HLS, and iframe resources before any server/mode transition
+  const cleanupActiveMediaInstances = useCallback(() => {
+    clearLoadTimeout();
+    if (hlsInstanceRef.current) {
+      try {
+        hlsInstanceRef.current.destroy();
+      } catch {
+        // Ignore cleanup errors
+      }
+      hlsInstanceRef.current = null;
+    }
+    if (videoElementRef.current) {
+      try {
+        videoElementRef.current.pause();
+        videoElementRef.current.removeAttribute('src');
+        videoElementRef.current.load();
+      } catch {
+        // Ignore video reset error
+      }
+    }
+    if (iframeElementRef.current) {
+      try {
+        iframeElementRef.current.src = 'about:blank';
+      } catch {
+        // Ignore iframe reset error
+      }
+    }
+  }, [clearLoadTimeout]);
+
+  // Confirmed playback (only call upon genuine video readiness/playback or explicit user activation on loaded frame)
   const confirmServerLoadReady = useCallback(
-    (serverIdx: number, expectedToken?: number) => {
+    (serverIdx: number, expectedToken?: number, options?: { verifiedPlayback?: boolean }) => {
       if (expectedToken !== undefined && attemptTokenRef.current !== expectedToken) return;
-      playbackConfirmedRef.current = true;
+      const isPlayback = Boolean(options?.verifiedPlayback);
       clearLoadTimeout();
       setAllServersFailed(false);
+      modeTransitionLockRef.current = false;
+
+      if (isPlayback) {
+        playbackConfirmedRef.current = true;
+        hasStartedPlayingRef.current = true;
+        setSmartPlayState('confirmed_playing');
+        setSmartPlayDetail('');
+        setSmartOverlayDismissed(true);
+      } else if (!playbackConfirmedRef.current) {
+        setSmartPlayState((prev) => (prev === 'autoplay_blocked' ? 'autoplay_blocked' : 'page_loaded_ready'));
+      }
+
       const existing = filterMapRef.current[serverIdx];
-      if (!existing || !existing.ok) {
+      if (!existing) {
         const nextMap: Record<number, ServerFilterEntry> = {
           ...filterMapRef.current,
           [serverIdx]: {
-            url: existing?.url || '',
+            url: '',
             ok: true,
             faultType: null,
-            httpStatus: existing?.httpStatus || 200,
-            reason: 'السيرفر يعمل بنجاح',
-            directStreamUrl: existing?.directStreamUrl,
+            httpStatus: 200,
+            reason: isPlayback
+              ? 'تم بدء تشغيل الفيديو بنجاح'
+              : 'الصفحة متاحة — بانتظار تأكيد التشغيل',
           },
         };
         filterMapRef.current = nextMap;
@@ -693,10 +753,12 @@ export function PlayerModal({
     const matchingSeason = seasons.findIndex((s) =>
       (s.episodes || []).some((e) => e.number === initialEpisode)
     );
-    clearLoadTimeout();
+    cleanupActiveMediaInstances();
     attemptTokenRef.current += 1;
+    modeTransitionLockRef.current = false;
     selectedServerRef.current = initialServerIndex;
     triedServersRef.current = new Set([initialServerIndex]);
+    triedModesByServerRef.current = {};
     playbackConfirmedRef.current = false;
     hasStartedPlayingRef.current = false;
     iframeLoadedRef.current = false;
@@ -709,30 +771,94 @@ export function PlayerModal({
     setFilterAlert(null);
     setBypassEpisodeSrc(initialServerIndex > 0);
     setManualBypassFault({});
+    setBypassDirectUrlByServer({});
     setAllServersFailed(false);
     setAutoplayBlocked(false);
     setPlayerReloadKey(0);
     setShieldSessionOverrides({});
+    setSmartPlayState('initializing');
+    setSmartPlayDetail('');
+    setSmartOverlayDismissed(false);
     setShowMobileDetails(false);
     setIsMobileCinemaFill(false);
-  }, [item?.id, initialEpisode, initialServerIndex, clearLoadTimeout]);
+  }, [item?.id, initialEpisode, initialServerIndex, cleanupActiveMediaInstances]);
 
   // Keep selectedServerRef synchronized
   useEffect(() => {
     selectedServerRef.current = selectedServer;
   }, [selectedServer]);
 
-  // Cleanup any load timer on unmount
-  useEffect(() => clearLoadTimeout, [clearLoadTimeout]);
+  // Cleanup any load timer and active media instances on unmount
+  useEffect(() => cleanupActiveMediaInstances, [cleanupActiveMediaInstances]);
 
-  // Helper to mark a server faulty at runtime and auto-switch to next untried healthy server in order
+  // Smart Mode Fallback + Multi-Server Failover:
+  // Tries remaining compatible modes on the SAME server before abandoning the server (unless hard 404/not_video/blocked)
   const handleServerFaultFailover = useCallback(
-    (faultIdx: number, reason: string, expectedToken?: number) => {
+    (
+      faultIdx: number,
+      reason: string,
+      expectedToken?: number,
+      options?: { skipModeFallback?: boolean }
+    ) => {
       if (!item) return;
       if (expectedToken !== undefined && attemptTokenRef.current !== expectedToken) return;
       if (playbackConfirmedRef.current && hasStartedPlayingRef.current) return;
+      if (modeTransitionLockRef.current) return;
 
-      clearLoadTimeout();
+      modeTransitionLockRef.current = true;
+      cleanupActiveMediaInstances();
+
+      const isHardServerDeadFault =
+        options?.skipModeFallback ||
+        reason.includes('404') ||
+        reason.includes('غير متوفر في السيرفر') ||
+        reason.includes('لا يحتوي على مشغل فيديو مباشر');
+
+      const currentMode = currentWatchModeRef.current;
+      const modeChain = activeModeChainRef.current;
+      const existingTriedModes = triedModesByServerRef.current[faultIdx] || new Set<WatchMode>();
+
+      if (!isHardServerDeadFault && modeChain.length > 1) {
+        const modeTransition = resolveNextModeOnFailure({
+          modeChain,
+          currentMode,
+          triedModes: existingTriedModes,
+        });
+
+        if (modeTransition.action === 'switch_mode') {
+          triedModesByServerRef.current[faultIdx] = new Set(modeTransition.nextTriedModes);
+          const nextMode = modeTransition.nextMode;
+          attemptTokenRef.current += 1;
+          playbackConfirmedRef.current = false;
+          hasStartedPlayingRef.current = false;
+          iframeLoadedRef.current = false;
+          userPausedRef.current = false;
+          setAutoplayBlocked(false);
+          setSmartOverlayDismissed(false);
+          setSmartPlayState('trying_mode');
+          setSmartPlayDetail('تعذر التشغيل بهذا الوضع، جاري تجربة وضع آخر...');
+
+          if (currentMode === 'direct_media' && nextMode !== 'direct_media') {
+            setBypassDirectUrlByServer((prev) => ({ ...prev, [faultIdx]: true }));
+          }
+          if (nextMode !== 'direct_media') {
+            setShieldSessionOverrides((prev) => ({
+              ...prev,
+              [faultIdx]: nextMode,
+            }));
+          }
+          setPlayerReloadKey((k) => k + 1);
+          const nextModeInfo = getWatchModeDisplayInfo(nextMode);
+          setFilterAlert({
+            kind: 'switched',
+            message: `تعذر التشغيل بالوضع السابق — جاري تجربة ${nextModeInfo.label}.`,
+          });
+          window.setTimeout(() => {
+            modeTransitionLockRef.current = false;
+          }, 80);
+          return;
+        }
+      }
 
       const epList = item.seasons?.[seasonIdx]?.episodes || item.seasons?.[0]?.episodes || [];
       const activeEp = epList.find((e) => e.number === episodeNum);
@@ -780,6 +906,9 @@ export function PlayerModal({
         setAutoplayBlocked(false);
         setAllServersFailed(false);
         setBypassEpisodeSrc(true);
+        setSmartPlayState('initializing');
+        setSmartPlayDetail('');
+        setSmartOverlayDismissed(false);
         setSelectedServer(candidateIdx);
 
         const faultName = formatShortServerName(
@@ -794,31 +923,51 @@ export function PlayerModal({
         );
         setFilterAlert({
           kind: 'switched',
-          message: `${faultName} غير متاح حالياً — تم التبديل تلقائياً إلى ${nextName}.`,
+          message: `${faultName} لم يستجب بعد تجربة الأوضاع المتاحة — تم التبديل تلقائياً إلى ${nextName}.`,
         });
       } else {
+        setSmartPlayState('server_exhausted');
+        setSmartPlayDetail('لم نتمكن من تشغيل هذا السيرفر، يمكنك تجربة سيرفر آخر.');
+        setSmartOverlayDismissed(false);
         setAllServersFailed(true);
         setFilterAlert({
           kind: 'warning',
-          message: 'تعذر تشغيل المحتوى حاليًا — لم تستجب السيرفرات المتاحة. يمكنك إعادة المحاولة.',
+          message: 'تعذر تشغيل المحتوى حاليًا — يمكنك تجربة سيرفر آخر أو إعادة المحاولة.',
         });
       }
+      window.setTimeout(() => {
+        modeTransitionLockRef.current = false;
+      }, 80);
     },
-    [item, seasonIdx, episodeNum, clearLoadTimeout]
+    [item, seasonIdx, episodeNum, cleanupActiveMediaInstances]
   );
 
-  // Mark iframe frame load separately: cancels hang timer without locking out proactive 404/403 detection
+  // Mark iframe frame load separately: NEVER falsifies confirmed_playing on cross-origin frames!
   const markIframeLoaded = useCallback(
-    (serverIdx: number, expectedToken?: number) => {
+    (serverIdx: number, expectedToken?: number, sameOriginPlaying = false) => {
       if (expectedToken !== undefined && attemptTokenRef.current !== expectedToken) return;
       iframeLoadedRef.current = true;
       clearLoadTimeout();
       setAllServersFailed(false);
+      modeTransitionLockRef.current = false;
       const existing = filterMapRef.current[serverIdx];
-      if (existing?.ok) {
-        confirmServerLoadReady(serverIdx, expectedToken);
-      } else if (existing && !existing.ok && !manualBypassFault[serverIdx]) {
-        handleServerFaultFailover(serverIdx, existing.reason || 'السيرفر غير متاح', expectedToken);
+      if (existing && !existing.ok && !manualBypassFault[serverIdx]) {
+        if (existing.faultType === 'sandboxed_embed') {
+          handleServerFaultFailover(serverIdx, existing.reason || 'رسالة Sandboxed embed', expectedToken);
+          return;
+        }
+        handleServerFaultFailover(serverIdx, existing.reason || 'السيرفر غير متاح', expectedToken, {
+          skipModeFallback:
+            existing.faultType === '404' ||
+            existing.faultType === 'not_video' ||
+            (existing.faultType === '403' && !existing.directStreamUrl),
+        });
+        return;
+      }
+      if (sameOriginPlaying) {
+        confirmServerLoadReady(serverIdx, expectedToken, { verifiedPlayback: true });
+      } else {
+        confirmServerLoadReady(serverIdx, expectedToken, { verifiedPlayback: false });
       }
     },
     [clearLoadTimeout, confirmServerLoadReady, handleServerFaultFailover, manualBypassFault]
@@ -915,17 +1064,38 @@ export function PlayerModal({
           episodeUrlOk: Boolean(epResult?.ok),
         });
 
+        if (merged[safeCurrentIdx]?.ok && (merged[safeCurrentIdx]?.sandboxRejected || merged[safeCurrentIdx]?.faultType === 'sandboxed_embed')) {
+          if (currentWatchModeRef.current === 'strict_sandbox') {
+            triedModesByServerRef.current[safeCurrentIdx] = new Set([
+              ...(triedModesByServerRef.current[safeCurrentIdx] || []),
+              'strict_sandbox',
+            ]);
+            setShieldSessionOverrides((prev) => ({
+              ...prev,
+              [safeCurrentIdx]: 'direct_unrestricted',
+            }));
+            setSmartPlayState('trying_mode');
+            setSmartPlayDetail('جاري تجربة وضع التوافق المباشر...');
+            setSmartOverlayDismissed(false);
+            setPlayerReloadKey((k) => k + 1);
+          }
+        }
+
         if (decision.action === 'switch') {
           decision.nextTriedIndices.forEach((i) => triedServersRef.current.add(i));
           triedServersRef.current.add(decision.nextIndex);
+          cleanupActiveMediaInstances();
           attemptTokenRef.current += 1;
-          clearLoadTimeout();
+          modeTransitionLockRef.current = false;
           playbackConfirmedRef.current = false;
           hasStartedPlayingRef.current = false;
           iframeLoadedRef.current = false;
           userPausedRef.current = false;
           setAutoplayBlocked(false);
           setAllServersFailed(false);
+          setSmartPlayState('initializing');
+          setSmartPlayDetail('');
+          setSmartOverlayDismissed(false);
           if (decision.bypassEpisodeUrl) {
             setBypassEpisodeSrc(true);
           }
@@ -951,8 +1121,11 @@ export function PlayerModal({
           });
         } else if (decision.action === 'all_failed') {
           decision.nextTriedIndices.forEach((i) => triedServersRef.current.add(i));
-          clearLoadTimeout();
+          cleanupActiveMediaInstances();
           setAllServersFailed(true);
+          setSmartPlayState('server_exhausted');
+          setSmartPlayDetail('لم نتمكن من تشغيل هذا السيرفر، يمكنك تجربة سيرفر آخر.');
+          setSmartOverlayDismissed(false);
           setFilterAlert({
             kind: 'warning',
             message: 'تعذر تشغيل المحتوى حاليًا — لم تستجب السيرفرات المتاحة.',
@@ -962,7 +1135,9 @@ export function PlayerModal({
           merged[safeCurrentIdx]?.ok &&
           (!epSrc || epResult?.ok)
         ) {
-          confirmServerLoadReady(safeCurrentIdx, attemptTokenRef.current);
+          confirmServerLoadReady(safeCurrentIdx, attemptTokenRef.current, {
+            verifiedPlayback: hasStartedPlayingRef.current,
+          });
         }
       } catch {
         // Silent fallback
@@ -1006,9 +1181,13 @@ export function PlayerModal({
         : extractSafeStreamSrc(activeEpPreview?.embedCode, activeEpPreview?.watchUrl);
   const previewEpSrc =
     rawPreviewEpSrc && !isLikelyNonVideoWebsiteUrl(rawPreviewEpSrc) ? rawPreviewEpSrc : null;
+  const rawPreviewServerSrc = extractSafeStreamSrc(
+    previewServerObj?.embedCode,
+    previewServerObj?.url
+  );
   const previewServerSrc =
-    filterMap[previewServerIndex]?.directStreamUrl ||
-    extractSafeStreamSrc(previewServerObj?.embedCode, previewServerObj?.url);
+    (!bypassDirectUrlByServer[previewServerIndex] && filterMap[previewServerIndex]?.directStreamUrl) ||
+    rawPreviewServerSrc;
   const currentActiveStreamSrc = previewEpSrc || previewServerSrc;
   const currentShieldDecision = resolveEffectiveShieldDecision(
     currentActiveStreamSrc,
@@ -1079,11 +1258,23 @@ export function PlayerModal({
     previewServerIndex,
   ]);
 
-  // Listen for postMessage cues from embedded players reporting sandboxed embed or 403 errors
+  // Listen for postMessage cues from embedded players reporting playback start, sandboxed embed, or errors
   useEffect(() => {
     if (!item) return;
     const onMessage = (event: MessageEvent) => {
       const payload = typeof event.data === 'string' ? event.data : JSON.stringify(event.data || '');
+      const isPlaybackStartedSignal =
+        /"(event|type|status)"\s*:\s*"(playing|video_playing|playback_started)"|\bvideo_playing\b/i.test(
+          payload
+        );
+      if (isPlaybackStartedSignal) {
+        hasStartedPlayingRef.current = true;
+        confirmServerLoadReady(previewServerIndex, attemptTokenRef.current, {
+          verifiedPlayback: true,
+        });
+        return;
+      }
+
       const isSandboxRejection =
         /sandboxed\s*embed|please\s*disable\s+sandbox|embedding\s+in\s+sandbox/i.test(payload);
       if (
@@ -1092,10 +1283,23 @@ export function PlayerModal({
         currentShieldDecision.mode !== 'direct_unrestricted' &&
         currentShieldDecision.mode !== 'direct_media'
       ) {
+        cleanupActiveMediaInstances();
+        attemptTokenRef.current += 1;
+        playbackConfirmedRef.current = false;
+        hasStartedPlayingRef.current = false;
+        iframeLoadedRef.current = false;
+        triedModesByServerRef.current[previewServerIndex] = new Set([
+          ...(triedModesByServerRef.current[previewServerIndex] || []),
+          currentShieldDecision.mode,
+        ]);
+        setSmartOverlayDismissed(false);
+        setSmartPlayState('trying_mode');
+        setSmartPlayDetail('جاري تجربة وضع التوافق المباشر...');
         setShieldSessionOverrides((prev) => ({
           ...prev,
           [previewServerIndex]: 'direct_unrestricted',
         }));
+        setPlayerReloadKey((k) => k + 1);
         if (currentShieldDecision.hostname && onUpdateHostRule) {
           onUpdateHostRule({
             hostname: currentShieldDecision.hostname,
@@ -1145,6 +1349,8 @@ export function PlayerModal({
     effectiveShieldConfig.autoFallbackOnReject,
     onUpdateHostRule,
     handleServerFaultFailover,
+    confirmServerLoadReady,
+    cleanupActiveMediaInstances,
   ]);
 
   const seasons = item?.seasons || [];
@@ -1184,8 +1390,10 @@ export function PlayerModal({
     rawEpFallbackSrc && !isLikelyNonVideoWebsiteUrl(rawEpFallbackSrc) ? rawEpFallbackSrc : null;
 
   const activeFilterEntry = filterMap[safeServerIndex];
+  const rawOriginalServerSrc = extractSafeStreamSrc(activeServer.embedCode, activeServer.url);
   const serverSrc =
-    activeFilterEntry?.directStreamUrl || extractSafeStreamSrc(activeServer.embedCode, activeServer.url);
+    (!bypassDirectUrlByServer[safeServerIndex] && activeFilterEntry?.directStreamUrl) ||
+    rawOriginalServerSrc;
   const finalStreamSrc = episodeSpecificSrc || serverSrc;
   const isBlockedHomepageUrl = Boolean(
     finalStreamSrc &&
@@ -1209,16 +1417,19 @@ export function PlayerModal({
         playResult
           .then(() => {
             if (attemptTokenRef.current !== expectedToken) return;
+            hasStartedPlayingRef.current = true;
             setAutoplayBlocked(false);
-            confirmServerLoadReady(serverIdx, expectedToken);
+            confirmServerLoadReady(serverIdx, expectedToken, { verifiedPlayback: true });
           })
           .catch((err) => {
             if (attemptTokenRef.current !== expectedToken) return;
             const kind = classifyAutoplayPlayError(err);
             if (kind === 'autoplay_blocked') {
-              // Browser blocked unmuted autoplay: keep server ready & show standard play button
+              // Browser blocked unmuted autoplay: keep player ready & show Play action
               setAutoplayBlocked(true);
-              confirmServerLoadReady(serverIdx, expectedToken);
+              setSmartPlayState('autoplay_blocked');
+              setSmartOverlayDismissed(false);
+              confirmServerLoadReady(serverIdx, expectedToken, { verifiedPlayback: false });
             } else if (kind === 'playback_error') {
               handleServerFaultFailover(serverIdx, 'تعذر تشغيل ملف الفيديو', expectedToken);
             }
@@ -1383,7 +1594,7 @@ export function PlayerModal({
             label: tr.name || tr.lang || `ترجمة ${idx + 1}`,
           }));
           setHlsSubtitles(subs);
-          confirmServerLoadReady(currentIdx, expectedToken);
+          confirmServerLoadReady(currentIdx, expectedToken, { verifiedPlayback: false });
           attemptVideoAutoplay(videoElementRef.current, expectedToken, currentIdx);
         });
 
@@ -1540,35 +1751,134 @@ export function PlayerModal({
     shieldSessionOverrides[safeServerIndex] || null
   );
 
-  const handleCycleShieldMode = () => {
-    if (shieldDecision.mode === 'direct_media') return;
-    const nextMode: Exclude<PopupShieldProfileMode, 'direct_media'> =
-      shieldDecision.mode === 'strict_sandbox'
-        ? 'redirect_guard'
-        : shieldDecision.mode === 'redirect_guard'
-          ? 'direct_unrestricted'
-          : 'strict_sandbox';
-    setShieldSessionOverrides((prev) => ({ ...prev, [safeServerIndex]: nextMode }));
-    if (shieldDecision.hostname && onUpdateHostRule) {
-      onUpdateHostRule({
-        hostname: shieldDecision.hostname,
-        mode: nextMode,
-        compatibility:
-          nextMode === 'strict_sandbox'
-            ? 'compatible'
-            : nextMode === 'redirect_guard'
-              ? 'partial'
-              : 'incompatible',
-        note: 'تم تعديله من شريط المشغّل',
-        lastTestedAt: new Date().toISOString(),
+  const hasDirectStreamFallback = Boolean(
+    activeFilterEntry?.directStreamUrl &&
+      rawOriginalServerSrc &&
+      activeFilterEntry.directStreamUrl !== rawOriginalServerSrc
+  );
+  const rawServerIsDirectMedia = Boolean(
+    rawOriginalServerSrc &&
+      /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(rawOriginalServerSrc) &&
+      !hasDirectStreamFallback
+  );
+  const modeChainForServer = buildCompatibleModeChain({
+    primaryMode: shieldDecision.mode,
+    isDirectMedia: rawServerIsDirectMedia && !episodeSpecificSrc,
+    antiSandboxDetected: Boolean(
+      activeFilterEntry?.sandboxRejected || activeFilterEntry?.faultType === 'sandboxed_embed'
+    ),
+    hasDirectStreamFallback,
+  });
+  const activeWatchMode: WatchMode = isDirectVideoFile ? 'direct_media' : shieldDecision.mode;
+  activeModeChainRef.current = modeChainForServer;
+  currentWatchModeRef.current = activeWatchMode;
+  const activeModeInfo = getWatchModeDisplayInfo(activeWatchMode);
+  const activeModeIndex = Math.max(0, modeChainForServer.indexOf(activeWatchMode));
+
+  const applyWatchModeSwitch = (nextMode: WatchMode) => {
+    cleanupActiveMediaInstances();
+    modeTransitionLockRef.current = false;
+    attemptTokenRef.current += 1;
+    playbackConfirmedRef.current = false;
+    hasStartedPlayingRef.current = false;
+    iframeLoadedRef.current = false;
+    userPausedRef.current = false;
+    setAutoplayBlocked(false);
+    setSmartOverlayDismissed(false);
+    setSmartPlayState('trying_mode');
+    setSmartPlayDetail(
+      nextMode === 'direct_unrestricted'
+        ? 'جاري تجربة وضع التوافق المباشر...'
+        : `جاري تجربة ${getWatchModeDisplayInfo(nextMode).label}...`
+    );
+
+    if (nextMode === 'direct_media') {
+      setBypassDirectUrlByServer((prev) => {
+        const next = { ...prev };
+        delete next[safeServerIndex];
+        return next;
       });
+    } else {
+      if (hasDirectStreamFallback) {
+        setBypassDirectUrlByServer((prev) => ({ ...prev, [safeServerIndex]: true }));
+      }
+      setShieldSessionOverrides((prev) => ({ ...prev, [safeServerIndex]: nextMode }));
+      if (shieldDecision.hostname && onUpdateHostRule) {
+        onUpdateHostRule({
+          hostname: shieldDecision.hostname,
+          mode: nextMode,
+          compatibility:
+            nextMode === 'strict_sandbox'
+              ? 'compatible'
+              : nextMode === 'redirect_guard'
+                ? 'partial'
+                : 'incompatible',
+          note: 'تم تعديله من شريط أوضاع المشغّل',
+          lastTestedAt: new Date().toISOString(),
+        });
+      }
+    }
+    setPlayerReloadKey((k) => k + 1);
+  };
+
+  const handleStepWatchMode = (direction: 'next' | 'prev') => {
+    if (modeChainForServer.length <= 1) return;
+    const nextMode = resolveManualModeStep({
+      modeChain: modeChainForServer,
+      currentMode: activeWatchMode,
+      direction,
+    });
+    if (nextMode === activeWatchMode) {
+      handleReloadCurrentServer();
+      return;
+    }
+    applyWatchModeSwitch(nextMode);
+  };
+
+  const handleCycleShieldMode = () => {
+    handleStepWatchMode('next');
+  };
+
+  const handleSmartPlayPrimaryAction = () => {
+    if (isDirectVideoFile && videoElementRef.current) {
+      const vid = videoElementRef.current;
+      userPausedRef.current = false;
+      setAutoplayBlocked(false);
+      void vid
+        .play()
+        .then(() => {
+          hasStartedPlayingRef.current = true;
+          confirmServerLoadReady(safeServerIndex, attemptTokenRef.current, {
+            verifiedPlayback: true,
+          });
+        })
+        .catch(() => {
+          setAutoplayBlocked(true);
+          setSmartPlayState('autoplay_blocked');
+        });
+      return;
+    }
+    if (smartPlayState === 'server_exhausted') {
+      handleSwitchToNextServer();
+      return;
+    }
+    if (smartPlayState === 'page_loaded_ready') {
+      setSmartOverlayDismissed(true);
+      return;
+    }
+    if (modeChainForServer.length > 1) {
+      handleStepWatchMode('next');
+    } else {
+      setSmartOverlayDismissed(true);
     }
   };
 
   const handleManualServerSelect = (idx: number) => {
-    clearLoadTimeout();
+    cleanupActiveMediaInstances();
+    modeTransitionLockRef.current = false;
     attemptTokenRef.current += 1;
     triedServersRef.current = new Set([idx]);
+    delete triedModesByServerRef.current[idx];
     selectedServerRef.current = idx;
     playbackConfirmedRef.current = false;
     hasStartedPlayingRef.current = false;
@@ -1577,6 +1887,14 @@ export function PlayerModal({
     setAutoplayBlocked(false);
     setAllServersFailed(false);
     setBypassEpisodeSrc(idx > 0);
+    setBypassDirectUrlByServer((prev) => {
+      const next = { ...prev };
+      delete next[idx];
+      return next;
+    });
+    setSmartPlayState('initializing');
+    setSmartPlayDetail('');
+    setSmartOverlayDismissed(false);
     setFilterAlert(null);
     if (filterMapRef.current[idx] && !filterMapRef.current[idx].ok) {
       setManualBypassFault((prev) => ({ ...prev, [idx]: true }));
@@ -1601,10 +1919,12 @@ export function PlayerModal({
   };
 
   const handleRetryAllServers = () => {
-    clearLoadTimeout();
+    cleanupActiveMediaInstances();
+    modeTransitionLockRef.current = false;
     attemptTokenRef.current += 1;
     const startIdx = initialServerIndex < serversList.length ? initialServerIndex : 0;
     triedServersRef.current = new Set([startIdx]);
+    triedModesByServerRef.current = {};
     selectedServerRef.current = startIdx;
     playbackConfirmedRef.current = false;
     hasStartedPlayingRef.current = false;
@@ -1615,17 +1935,24 @@ export function PlayerModal({
     setAllServersFailed(false);
     setFilterAlert(null);
     setBypassEpisodeSrc(startIdx > 0);
+    setBypassDirectUrlByServer({});
     setManualBypassFault({});
+    setShieldSessionOverrides({});
     setFilterMap({});
+    setSmartPlayState('initializing');
+    setSmartPlayDetail('');
+    setSmartOverlayDismissed(false);
     setSelectedServer(startIdx);
     setPlayerReloadKey((k) => k + 1);
     setRetryAllNonce((n) => n + 1);
   };
 
   const handleSelectEpisodeOrSeason = (nextSeasonIdx: number, nextEpisodeNum: number) => {
-    clearLoadTimeout();
+    cleanupActiveMediaInstances();
+    modeTransitionLockRef.current = false;
     attemptTokenRef.current += 1;
     triedServersRef.current = new Set([0]);
+    triedModesByServerRef.current = {};
     selectedServerRef.current = 0;
     playbackConfirmedRef.current = false;
     hasStartedPlayingRef.current = false;
@@ -1635,12 +1962,17 @@ export function PlayerModal({
     setAutoplayBlocked(false);
     setAllServersFailed(false);
     setBypassEpisodeSrc(false);
+    setBypassDirectUrlByServer({});
+    setShieldSessionOverrides({});
     setSeasonIdx(nextSeasonIdx);
     setEpisodeNum(nextEpisodeNum);
     setSelectedServer(0);
     setFilterMap({});
     setFilterAlert(null);
     setManualBypassFault({});
+    setSmartPlayState('initializing');
+    setSmartPlayDetail('');
+    setSmartOverlayDismissed(false);
     setPlayerReloadKey((k) => k + 1);
   };
 
@@ -1649,13 +1981,17 @@ export function PlayerModal({
       handleRetryAllServers();
       return;
     }
-    clearLoadTimeout();
+    cleanupActiveMediaInstances();
+    modeTransitionLockRef.current = false;
     attemptTokenRef.current += 1;
     playbackConfirmedRef.current = false;
     hasStartedPlayingRef.current = false;
     iframeLoadedRef.current = false;
     userPausedRef.current = false;
     setAutoplayBlocked(false);
+    setSmartPlayState('trying_mode');
+    setSmartPlayDetail('');
+    setSmartOverlayDismissed(false);
     setPlayerReloadKey((k) => k + 1);
   };
 
@@ -2242,21 +2578,30 @@ export function PlayerModal({
                             crossOrigin={customVttUrl ? 'anonymous' : undefined}
                             onVolumeChange={(e) => setIsMuted(e.currentTarget.muted)}
                             onLoadedData={() => {
-                              confirmServerLoadReady(safeServerIndex, attemptTokenRef.current);
+                              confirmServerLoadReady(safeServerIndex, attemptTokenRef.current, {
+                                verifiedPlayback: false,
+                              });
                             }}
                             onCanPlay={(e) => {
                               const expectedToken = attemptTokenRef.current;
-                              confirmServerLoadReady(safeServerIndex, expectedToken);
+                              confirmServerLoadReady(safeServerIndex, expectedToken, {
+                                verifiedPlayback: false,
+                              });
                               attemptVideoAutoplay(e.currentTarget, expectedToken, safeServerIndex);
                             }}
                             onPlay={() => {
+                              hasStartedPlayingRef.current = true;
                               setAutoplayBlocked(false);
-                              confirmServerLoadReady(safeServerIndex, attemptTokenRef.current);
+                              confirmServerLoadReady(safeServerIndex, attemptTokenRef.current, {
+                                verifiedPlayback: true,
+                              });
                             }}
                             onPlaying={() => {
                               hasStartedPlayingRef.current = true;
                               setAutoplayBlocked(false);
-                              confirmServerLoadReady(safeServerIndex, attemptTokenRef.current);
+                              confirmServerLoadReady(safeServerIndex, attemptTokenRef.current, {
+                                verifiedPlayback: true,
+                              });
                             }}
                             onPause={() => {
                               if (hasStartedPlayingRef.current) {
@@ -2281,25 +2626,6 @@ export function PlayerModal({
                               />
                             )}
                           </video>
-
-                          {autoplayBlocked && (
-                            <button
-                              type="button"
-                              aria-label="تشغيل الفيديو"
-                              onClick={() => {
-                                const vid = videoElementRef.current;
-                                if (!vid) return;
-                                userPausedRef.current = false;
-                                setAutoplayBlocked(false);
-                                void vid.play().catch(() => {
-                                  setAutoplayBlocked(true);
-                                });
-                              }}
-                              className="absolute inset-0 z-20 m-auto flex h-16 w-16 items-center justify-center rounded-full bg-black/75 border border-white/30 text-white shadow-2xl backdrop-blur-md hover:scale-105 transition-transform cursor-pointer"
-                            >
-                              <Play className="w-7 h-7 fill-current translate-x-0.5" />
-                            </button>
-                          )}
 
                           {/* Mobile Double-Tap ±10s Seek Hotzones */}
                           <div
@@ -2465,6 +2791,7 @@ export function PlayerModal({
                         </div>
                       ) : (
                         <iframe
+                          ref={iframeElementRef}
                           key={`${safeServerIndex}-${finalStreamSrc}-${shieldDecision.mode}-${playerReloadKey}`}
                           src={finalStreamSrc}
                           title={`${item.title} - ${activeServerLabel}`}
@@ -2474,21 +2801,46 @@ export function PlayerModal({
                           onLoad={(e) => {
                             const expectedToken = attemptTokenRef.current;
                             let sameOriginError = false;
+                            let sameOrigin404 = false;
+                            let sameOriginSandbox = false;
+                            let sameOriginPlaying = false;
                             try {
                               const doc = e.currentTarget.contentDocument;
                               if (doc) {
                                 const text = (doc.body?.innerText || '').trim();
-                                if (!text || /\b(404|403|502|503)\b|not found|forbidden/i.test(text)) {
+                                if (!text) {
                                   sameOriginError = true;
+                                } else if (/sandboxed\s*embed|disable\s+sandbox/i.test(text)) {
+                                  sameOriginError = true;
+                                  sameOriginSandbox = true;
+                                } else if (/\b404\b|not found|الصفحة غير موجودة/i.test(text)) {
+                                  sameOriginError = true;
+                                  sameOrigin404 = true;
+                                } else if (/\b(403|502|503)\b|forbidden|service unavailable/i.test(text)) {
+                                  sameOriginError = true;
+                                } else {
+                                  const vid = doc.querySelector('video');
+                                  if (vid && !vid.paused && vid.readyState >= 2) {
+                                    sameOriginPlaying = true;
+                                  }
                                 }
                               }
                             } catch {
-                              // Cross-origin frame loaded normally
+                              // Cross-origin frame: SOP prevents reading contentDocument (never treated as server failure)
                             }
                             if (sameOriginError) {
-                              handleServerFaultFailover(safeServerIndex, 'تعذر تحميل محتوى الإطار', expectedToken);
+                              handleServerFaultFailover(
+                                safeServerIndex,
+                                sameOriginSandbox
+                                  ? 'رسالة Sandboxed embed'
+                                  : sameOrigin404
+                                    ? 'خطأ 404 داخل الإطار'
+                                    : 'تعذر تحميل محتوى الإطار',
+                                expectedToken,
+                                { skipModeFallback: sameOrigin404 }
+                              );
                             } else {
-                              markIframeLoaded(safeServerIndex, expectedToken);
+                              markIframeLoaded(safeServerIndex, expectedToken, sameOriginPlaying);
                             }
                           }}
                           onError={() =>
@@ -2546,6 +2898,142 @@ export function PlayerModal({
                         </div>
                       </div>
                     )}
+
+                    {/* Center-Screen Smart Play Overlay + Mode Fallback Bar */}
+                    {finalStreamSrc &&
+                      !allServersFailed &&
+                      !isBlockedHomepageUrl &&
+                      !isActiveServerFaulty &&
+                      !isDashStream &&
+                      smartPlayState !== 'confirmed_playing' &&
+                      (!smartOverlayDismissed ? (
+                        <div className="pointer-events-auto absolute inset-0 z-30 flex items-center justify-center bg-black/68 backdrop-blur-[3px] p-3 sm:p-5">
+                          <div className="w-full max-w-sm rounded-2xl border border-white/15 bg-[#09121b]/95 p-3.5 sm:p-4 text-center shadow-2xl space-y-3">
+                            <div className="flex flex-col items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={handleSmartPlayPrimaryAction}
+                                aria-label="تشغيل الفيديو"
+                                className="inline-flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-2xl border border-white/25 shadow-xl transition-transform hover:scale-105 active:scale-95 cursor-pointer"
+                                style={{
+                                  backgroundColor: 'var(--pt-accent)',
+                                  color: 'var(--pt-accent-contrast)',
+                                }}
+                              >
+                                {smartPlayState === 'initializing' || smartPlayState === 'trying_mode' ? (
+                                  <Loader2 className="w-7 h-7 animate-spin" />
+                                ) : (
+                                  <Play className="w-7 h-7 fill-current translate-x-0.5" />
+                                )}
+                              </button>
+
+                              <div className="space-y-1">
+                                <p className="text-xs sm:text-sm font-extrabold text-white leading-snug">
+                                  {getSmartPlayStatusMessage(smartPlayState, activeWatchMode, smartPlayDetail)}
+                                </p>
+                                <div className="inline-flex flex-wrap items-center justify-center gap-1.5 text-[10px] sm:text-[11px] text-[#9fb2d4]">
+                                  <span className="font-bold text-white/90">{activeServerLabel}</span>
+                                  <span>·</span>
+                                  <span className="font-extrabold text-[#f9c400]">
+                                    {activeModeInfo.label}
+                                  </span>
+                                  {modeChainForServer.length > 1 && (
+                                    <span className="font-latin text-[#88a0c7]">
+                                      ({activeModeIndex + 1}/{modeChainForServer.length})
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Quick Action Strip: Mode Prev / Retry / Mode Next / Next Server */}
+                            <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
+                              {smartPlayState === 'page_loaded_ready' && !autoplayBlocked && (
+                                <button
+                                  type="button"
+                                  onClick={() => setSmartOverlayDismissed(true)}
+                                  className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-extrabold cursor-pointer transition-opacity hover:opacity-90"
+                                  style={{
+                                    backgroundColor: 'var(--pt-accent)',
+                                    color: 'var(--pt-accent-contrast)',
+                                  }}
+                                >
+                                  <Play className="w-3 h-3 fill-current" />
+                                  <span>بدء المشاهدة</span>
+                                </button>
+                              )}
+
+                              {modeChainForServer.length > 1 && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStepWatchMode('prev')}
+                                    className="inline-flex items-center gap-1 rounded-lg bg-white/[0.08] border border-white/15 px-2.5 py-1.5 text-[10px] sm:text-[11px] font-bold text-white/90 hover:bg-white/15 cursor-pointer"
+                                  >
+                                    <ChevronRight className="w-3 h-3" />
+                                    <span>الوضع السابق</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStepWatchMode('next')}
+                                    className="inline-flex items-center gap-1 rounded-lg bg-white/[0.08] border border-white/15 px-2.5 py-1.5 text-[10px] sm:text-[11px] font-bold text-white/90 hover:bg-white/15 cursor-pointer"
+                                  >
+                                    <span>الوضع التالي</span>
+                                    <ChevronLeft className="w-3 h-3" />
+                                  </button>
+                                </>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={handleReloadCurrentServer}
+                                className="inline-flex items-center gap-1 rounded-lg bg-white/[0.08] border border-white/15 px-2.5 py-1.5 text-[10px] sm:text-[11px] font-bold text-white/90 hover:bg-white/15 cursor-pointer"
+                              >
+                                <RotateCw className="w-3 h-3" />
+                                <span>إعادة المحاولة</span>
+                              </button>
+
+                              {serversList.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={handleSwitchToNextServer}
+                                  className="inline-flex items-center gap-1 rounded-lg bg-white/[0.08] border border-white/15 px-2.5 py-1.5 text-[10px] sm:text-[11px] font-bold text-[#f9c400] hover:bg-white/15 cursor-pointer"
+                                >
+                                  <RefreshCw className="w-3 h-3" />
+                                  <span>تبديل السيرفر</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        !isDirectVideoFile && (
+                          <div className="pointer-events-none absolute top-2.5 left-2.5 right-2.5 z-20 flex items-center justify-between gap-2">
+                            <div className="pointer-events-auto inline-flex flex-wrap items-center gap-1.5 rounded-lg bg-black/75 border border-white/15 px-2 py-1 backdrop-blur-sm">
+                              <span className="text-[10px] font-bold text-[#9fb2d4]">
+                                {activeModeInfo.shortLabel}
+                              </span>
+                              {modeChainForServer.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleStepWatchMode('next')}
+                                  className="inline-flex items-center gap-1 rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-extrabold text-[#f9c400] hover:bg-white/20 cursor-pointer"
+                                >
+                                  <RefreshCw className="w-2.5 h-2.5" />
+                                  <span>تجربة وضع آخر</span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setSmartOverlayDismissed(false)}
+                                className="inline-flex items-center gap-1 rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-white/85 hover:bg-white/20 cursor-pointer"
+                              >
+                                <span>خيارات التشغيل</span>
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      ))}
                   </div>
                 </div>
 

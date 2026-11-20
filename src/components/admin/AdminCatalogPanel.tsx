@@ -25,10 +25,20 @@ import type { AdminTab } from './adminNavigation';
 import { ConfirmDialog, TablePagination } from './AdminSharedUi';
 
 export interface CatalogServerStatusEntry {
-  status: 'checking' | 'working' | 'warning' | 'broken';
+  status:
+    | 'checking'
+    | 'confirmed_playing'
+    | 'page_available'
+    | 'needs_manual_check'
+    | 'broken'
+    | 'iframe_blocked'
+    | 'unknown_error'
+    | 'working'
+    | 'warning';
   httpStatus?: number;
   label: string;
   detail?: string;
+  latencyMs?: number;
 }
 
 interface AdminCatalogPanelProps {
@@ -610,8 +620,21 @@ export function AdminCatalogPanel({
                               .filter((u) => /^https?:\/\//i.test(u));
                             const checked = urls.map((u) => serverStatuses[u]).filter(Boolean);
                             if (checked.length === 0) return null;
-                            const workingCount = checked.filter((c) => c.status === 'working').length;
-                            const warnCount = checked.filter((c) => c.status === 'warning').length;
+                            const confirmedCount = checked.filter(
+                              (c) => c.status === 'confirmed_playing' || c.status === 'working'
+                            ).length;
+                            const availableCount = checked.filter(
+                              (c) => c.status === 'page_available'
+                            ).length;
+                            const manualCount = checked.filter(
+                              (c) =>
+                                c.status === 'needs_manual_check' ||
+                                c.status === 'warning' ||
+                                c.status === 'unknown_error'
+                            ).length;
+                            const blockedCount = checked.filter(
+                              (c) => c.status === 'iframe_blocked'
+                            ).length;
                             const brokenCount = checked.filter((c) => c.status === 'broken').length;
                             const checkingCount = checked.filter((c) => c.status === 'checking').length;
                             return (
@@ -621,19 +644,29 @@ export function AdminCatalogPanel({
                                     جاري الفحص ({checkingCount})
                                   </span>
                                 )}
-                                {workingCount > 0 && (
+                                {confirmedCount > 0 && (
                                   <span className="rounded bg-[#4CAF50]/15 px-1.5 py-0.5 text-[#4CAF50]">
-                                    ● {workingCount} يعمل
+                                    🟢 {confirmedCount} مؤكد التشغيل
                                   </span>
                                 )}
-                                {warnCount > 0 && (
+                                {availableCount > 0 && (
                                   <span className="rounded bg-[#f9c400]/15 px-1.5 py-0.5 text-[#f9c400]">
-                                    ● {warnCount} تحذير تضمين
+                                    🟡 {availableCount} صفحة متاحة
+                                  </span>
+                                )}
+                                {manualCount > 0 && (
+                                  <span className="rounded bg-orange-500/15 px-1.5 py-0.5 text-orange-300">
+                                    🟠 {manualCount} فحص يدوي
+                                  </span>
+                                )}
+                                {blockedCount > 0 && (
+                                  <span className="rounded bg-[#D92321]/20 px-1.5 py-0.5 text-[#ff8a88]">
+                                    🔴 {blockedCount} محظور iframe
                                   </span>
                                 )}
                                 {brokenCount > 0 && (
                                   <span className="rounded bg-[#D92321]/20 px-1.5 py-0.5 text-[#ff8a88]">
-                                    ● {brokenCount} معطل
+                                    🔴 {brokenCount} لا يعمل
                                   </span>
                                 )}
                               </div>

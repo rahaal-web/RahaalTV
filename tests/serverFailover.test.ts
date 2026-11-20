@@ -6,9 +6,13 @@ import {
   resolveEffectiveShieldDecision,
 } from '../src/lib/popupShield';
 import {
+  buildCompatibleModeChain,
   classifyAutoplayPlayError,
   computeFaultFailoverTransition,
   findNextAvailableServerIndex,
+  getSmartPlayStatusMessage,
+  resolveManualModeStep,
+  resolveNextModeOnFailure,
   resolveProactiveFilterDecision,
 } from '../src/lib/serverFailover';
 
@@ -53,9 +57,6 @@ test('Scenario 1 & 4: default server starts at index 0, autoplay NotAllowedError
 });
 
 test('Scenario 2 & 3: cross-origin iframe onLoad does not lock out proactive 404/403 switching (S1 -> S2 -> S3 -> stop)', () => {
-  // Server 0 is a dead cross-origin embed whose iframe.onLoad fired (canceling hang timer)
-  // while playbackConfirmed remains false until probe confirms ok: true.
-  // Probe reveals Server 0 is broken (404), Server 1 appears ok, Server 2 is ok -> switches 0 -> 1.
   const switch1 = resolveProactiveFilterDecision({
     currentIndex: 0,
     totalServers: 3,
@@ -75,8 +76,6 @@ test('Scenario 2 & 3: cross-origin iframe onLoad does not lock out proactive 404
     assert.equal(switch1.nextIndex, 1);
   }
 
-  // Now Server 1 fails at runtime (e.g., timeout / postMessage 403 / media error):
-  // computeFaultFailoverTransition cleanly moves 1 -> 2 without repeating 0 or 1.
   const triedAfter1 = new Set<number>([0, 1]);
   const switch2 = computeFaultFailoverTransition({
     faultIndex: 1,
@@ -93,7 +92,6 @@ test('Scenario 2 & 3: cross-origin iframe onLoad does not lock out proactive 404
     assert.equal(switch2.nextIndex, 2);
   }
 
-  // If Server 2 also fails, failover terminates cleanly with all_failed (no infinite loop).
   const triedAfter2 = new Set<number>(switch2.nextTriedIndices);
   const stopDecision = computeFaultFailoverTransition({
     faultIndex: 2,
@@ -109,7 +107,6 @@ test('Scenario 2 & 3: cross-origin iframe onLoad does not lock out proactive 404
 });
 
 test('Scenario 5: manual server selection starts fresh from chosen index and advances cyclically without repeats', () => {
-  // User manually clicks server index 2 out of 4 servers: order must be 2 -> 3 -> 0 -> 1 -> stop (-1)
   const tried = new Set<number>([2]);
 
   const step1 = findNextAvailableServerIndex({
@@ -169,7 +166,6 @@ test('Scenario 6: series episode override fault falls back cleanly to episode se
 test('Scenario 7: respects Admin-configured default watch mode across all 3 modes', () => {
   const embedUrl = 'https://unknown-embed-host.example/embed/12345';
 
-  // Default watch mode must be direct_unrestricted (no sandbox attribute)
   assert.equal(DEFAULT_POPUP_SHIELD_CONFIG.defaultWatchMode, 'direct_unrestricted');
   const defaultDecision = resolveEffectiveShieldDecision(
     embedUrl,
@@ -178,25 +174,111 @@ test('Scenario 7: respects Admin-configured default watch mode across all 3 mode
   assert.equal(defaultDecision.mode, 'direct_unrestricted');
   assert.equal(defaultDecision.sandboxAttr, undefined);
 
-  // Admin switches defaultWatchMode -> redirect_guard
   const redirectCfg = normalizePopupShieldConfig({ defaultWatchMode: 'redirect_guard' });
   const redirectDecision = resolveEffectiveShieldDecision(embedUrl, redirectCfg);
   assert.equal(redirectDecision.mode, 'redirect_guard');
   assert.match(redirectDecision.sandboxAttr || '', /allow-popups-to-escape-sandbox/);
 
-  // Admin switches defaultWatchMode -> strict_sandbox
   const strictCfg = normalizePopupShieldConfig({ defaultWatchMode: 'strict_sandbox' });
   const strictDecision = resolveEffectiveShieldDecision(embedUrl, strictCfg);
   assert.equal(strictDecision.mode, 'strict_sandbox');
   assert.ok(strictDecision.sandboxAttr);
   assert.doesNotMatch(strictDecision.sandboxAttr || '', /allow-popups/);
 
-  // Direct MP4/HLS streams always resolve to direct_media regardless of iframe mode
   const directDecision = resolveEffectiveShieldDecision(
     'https://cdn.example.com/movie/master.m3u8',
     strictCfg
   );
   assert.equal(directDecision.mode, 'direct_media');
   assert.equal(directDecision.sandboxAttr, undefined);
+});
+
+test('Scenario 8: Smart Player Mode Fallback exhausts same-server modes before switching server', () => {
+  const chain = buildCompatibleModeChain({
+    primaryMode: 'strict_sandbox',
+    isDirectMedia: false,
+    hasDirectStreamFallback: true,
+  });
+  assert.deepEqual(chain, ['direct_media', 'strict_sandbox', 'redirect_guard', 'direct_unrestricted']);
+
+  const tried = new Set<'direct_media' | 'strict_sandbox' | 'redirect_guard' | 'direct_unrestricted'>();
+
+  const m1 = resolveNextModeOnFailure({
+    modeChain: chain,
+    currentMode: 'direct_media',
+    triedModes: tried,
+  });
+  assert.equal(m1.action, 'switch_mode');
+  if (m1.action === 'switch_mode') {
+    assert.equal(m1.nextMode, 'strict_sandbox');
+  }
+
+  const m2 = resolveNextModeOnFailure({
+    modeChain: chain,
+    currentMode: 'strict_sandbox',
+    triedModes: new Set(m1.nextTriedModes),
+  });
+  assert.equal(m2.action, 'switch_mode');
+  if (m2.action === 'switch_mode') {
+    assert.equal(m2.nextMode, 'redirect_guard');
+  }
+
+  const m3 = resolveNextModeOnFailure({
+    modeChain: chain,
+    currentMode: 'redirect_guard',
+    triedModes: new Set(m2.nextTriedModes),
+  });
+  assert.equal(m3.action, 'switch_mode');
+  if (m3.action === 'switch_mode') {
+    assert.equal(m3.nextMode, 'direct_unrestricted');
+  }
+
+  const exhausted = resolveNextModeOnFailure({
+    modeChain: chain,
+    currentMode: 'direct_unrestricted',
+    triedModes: new Set(m3.nextTriedModes),
+  });
+  assert.equal(exhausted.action, 'exhausted_server');
+});
+
+test('Scenario 9: Anti-sandbox detection skips strict_sandbox cleanly without infinite loop', () => {
+  const antiSandboxChain = buildCompatibleModeChain({
+    primaryMode: 'strict_sandbox',
+    isDirectMedia: false,
+    antiSandboxDetected: true,
+  });
+  assert.deepEqual(antiSandboxChain, ['direct_unrestricted', 'redirect_guard']);
+  assert.equal(antiSandboxChain.includes('strict_sandbox'), false);
+
+  const directOnlyChain = buildCompatibleModeChain({
+    primaryMode: 'direct_media',
+    isDirectMedia: true,
+  });
+  assert.deepEqual(directOnlyChain, ['direct_media']);
+});
+
+test('Scenario 10: Manual mode stepper and Smart Play Overlay status messages', () => {
+  const chain: ('direct_unrestricted' | 'redirect_guard' | 'strict_sandbox')[] = [
+    'direct_unrestricted',
+    'redirect_guard',
+    'strict_sandbox',
+  ];
+  assert.equal(
+    resolveManualModeStep({ modeChain: chain, currentMode: 'direct_unrestricted', direction: 'next' }),
+    'redirect_guard'
+  );
+  assert.equal(
+    resolveManualModeStep({ modeChain: chain, currentMode: 'direct_unrestricted', direction: 'prev' }),
+    'strict_sandbox'
+  );
+  assert.equal(
+    resolveManualModeStep({ modeChain: chain, currentMode: 'strict_sandbox', direction: 'next' }),
+    'direct_unrestricted'
+  );
+
+  assert.match(getSmartPlayStatusMessage('initializing', 'strict_sandbox'), /جاري تهيئة المشغل/);
+  assert.match(getSmartPlayStatusMessage('trying_mode', 'direct_unrestricted'), /التوافق المباشر/);
+  assert.match(getSmartPlayStatusMessage('confirmed_playing', 'direct_media'), /تم بدء تشغيل الفيديو بنجاح/);
+  assert.match(getSmartPlayStatusMessage('server_exhausted', 'redirect_guard'), /لم نتمكن من تشغيل هذا السيرفر/);
 });
 

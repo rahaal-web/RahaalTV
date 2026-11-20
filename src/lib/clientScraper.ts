@@ -20,6 +20,17 @@ import {
   isLowTrustScrapedPosterUrl,
   parseSrcsetBestUrl,
 } from './imageMatching';
+import {
+  createCorsRestrictedReport,
+  createNetworkErrorReport,
+  createTimeoutReport,
+  evaluateHttpProbeResult,
+  isDirectMediaExtensionUrl,
+  type LegacyServerStatus,
+  SERVER_HEALTH_META,
+  type ServerHealthReport,
+  type ServerHealthStatus,
+} from './serverHealthCore';
 
 function upgradeKnownImageUrlScraper(rawUrl: string | undefined | null): string {
   const clean = String(rawUrl || '').trim();
@@ -1899,11 +1910,15 @@ function extractListingLinksAndPaginationBrowser(html: string, pageUrl: string) 
   return { siteTitle, cards: Array.from(cards.values()), nextUrls: [...prioritizedNext, ...otherNext] };
 }
 
-async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<Response> {
+async function fetchWithTimeout(
+  url: string,
+  timeoutMs = 10000,
+  init?: RequestInit
+): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { signal: controller.signal });
+    return await fetch(url, { ...(init || {}), signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
@@ -2305,7 +2320,98 @@ export type ServerFilterEntryResult = {
   httpStatus: number;
   reason: string;
   directStreamUrl?: string | null;
+  sandboxRejected?: boolean;
+  health?: ServerHealthReport;
 };
+
+function mapReportToFilterEntry(report: ServerHealthReport): ServerFilterEntryResult {
+  const directStreamUrl = report.playerCheck.directStreamUrl || null;
+  if (report.reasonCode === 'NOT_VIDEO_PAGE') {
+    return {
+      url: report.url,
+      ok: false,
+      faultType: 'not_video',
+      httpStatus: report.httpStatus,
+      reason: report.reasonText,
+      health: report,
+    };
+  }
+  if (report.reasonCode === 'HTTP_404') {
+    return {
+      url: report.url,
+      ok: false,
+      faultType: '404',
+      httpStatus: 404,
+      reason: report.reasonText,
+      health: report,
+    };
+  }
+  if (report.reasonCode === 'HTTP_403') {
+    return {
+      url: report.url,
+      ok: false,
+      faultType: '403',
+      httpStatus: report.httpStatus || 403,
+      reason: report.reasonText,
+      health: report,
+    };
+  }
+  if (report.reasonCode === 'SANDBOX_REJECTED') {
+    return {
+      url: report.url,
+      ok: Boolean(directStreamUrl),
+      faultType: directStreamUrl ? null : 'sandboxed_embed',
+      httpStatus: report.httpStatus || 200,
+      reason: report.reasonText,
+      directStreamUrl,
+      sandboxRejected: true,
+      health: report,
+    };
+  }
+  if (report.status === 'iframe_blocked') {
+    if (directStreamUrl) {
+      return {
+        url: report.url,
+        ok: true,
+        faultType: null,
+        httpStatus: report.httpStatus || 200,
+        reason: 'تم استخراج بث مباشر بديل عن التضمين المحظور',
+        directStreamUrl,
+        health: report,
+      };
+    }
+    return {
+      url: report.url,
+      ok: false,
+      faultType: 'frame_blocked',
+      httpStatus: report.httpStatus || 200,
+      reason: report.reasonText,
+      health: report,
+    };
+  }
+  if (report.status === 'broken') {
+    return {
+      url: report.url,
+      ok: false,
+      faultType: 'error',
+      httpStatus: report.httpStatus,
+      reason: report.reasonText,
+      health: report,
+    };
+  }
+
+  // page_available / needs_manual_check / confirmed_playing remain playable candidates in PlayerModal
+  return {
+    url: report.url,
+    ok: true,
+    faultType: null,
+    httpStatus: report.httpStatus,
+    reason: report.reasonText,
+    directStreamUrl,
+    sandboxRejected: report.pageLoad.sandboxRejected,
+    health: report,
+  };
+}
 
 function evaluateFetchedServerResponse(
   rawUrl: string,
@@ -2313,202 +2419,195 @@ function evaluateFetchedServerResponse(
   status: number,
   xFrame: string,
   csp: string,
-  snippet: string
+  snippet: string,
+  latencyMs = 0,
+  method: ServerHealthReport['checkMethod'] = 'worker',
+  contentType = '',
+  cfMitigated = ''
 ): ServerFilterEntryResult {
-  if (isLikelyNonVideoWebsiteUrl(finalUrl)) {
-    return {
-      url: rawUrl,
-      ok: false,
-      faultType: 'not_video',
-      httpStatus: status,
-      reason: 'الرابط يعيد توجيهه لصفحة موقع وليس مشغل فيديو',
-    };
-  }
-  if (status === 404 || status === 410) {
-    return {
-      url: rawUrl,
-      ok: false,
-      faultType: '404',
-      httpStatus: status,
-      reason: 'الملف غير موجود (404)',
-    };
-  }
-  if (status === 403 || status === 401 || status >= 500) {
-    return {
-      url: rawUrl,
-      ok: false,
-      faultType: status === 403 ? '403' : 'error',
-      httpStatus: status,
-      reason: status === 403 ? 'ممنوع الوصول (403)' : `خطأ من الخادم (${status})`,
-    };
-  }
-  if (isWebsiteHomepageHtmlBrowser(finalUrl, snippet)) {
-    return {
-      url: rawUrl,
-      ok: false,
-      faultType: 'not_video',
-      httpStatus: status,
-      reason: 'الرابط يفتح صفحة موقع وليست مشغل فيديو',
-    };
-  }
-  if (
-    /<title>\s*(?:403\s+Forbidden|Access\s+Denied|Just\s+a\s+moment|Attention\s+Required|404\s+Not\s+Found)/i.test(
-      snippet
-    ) ||
-    /file\s*(?:was|has been)?\s*(?:deleted|removed)|video\s*(?:was|has been|is)?\s*(?:deleted|removed|not found|unavailable|blocked)|file\s*(?:not\s*found|does\s*not\s*exist)|404\s*not\s*found|no\s*longer\s*available|no\s*video\s*found|this\s*video\s*does\s*not\s*exist|embed\s*(?:is\s*)?(?:disabled|unavailable)|account\s*(?:has been\s*)?suspended|تم\s*حذف\s*(?:الملف|الفيديو)|الفيديو\s*غير\s*موجود|الملف\s*غير\s*موجود/i.test(
-      snippet
-    )
-  ) {
-    return {
-      url: rawUrl,
-      ok: false,
-      faultType: '404',
-      httpStatus: status,
-      reason: 'الفيديو محذوف أو غير موجود داخل السيرفر',
-    };
-  }
-  if (/sandboxed\s+embed/i.test(snippet)) {
-    return {
-      url: rawUrl,
-      ok: false,
-      faultType: 'sandboxed_embed',
-      httpStatus: status,
-      reason: 'رسالة Sandboxed embed',
-    };
-  }
-  const directMp4 = snippet.match(/https?:\/\/[^\s"'<>]+\.(?:mp4|m3u8)(?:\?[^\s"'<>]*)?/i)?.[0] || null;
-  const frameBlocked =
-    xFrame.toLowerCase().includes('deny') ||
-    xFrame.toLowerCase().includes('sameorigin') ||
-    /frame-ancestors\s+[^;]*'none'|frame-ancestors\s+'self'/i.test(csp);
-  if (frameBlocked && !directMp4) {
-    return {
-      url: rawUrl,
-      ok: false,
-      faultType: 'frame_blocked',
-      httpStatus: status,
-      reason: 'السيرفر يمنع التضمين داخل إطار (X-Frame-Options)',
-    };
-  }
-
-  return {
-    url: rawUrl,
-    ok: true,
-    faultType: null,
-    httpStatus: status || 200,
-    reason: 'السيرفر يعمل بنجاح',
-    directStreamUrl: directMp4,
-  };
+  const report = evaluateHttpProbeResult({
+    rawUrl,
+    finalUrl,
+    httpStatus: status,
+    contentType,
+    xFrameOptions: xFrame,
+    csp,
+    cfMitigated,
+    snippet,
+    latencyMs,
+    method,
+    embedderOrigin: typeof window !== 'undefined' ? window.location.origin : undefined,
+  });
+  return mapReportToFilterEntry(report);
 }
 
 export async function filterServersInBrowser(urls: string[]): Promise<ServerFilterEntryResult[]> {
   const customBase = getCustomApiBaseUrl();
   return Promise.all(
     urls.map(async (rawUrl) => {
+      const startedAt = Date.now();
       if (!rawUrl || isLikelyNonVideoWebsiteUrl(rawUrl)) {
-        return {
-          url: rawUrl,
-          ok: false,
-          faultType: 'not_video' as const,
-          httpStatus: 200,
-          reason: 'الرابط يفتح صفحة موقع وليس مشغل فيديو',
-        };
+        return evaluateFetchedServerResponse(
+          rawUrl,
+          rawUrl,
+          200,
+          '',
+          '',
+          '',
+          Date.now() - startedAt,
+          'static',
+          'text/html'
+        );
       }
 
-      if (/\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(rawUrl)) {
-        return {
-          url: rawUrl,
-          ok: true,
-          faultType: null,
-          httpStatus: 200,
-          reason: 'ملف فيديو مباشر جاهز للتشغيل',
-        };
-      }
+      const isDirect = isDirectMediaExtensionUrl(rawUrl);
 
       if (customBase) {
         try {
           const workerUrl = `${customBase}/?url=${encodeURIComponent(rawUrl)}`;
-          const res = await fetchWithTimeout(workerUrl, 5500);
+          const res = await fetchWithTimeout(workerUrl, 5500, isDirect ? { method: 'HEAD' } : undefined);
+          const latencyMs = Date.now() - startedAt;
           const finalUrl = res.headers.get('X-Final-Url') || rawUrl;
+          const upstreamStatus = Number(res.headers.get('X-Upstream-Status') || res.status);
           const xFrame = res.headers.get('X-Upstream-X-Frame-Options') || '';
           const csp = res.headers.get('X-Upstream-CSP') || '';
-          const text = await res.text().catch(() => '');
+          const cfMitigated = res.headers.get('X-Upstream-CF-Mitigated') || '';
+          const ct = res.headers.get('Content-Type') || '';
+          const text = isDirect ? '' : await res.text().catch(() => '');
           const isWorkerTransportError =
-            (res.status === 502 || res.status === 403 || res.status === 400) &&
-            text.includes('"ok":false');
+            (res.status === 502 || res.status === 400) && text.includes('"ok":false');
           if (!isWorkerTransportError) {
             return evaluateFetchedServerResponse(
               rawUrl,
               finalUrl,
-              res.status,
+              upstreamStatus,
               xFrame,
               csp,
-              text.slice(0, 28000)
+              text.slice(0, 28000),
+              latencyMs,
+              'worker',
+              ct,
+              cfMitigated
             );
           }
         } catch {
-          // Worker unreachable or blocked -> fall through to public CORS relays / no-cors fallback below
+          // Worker unreachable -> try CORS / relays below
         }
       }
 
-      // No Cloudflare Worker configured: probe via AllOrigins JSON or secondary CodeTabs relay
+      // Direct CORS fetch attempt (works cleanly when upstream enables Access-Control-Allow-Origin)
       try {
-        const relayRes = await fetchWithTimeout(
-          `https://api.allorigins.win/get?url=${encodeURIComponent(rawUrl)}`,
-          4000
+        const directRes = await fetchWithTimeout(rawUrl, 3800, {
+          method: isDirect ? 'HEAD' : 'GET',
+          mode: 'cors',
+        });
+        const latencyMs = Date.now() - startedAt;
+        const ct = directRes.headers.get('content-type') || '';
+        const xFrame = directRes.headers.get('x-frame-options') || '';
+        const csp = directRes.headers.get('content-security-policy') || '';
+        const snippet =
+          !isDirect && (ct.includes('text/html') || ct.includes('text/plain') || !ct)
+            ? (await directRes.text().catch(() => '')).slice(0, 28000)
+            : '';
+        return evaluateFetchedServerResponse(
+          rawUrl,
+          directRes.url || rawUrl,
+          directRes.status,
+          xFrame,
+          csp,
+          snippet,
+          latencyMs,
+          'browser_cors',
+          ct
         );
-        if (relayRes.ok) {
-          const json = (await relayRes.json()) as {
-            contents?: string;
-            status?: { http_code?: number; url?: string };
-          };
-          const upstreamStatus = Number(json?.status?.http_code || 200);
-          const finalUrl = json?.status?.url || rawUrl;
-          const snippet = String(json?.contents || '').slice(0, 28000);
-          return evaluateFetchedServerResponse(rawUrl, finalUrl, upstreamStatus, '', '', snippet);
-        }
       } catch {
-        // Try secondary CORS relay below
+        // Blocked by CORS or network -> try relay for HTML embeds or no-cors reachability probe
       }
 
-      try {
-        const secondaryRes = await fetchWithTimeout(
-          `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(rawUrl)}`,
-          4000
-        );
-        if (secondaryRes.ok) {
-          const snippet = (await secondaryRes.text().catch(() => '')).slice(0, 28000);
-          if (snippet) {
-            return evaluateFetchedServerResponse(rawUrl, rawUrl, secondaryRes.status, '', '', snippet);
-          }
-        }
-      } catch {
-        // Fall through to network reachability check
-      }
-
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 4000);
+      if (!isDirect) {
         try {
-          await fetch(rawUrl, { mode: 'no-cors', signal: controller.signal });
-          return {
-            url: rawUrl,
-            ok: true,
-            faultType: null,
-            httpStatus: 200,
-            reason: 'متاح عبر المتصفح',
-          };
-        } finally {
-          clearTimeout(timer);
+          const relayRes = await fetchWithTimeout(
+            `https://api.allorigins.win/get?url=${encodeURIComponent(rawUrl)}`,
+            4000
+          );
+          if (relayRes.ok) {
+            const json = (await relayRes.json()) as {
+              contents?: string;
+              status?: { http_code?: number; url?: string; content_type?: string };
+            };
+            const upstreamStatus = Number(json?.status?.http_code || 200);
+            const finalUrl = json?.status?.url || rawUrl;
+            const snippet = String(json?.contents || '').slice(0, 28000);
+            return evaluateFetchedServerResponse(
+              rawUrl,
+              finalUrl,
+              upstreamStatus,
+              '',
+              '',
+              snippet,
+              Date.now() - startedAt,
+              'cors_relay',
+              json?.status?.content_type || 'text/html'
+            );
+          }
+        } catch {
+          // Try secondary CORS relay below
         }
-      } catch {
-        return {
+
+        try {
+          const secondaryRes = await fetchWithTimeout(
+            `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(rawUrl)}`,
+            4000
+          );
+          if (secondaryRes.ok) {
+            const snippet = (await secondaryRes.text().catch(() => '')).slice(0, 28000);
+            if (snippet) {
+              return evaluateFetchedServerResponse(
+                rawUrl,
+                rawUrl,
+                secondaryRes.status,
+                '',
+                '',
+                snippet,
+                Date.now() - startedAt,
+                'cors_relay',
+                'text/html'
+              );
+            }
+          }
+        } catch {
+          // Fall through to honest no-cors reachability check
+        }
+      }
+
+      const noCorsStart = Date.now();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4500);
+      try {
+        await fetch(rawUrl, {
+          method: isDirect ? 'HEAD' : 'GET',
+          mode: 'no-cors',
+          signal: controller.signal,
+        });
+        // CORS restricted opaque reachability: DO NOT report confirmed_playing!
+        const report = createCorsRestrictedReport({
           url: rawUrl,
-          ok: false,
-          faultType: 'error' as const,
-          httpStatus: 0,
-          reason: 'الرابط معطل أو لا يستجيب',
-        };
+          latencyMs: Date.now() - noCorsStart,
+        });
+        return mapReportToFilterEntry(report);
+      } catch (err) {
+        const elapsed = Date.now() - noCorsStart;
+        const isTimeout = err instanceof Error && err.name === 'AbortError';
+        const report = isTimeout
+          ? createTimeoutReport({ url: rawUrl, latencyMs: elapsed, stage: 'connectivity' })
+          : createNetworkErrorReport({
+              url: rawUrl,
+              latencyMs: elapsed,
+              detail: 'الرابط معطل أو لا يستجيب',
+            });
+        return mapReportToFilterEntry(report);
+      } finally {
+        clearTimeout(timer);
       }
     })
   );
@@ -3381,35 +3480,39 @@ function buildFallbackCardItem(card: { url: string; title: string; poster: strin
   };
 }
 
+export type BrowserServerCheckSummary = ServerHealthReport & {
+  status: ServerHealthStatus;
+  legacyStatus: LegacyServerStatus;
+  label: string;
+  detail: string;
+};
+
 export async function checkServerUrlsInBrowser(
   urls: string[]
-): Promise<Record<string, { status: 'working' | 'warning' | 'broken'; label: string; detail: string }>> {
-  const results: Record<
-    string,
-    { status: 'working' | 'warning' | 'broken'; label: string; detail: string }
-  > = {};
-
+): Promise<Record<string, BrowserServerCheckSummary>> {
+  const results: Record<string, BrowserServerCheckSummary> = {};
   const filtered = await filterServersInBrowser(urls);
+
   filtered.forEach((entry) => {
-    if (entry.ok) {
-      results[entry.url] = {
-        status: 'working',
-        label: 'يعمل بشكل سليم',
-        detail: entry.reason || 'السيرفر صالح للتشغيل',
-      };
-    } else if (entry.faultType === 'frame_blocked') {
-      results[entry.url] = {
-        status: 'warning',
-        label: 'تحذير تضمين',
-        detail: entry.reason,
-      };
-    } else {
-      results[entry.url] = {
-        status: 'broken',
-        label: entry.faultType === 'not_video' ? 'صفحة موقع وليست فيديو' : 'سيرفر معطل',
-        detail: entry.reason,
-      };
-    }
+    const report: ServerHealthReport =
+      entry.health ||
+      evaluateHttpProbeResult({
+        rawUrl: entry.url,
+        httpStatus: entry.httpStatus,
+        latencyMs: 0,
+        method: 'static',
+      });
+
+    const meta = SERVER_HEALTH_META[report.status];
+    results[entry.url] = {
+      ...report,
+      status: report.status,
+      legacyStatus: meta.legacyStatus,
+      label: report.httpStatus
+        ? `${meta.label} (${report.httpStatus})`
+        : meta.label,
+      detail: report.reasonText || entry.reason,
+    };
   });
 
   return results;

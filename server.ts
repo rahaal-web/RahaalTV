@@ -39,6 +39,13 @@ import {
   type VerifiedAdminContext,
   verifyOwnerAdminMiddleware,
 } from './server/dbSecretVault.ts';
+import {
+  createNetworkErrorReport,
+  createTimeoutReport,
+  evaluateHttpProbeResult,
+  isDirectMediaExtensionUrl,
+  type ServerHealthReport,
+} from './src/lib/serverHealthCore.ts';
 
 const PORT = 3000;
 
@@ -4839,7 +4846,7 @@ async function startServer() {
     }
   });
 
-  // Server Link Health Check Endpoint (Admin Dashboard Server Status)
+  // Server Link Health Check Endpoint (Multi-Stage Honest Probe)
   app.post('/api/check-servers', async (req, res) => {
     try {
       const { urls } = req.body as { urls?: unknown };
@@ -4852,146 +4859,157 @@ async function startServer() {
           urls
             .map((u) => String(u || '').trim())
             .filter(Boolean)
-            .slice(0, 40)
+            .slice(0, 45)
         )
       );
 
-      interface CheckResult {
-        status: 'working' | 'warning' | 'broken';
-        httpStatus: number;
+      interface ApiServerCheckResult extends ServerHealthReport {
         label: string;
         detail: string;
         sandboxBlocked?: boolean;
       }
 
-      const results: Record<string, CheckResult> = {};
+      const results: Record<string, ApiServerCheckResult> = {};
 
-      const checkSingleUrl = async (targetUrl: string): Promise<CheckResult> => {
+      const toApiResult = (report: ServerHealthReport): ApiServerCheckResult => ({
+        ...report,
+        label: report.httpStatus
+          ? `${report.statusLabel} (${report.httpStatus})`
+          : report.statusLabel,
+        detail: report.reasonText,
+        sandboxBlocked: report.pageLoad.sandboxRejected,
+      });
+
+      const checkSingleUrl = async (targetUrl: string): Promise<ApiServerCheckResult> => {
+        const startedAt = Date.now();
+        const checkedAt = new Date().toISOString();
         let parsed: URL;
         try {
           parsed = new URL(targetUrl);
         } catch {
-          return {
-            status: 'broken',
-            httpStatus: 0,
-            label: 'رابط غير صالح',
-            detail: 'صيغة الرابط غير صحيحة',
-          };
+          return toApiResult(
+            evaluateHttpProbeResult({
+              rawUrl: targetUrl,
+              httpStatus: 0,
+              latencyMs: 0,
+              checkedAt,
+              method: 'backend',
+            })
+          );
         }
 
         if (!['http:', 'https:'].includes(parsed.protocol) || isBlockedHost(parsed.hostname)) {
-          return {
-            status: 'broken',
-            httpStatus: 0,
-            label: 'رابط محظور',
-            detail: 'بروتوكول أو نطاق غير مسموح',
-          };
+          return toApiResult(
+            createNetworkErrorReport({
+              url: targetUrl,
+              latencyMs: Date.now() - startedAt,
+              checkedAt,
+              detail: 'بروتوكول أو نطاق محظور أمنياً',
+            })
+          );
         }
+
+        const isDirectMedia = isDirectMediaExtensionUrl(parsed.toString());
+        const baseHeaders = {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+          Referer: `${parsed.origin}/`,
+          Accept: 'text/html,video/*,application/xhtml+xml,*/*;q=0.8',
+        };
 
         try {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 6500);
+          const timer = setTimeout(() => controller.abort(), 7000);
           let response: Response;
           try {
             response = await fetch(parsed.toString(), {
-              method: 'GET',
+              method: isDirectMedia ? 'HEAD' : 'GET',
               redirect: 'follow',
               signal: controller.signal,
               headers: {
-                'User-Agent':
-                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-                Accept: 'text/html,video/*,application/xhtml+xml,*/*;q=0.8',
-                Range: 'bytes=0-16384',
+                ...baseHeaders,
+                ...(isDirectMedia ? {} : { Range: 'bytes=0-32768' }),
               },
             });
+
+            // Some media CDNs reject HEAD (405/501) -> gracefully retry small ranged GET
+            if (isDirectMedia && (response.status === 405 || response.status === 501)) {
+              response = await fetch(parsed.toString(), {
+                method: 'GET',
+                redirect: 'follow',
+                signal: controller.signal,
+                headers: {
+                  ...baseHeaders,
+                  Range: 'bytes=0-4095',
+                },
+              });
+            }
           } finally {
             clearTimeout(timer);
           }
 
+          const latencyMs = Date.now() - startedAt;
+          const finalUrl = response.url || parsed.toString();
           const httpStatus = response.status;
           const contentType = (response.headers.get('content-type') || '').toLowerCase();
-          const xFrame = (response.headers.get('x-frame-options') || '').toLowerCase();
-          const csp = (response.headers.get('content-security-policy') || '').toLowerCase();
-          const cfMitigated = (response.headers.get('cf-mitigated') || '').toLowerCase();
+          const xFrame = response.headers.get('x-frame-options') || '';
+          const csp = response.headers.get('content-security-policy') || '';
+          const cfMitigated = response.headers.get('cf-mitigated') || '';
 
           let snippet = '';
-          if (contentType.includes('text/html') || contentType.includes('text/plain') || !contentType) {
+          if (
+            !isDirectMedia &&
+            (contentType.includes('text/html') || contentType.includes('text/plain') || !contentType)
+          ) {
             try {
-              const txt = await response.text();
-              snippet = txt.slice(0, 16000);
+              snippet = (await response.text()).slice(0, 32768);
             } catch {
               snippet = '';
             }
           }
 
-          if (httpStatus === 404 || httpStatus === 410) {
-            return {
-              status: 'broken',
+          return toApiResult(
+            evaluateHttpProbeResult({
+              rawUrl: targetUrl,
+              finalUrl,
               httpStatus,
-              label: `معطل (${httpStatus})`,
-              detail: 'الصفحة أو الملف غير موجود (Not Found)',
-            };
-          }
-
-          if (httpStatus >= 500) {
-            return {
-              status: 'broken',
-              httpStatus,
-              label: `معطل (${httpStatus})`,
-              detail: 'خطأ داخلي من السيرفر المستضيف',
-            };
-          }
-
-          if (!response.ok && httpStatus !== 206) {
-            return {
-              status: 'broken',
-              httpStatus,
-              label: `معطل (${httpStatus})`,
-              detail:
-                httpStatus === 403
-                  ? 'تم رفض الوصول أو محمي (403)'
-                  : `رمز حالة غير ناجح (${httpStatus})`,
-            };
-          }
-
-          // Inspect HTML body for soft-404 / removed video pages
-          if (
-            snippet &&
-            /file\s*(?:was|has been)?\s*(?:deleted|removed)|video\s*(?:was|has been)?\s*(?:deleted|removed|not found)|file\s*not\s*found|404\s*not\s*found|no\s*longer\s*available|تم\s*حذف\s*(?:الملف|الفيديو)|الفيديو\s*غير\s*موجود|الملف\s*غير\s*موجود/i.test(
-              snippet
-            )
-          ) {
-            return {
-              status: 'broken',
-              httpStatus: 404,
-              label: 'معطل (404)',
-              detail: 'الملف أو الفيديو محذوف أو غير موجود',
-            };
-          }
-
-          return {
-            status: 'working',
-            httpStatus,
-            label: `يعمل (${httpStatus})`,
-            detail: contentType.includes('video')
-              ? 'ملف بث مباشر يعمل بنجاح'
-              : 'الرابط مستجيب ويعمل بنجاح',
-          };
+              contentType,
+              xFrameOptions: xFrame,
+              csp,
+              cfMitigated,
+              snippet,
+              latencyMs,
+              checkedAt,
+              method: 'backend',
+            })
+          );
         } catch (err) {
+          const elapsed = Date.now() - startedAt;
           const isTimeout = err instanceof Error && err.name === 'AbortError';
-          return {
-            status: 'broken',
-            httpStatus: 0,
-            label: isTimeout ? 'معطل (مهلة انتهت)' : 'معطل (خطأ اتصال)',
-            detail: isTimeout ? 'انتهت مهلة استجابة السيرفر' : 'تعذر الوصول إلى النطاق',
-          };
+          return toApiResult(
+            isTimeout
+              ? createTimeoutReport({
+                  url: targetUrl,
+                  latencyMs: elapsed,
+                  checkedAt,
+                  stage: 'connectivity',
+                })
+              : createNetworkErrorReport({
+                  url: targetUrl,
+                  latencyMs: elapsed,
+                  checkedAt,
+                  detail: 'تعذر الاتصال بالخادم المستضيف',
+                })
+          );
         }
       };
 
       const CONCURRENCY = 6;
       for (let i = 0; i < uniqueUrls.length; i += CONCURRENCY) {
         const chunk = uniqueUrls.slice(i, i + CONCURRENCY);
-        const checked = await Promise.all(chunk.map(async (u) => [u, await checkSingleUrl(u)] as const));
+        const checked = await Promise.all(
+          chunk.map(async (u) => [u, await checkSingleUrl(u)] as const)
+        );
         for (const [u, result] of checked) {
           results[u] = result;
         }
@@ -5112,9 +5130,14 @@ async function startServer() {
         httpStatus: number;
         reason: string;
         directStreamUrl?: string | null;
+        sandboxRejected?: boolean;
+        health?: ServerHealthReport;
       }
 
       const inspectServerUrl = async (rawUrl: string): Promise<FilterCheckResult> => {
+        const startedAt = Date.now();
+        const checkedAt = new Date().toISOString();
+
         if (!rawUrl) {
           return {
             url: rawUrl,
@@ -5149,164 +5172,167 @@ async function startServer() {
         }
 
         if (isLikelyNonVideoWebsiteUrl(parsed.toString())) {
+          const report = evaluateHttpProbeResult({
+            rawUrl,
+            finalUrl: parsed.toString(),
+            httpStatus: 200,
+            contentType: 'text/html',
+            latencyMs: Date.now() - startedAt,
+            checkedAt,
+            method: 'backend',
+          });
           return {
             url: rawUrl,
             ok: false,
             faultType: 'not_video',
             httpStatus: 200,
             reason: 'الرابط يفتح صفحة موقع وليس مشغل فيديو',
+            health: report,
           };
         }
 
-        const isDirectMedia = /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(parsed.toString());
+        const isDirectMedia = isDirectMediaExtensionUrl(parsed.toString());
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 5500);
+        const timer = setTimeout(() => controller.abort(), 5800);
+        const reqHeaders = {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+          Referer: `${parsed.origin}/`,
+          Accept: 'text/html,video/*,application/xhtml+xml,*/*;q=0.8',
+        };
 
         try {
-          const response = await fetch(parsed.toString(), {
+          let response = await fetch(parsed.toString(), {
             method: isDirectMedia ? 'HEAD' : 'GET',
             redirect: 'follow',
             signal: controller.signal,
             headers: {
-              'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-              Referer: parsed.origin + '/',
-              Accept: 'text/html,video/*,application/xhtml+xml,*/*;q=0.8',
+              ...reqHeaders,
               ...(isDirectMedia ? {} : { Range: 'bytes=0-32768' }),
             },
           });
 
+          if (isDirectMedia && (response.status === 405 || response.status === 501)) {
+            response = await fetch(parsed.toString(), {
+              method: 'GET',
+              redirect: 'follow',
+              signal: controller.signal,
+              headers: { ...reqHeaders, Range: 'bytes=0-4095' },
+            });
+          }
+
+          const latencyMs = Date.now() - startedAt;
           const finalUrl = response.url || parsed.toString();
           const httpStatus = response.status;
           const contentType = (response.headers.get('content-type') || '').toLowerCase();
-          const xFrame = (response.headers.get('x-frame-options') || '').toLowerCase();
-          const csp = (response.headers.get('content-security-policy') || '').toLowerCase();
-          const cfMitigated = (response.headers.get('cf-mitigated') || '').toLowerCase();
+          const xFrame = response.headers.get('x-frame-options') || '';
+          const csp = response.headers.get('content-security-policy') || '';
+          const cfMitigated = response.headers.get('cf-mitigated') || '';
 
           let snippet = '';
-          if (!isDirectMedia && (contentType.includes('text/html') || contentType.includes('text/plain') || !contentType)) {
+          if (
+            !isDirectMedia &&
+            (contentType.includes('text/html') || contentType.includes('text/plain') || !contentType)
+          ) {
             try {
-              const txt = await response.text();
-              snippet = txt.slice(0, 32768);
+              snippet = (await response.text()).slice(0, 32768);
             } catch {
               snippet = '';
             }
           }
 
-          // 0. Detect non-video website homepages / redirects (e.g. larooza.tv/, laroza1.bond/home.24)
-          if (!isDirectMedia && isWebsiteHomepageHtml(finalUrl, snippet)) {
+          const report = evaluateHttpProbeResult({
+            rawUrl,
+            finalUrl,
+            httpStatus,
+            contentType,
+            xFrameOptions: xFrame,
+            csp,
+            cfMitigated,
+            snippet,
+            latencyMs,
+            checkedAt,
+            method: 'backend',
+          });
+
+          const directUrl = report.playerCheck.directStreamUrl || null;
+
+          if (report.reasonCode === 'NOT_VIDEO_PAGE') {
             return {
               url: rawUrl,
               ok: false,
               faultType: 'not_video',
-              httpStatus,
-              reason: 'الرابط يفتح الصفحة الرئيسية لموقع وليس فيديو',
+              httpStatus: report.httpStatus || 200,
+              reason: report.reasonText,
+              health: report,
             };
           }
 
-          // 1. Detect Sandboxed embed messages explicitly
-          const hasSandboxedMsg =
-            /sandboxed\s+embed\s+is\s+not\s+allowed|sandboxed\s+embed|please\s+disable\s+sandbox|embedding\s+in\s+sandbox\s+is\s+not\s+allowed/i.test(
-              snippet
-            );
-
-          if (hasSandboxedMsg) {
-            const mp4Fallback =
-              snippet.match(/<(?:video|source)[^>]+src=["'](https?:\/\/[^"']+\.mp4[^"']*)["']/i)?.[1] ||
-              snippet.match(/(?:file|src|video_url|mp4_url)\s*:\s*["'](https?:\/\/[^"']+\.mp4[^"']*)["']/i)?.[1];
-            if (mp4Fallback) {
-              return {
-                url: rawUrl,
-                ok: true,
-                faultType: null,
-                httpStatus,
-                reason: 'تم استخراج البث المباشر بنجاح',
-                directStreamUrl: mp4Fallback.replace(/\\\//g, '/'),
-              };
-            }
-            return {
-              url: rawUrl,
-              ok: false,
-              faultType: 'sandboxed_embed',
-              httpStatus,
-              reason: 'رسالة Sandboxed embed (يمنع التشغيل المدمج)',
-            };
-          }
-
-          // 2. Detect HTTP 403 Forbidden / Cloudflare block
-          const is403Body =
-            httpStatus === 403 ||
-            cfMitigated === 'challenge' ||
-            (snippet &&
-              /<title>\s*(?:403\s+Forbidden|Access\s+Denied|Just\s+a\s+moment|Attention\s+Required)/i.test(snippet));
-
-          if (is403Body) {
+          if (report.reasonCode === 'HTTP_403') {
             return {
               url: rawUrl,
               ok: false,
               faultType: '403',
-              httpStatus: httpStatus === 200 ? 403 : httpStatus,
-              reason: 'خطأ 403 (رفض الوصول من السيرفر)',
+              httpStatus: report.httpStatus || 403,
+              reason: report.reasonText,
+              health: report,
             };
           }
 
-          // 3. Detect 404 / Soft-404
-          const is404Body =
-            httpStatus === 404 ||
-            httpStatus === 410 ||
-            (snippet &&
-              /file\s*(?:was|has been)?\s*(?:deleted|removed)|video\s*(?:was|has been)?\s*(?:deleted|removed|not found)|file\s*not\s*found|404\s*not\s*found|no\s*longer\s*available|تم\s*حذف\s*(?:الملف|الفيديو)|الفيديو\s*غير\s*موجود/i.test(
-                snippet
-              ));
-
-          if (is404Body) {
+          if (report.reasonCode === 'HTTP_404') {
             return {
               url: rawUrl,
               ok: false,
               faultType: '404',
               httpStatus: 404,
-              reason: 'الملف غير موجود (404)',
+              reason: report.reasonText,
+              health: report,
             };
           }
 
-          if (!response.ok && httpStatus !== 206) {
+          if (report.reasonCode === 'SANDBOX_REJECTED') {
             return {
               url: rawUrl,
-              ok: false,
-              faultType: 'error',
-              httpStatus,
-              reason: `عطل في استجابة السيرفر (${httpStatus})`,
+              ok: Boolean(directUrl),
+              faultType: directUrl ? null : 'sandboxed_embed',
+              httpStatus: report.httpStatus || 200,
+              reason: report.reasonText,
+              directStreamUrl: directUrl,
+              sandboxRejected: true,
+              health: report,
             };
           }
 
-          // 4. Detect Frame Blocking headers (X-Frame-Options / CSP frame-ancestors)
-          const frameBlocked =
-            xFrame.includes('deny') ||
-            xFrame.includes('sameorigin') ||
-            /frame-ancestors\s+[^;]*'none'|frame-ancestors\s+'self'/.test(csp);
-
-          const mp4Fallback = snippet
-            ? snippet.match(/<(?:video|source)[^>]+src=["'](https?:\/\/[^"']+\.mp4[^"']*)["']/i)?.[1] ||
-              snippet.match(/(?:file|src|video_url|mp4_url)\s*:\s*["'](https?:\/\/[^"']+\.mp4[^"']*)["']/i)?.[1]
-            : null;
-
-          if (frameBlocked) {
-            if (mp4Fallback) {
+          if (report.status === 'iframe_blocked') {
+            if (directUrl) {
               return {
                 url: rawUrl,
                 ok: true,
                 faultType: null,
-                httpStatus,
-                reason: 'بث مباشر متاح',
-                directStreamUrl: mp4Fallback.replace(/\\\//g, '/'),
+                httpStatus: report.httpStatus || 200,
+                reason: 'تم استخراج رابط بث مباشر بديل عن التضمين المحظور',
+                directStreamUrl: directUrl,
+                health: report,
               };
             }
             return {
               url: rawUrl,
               ok: false,
               faultType: 'frame_blocked',
-              httpStatus,
-              reason: 'السيرفر يمنع التضمين المدمج (X-Frame)',
+              httpStatus: report.httpStatus || 200,
+              reason: report.reasonText,
+              health: report,
+            };
+          }
+
+          if (report.status === 'broken') {
+            return {
+              url: rawUrl,
+              ok: false,
+              faultType: 'error',
+              httpStatus: report.httpStatus,
+              reason: report.reasonText,
+              health: report,
             };
           }
 
@@ -5314,18 +5340,30 @@ async function startServer() {
             url: rawUrl,
             ok: true,
             faultType: null,
-            httpStatus,
-            reason: 'السيرفر يعمل بنجاح',
-            directStreamUrl: mp4Fallback ? mp4Fallback.replace(/\\\//g, '/') : null,
+            httpStatus: report.httpStatus || 200,
+            reason: report.reasonText,
+            directStreamUrl: directUrl,
+            sandboxRejected: report.pageLoad.sandboxRejected,
+            health: report,
           };
         } catch (err) {
+          const elapsed = Date.now() - startedAt;
           const isTimeout = err instanceof Error && err.name === 'AbortError';
+          const report = isTimeout
+            ? createTimeoutReport({ url: rawUrl, latencyMs: elapsed, checkedAt, stage: 'connectivity' })
+            : createNetworkErrorReport({
+                url: rawUrl,
+                latencyMs: elapsed,
+                checkedAt,
+                detail: 'تعذر الاتصال بالسيرفر',
+              });
           return {
             url: rawUrl,
             ok: false,
             faultType: 'error',
             httpStatus: 0,
-            reason: isTimeout ? 'انتهت مهلة استجابة السيرفر' : 'تعذر الاتصال بالسيرفر',
+            reason: report.reasonText,
+            health: report,
           };
         } finally {
           clearTimeout(timer);

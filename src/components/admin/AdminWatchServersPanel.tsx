@@ -1,20 +1,34 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Activity,
+  AlertTriangle,
   CheckCircle2,
+  Clock,
   Edit3,
   ExternalLink,
   Globe,
   Loader2,
   Palette,
+  PlayCircle,
+  RefreshCw,
   RotateCcw,
   Search,
   Server,
   ShieldAlert,
-  Wrench,
+  Square,
+  Wifi,
+  XCircle,
 } from 'lucide-react';
-import { checkServerUrlsInBrowser, isLikelyNonVideoWebsiteUrl } from '../../lib/clientScraper';
+import { isLikelyNonVideoWebsiteUrl } from '../../lib/clientScraper';
 import { extractServerResolvedUrl } from '../../lib/contentAudit';
 import { DEFAULT_PLAYER_THEME, PLAYER_THEME_PRESETS, saveStoredPlayerTheme } from '../../lib/playerTheme';
+import {
+  runBatchServerHealthCheck,
+  runMultiStageServerCheck,
+  SERVER_HEALTH_META,
+  type ServerHealthReport,
+  type ServerHealthStatus,
+} from '../../lib/serverHealthChecker';
 import { MediaItem, PlayerThemeConfig, StreamServer } from '../../types/media';
 
 interface AdminWatchServersPanelProps {
@@ -38,6 +52,30 @@ interface FlattenedServerRow {
   suspicious: boolean;
 }
 
+type HealthFilterKey = 'all' | ServerHealthStatus | 'untested';
+
+const STATUS_BADGE_STYLE: Record<ServerHealthStatus, string> = {
+  confirmed_playing: 'bg-[#4CAF50]/15 border-[#4CAF50]/45 text-[#8cf091]',
+  page_available: 'bg-[#f9c400]/15 border-[#f9c400]/45 text-[#f9c400]',
+  needs_manual_check: 'bg-orange-500/15 border-orange-400/45 text-orange-300',
+  broken: 'bg-[#D92321]/20 border-[#D92321]/50 text-[#ff9f9d]',
+  iframe_blocked: 'bg-[#D92321]/20 border-rose-400/50 text-rose-300',
+  unknown_error: 'bg-white/10 border-white/25 text-[#b7c9ef]',
+};
+
+function formatCheckTime(iso?: string): string {
+  if (!iso) return 'لم يُفحص بعد';
+  try {
+    return new Date(iso).toLocaleTimeString('ar-EG', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
+}
+
 export function AdminWatchServersPanel({
   mode,
   catalog,
@@ -49,11 +87,22 @@ export function AdminWatchServersPanel({
   onNotify,
 }: AdminWatchServersPanelProps) {
   const [hostFilter, setHostFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState<HealthFilterKey>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [checkingBatch, setCheckingBatch] = useState(false);
-  const [probeResults, setProbeResults] = useState<
-    Record<string, { ok: boolean; statusText: string }>
-  >({});
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number }>({
+    done: 0,
+    total: 0,
+  });
+  const [checkingSingleUrls, setCheckingSingleUrls] = useState<Record<string, boolean>>({});
+  const [healthReports, setHealthReports] = useState<Record<string, ServerHealthReport>>({});
+  const batchAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      batchAbortRef.current?.abort();
+    };
+  }, []);
 
   const serverRows = useMemo<FlattenedServerRow[]>(() => {
     const rows: FlattenedServerRow[] = [];
@@ -113,43 +162,112 @@ export function AdminWatchServersPanel({
       .slice(0, 12);
   }, [serverRows]);
 
+  const statusCounts = useMemo(() => {
+    const counts: Record<HealthFilterKey, number> = {
+      all: serverRows.length,
+      confirmed_playing: 0,
+      page_available: 0,
+      needs_manual_check: 0,
+      broken: 0,
+      iframe_blocked: 0,
+      unknown_error: 0,
+      untested: 0,
+    };
+    for (const row of serverRows) {
+      const report = healthReports[row.url];
+      if (!report) {
+        counts.untested += 1;
+      } else {
+        counts[report.status] += 1;
+      }
+    }
+    return counts;
+  }, [serverRows, healthReports]);
+
   const filteredRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return serverRows.filter((r) => {
       if (hostFilter !== 'all' && r.host !== hostFilter) return false;
+      if (statusFilter !== 'all') {
+        const rep = healthReports[r.url];
+        if (statusFilter === 'untested') {
+          if (rep) return false;
+        } else if (!rep || rep.status !== statusFilter) {
+          return false;
+        }
+      }
       if (!q) return true;
       return (
         r.mediaTitle.toLowerCase().includes(q) ||
         r.host.toLowerCase().includes(q) ||
-        r.serverName.toLowerCase().includes(q)
+        r.serverName.toLowerCase().includes(q) ||
+        r.url.toLowerCase().includes(q)
       );
     });
-  }, [serverRows, hostFilter, searchQuery]);
+  }, [serverRows, hostFilter, statusFilter, searchQuery, healthReports]);
 
   const mediaMap = useMemo(() => new Map(catalog.map((m) => [m.id, m])), [catalog]);
 
-  const handleBatchProbeVisible = async () => {
-    const sample = filteredRows.slice(0, 25);
-    if (sample.length === 0) return;
-    setCheckingBatch(true);
+  const handleCheckSingleServer = async (row: FlattenedServerRow) => {
+    if (checkingSingleUrls[row.url]) return;
+    setCheckingSingleUrls((prev) => ({ ...prev, [row.url]: true }));
     try {
-      const urls = sample.map((s) => s.url);
-      const checked = await checkServerUrlsInBrowser(urls);
-      const next: Record<string, { ok: boolean; statusText: string }> = { ...probeResults };
-      sample.forEach((row) => {
-        const res = checked[row.url];
-        if (!res) return;
-        const ok = res.status === 'working';
-        next[row.url] = {
-          ok,
-          statusText: res.label || (ok ? 'متاح' : 'غير مستجيب'),
-        };
+      const report = await runMultiStageServerCheck(row.url, {
+        serverName: row.serverName,
+        verifyVideoPlayback: true,
+        verifyIframeLoad: true,
+        timeoutMs: 6500,
       });
-      setProbeResults(next);
-      onNotify(`تم فحص ${sample.length} رابط سيرفر من المتصفح/البروكسي.`);
+      setHealthReports((prev) => ({ ...prev, [row.url]: report }));
     } catch (err) {
-      onNotify(`تعذر إتمام الفحص: ${err instanceof Error ? err.message : 'خطأ'}`);
+      onNotify(`تعذر فحص السيرفر: ${err instanceof Error ? err.message : 'خطأ'}`);
     } finally {
+      setCheckingSingleUrls((prev) => ({ ...prev, [row.url]: false }));
+    }
+  };
+
+  const handleStopBatchCheck = () => {
+    batchAbortRef.current?.abort();
+    batchAbortRef.current = null;
+    setCheckingBatch(false);
+    onNotify('تم إيقاف الفحص الجماعي مؤقتاً.');
+  };
+
+  const handleBatchCheckAllServers = async () => {
+    const targets = filteredRows.map((r) => ({ url: r.url, serverName: r.serverName }));
+    if (targets.length === 0) return;
+
+    batchAbortRef.current?.abort();
+    const abortCtrl = new AbortController();
+    batchAbortRef.current = abortCtrl;
+
+    const uniqueCount = new Set(targets.map((t) => t.url)).size;
+    setCheckingBatch(true);
+    setBatchProgress({ done: 0, total: uniqueCount });
+
+    try {
+      await runBatchServerHealthCheck(targets, {
+        concurrency: 4,
+        verifyVideoPlayback: true,
+        verifyIframeLoad: false,
+        timeoutMs: 6500,
+        signal: abortCtrl.signal,
+        onProgress: (url, report, done, total) => {
+          setHealthReports((prev) => ({ ...prev, [url]: report }));
+          setBatchProgress({ done, total });
+        },
+      });
+      if (!abortCtrl.signal.aborted) {
+        onNotify(`اكتمل فحص ${uniqueCount} رابط سيرفر بنجاح.`);
+      }
+    } catch (err) {
+      if (!abortCtrl.signal.aborted) {
+        onNotify(`تعذر إتمام الفحص: ${err instanceof Error ? err.message : 'خطأ'}`);
+      }
+    } finally {
+      if (batchAbortRef.current === abortCtrl) {
+        batchAbortRef.current = null;
+      }
       setCheckingBatch(false);
     }
   };
@@ -440,7 +558,7 @@ export function AdminWatchServersPanel({
     );
   }
 
-  // Watch Servers Health & Domain Inventory Mode
+  // Watch Servers Multi-Stage Health Checker Mode
   const suspiciousCount = serverRows.filter((r) => r.suspicious).length;
 
   return (
@@ -449,37 +567,96 @@ export function AdminWatchServersPanel({
         <div>
           <h2 className="font-display text-lg font-extrabold text-white flex items-center gap-2">
             <Server className="w-5 h-5 text-[#4CAF50]" />
-            <span>جرد وصحة سيرفرات المشاهدة</span>
+            <span>فاحص صحة سيرفرات المشاهدة متعدد المراحل</span>
           </h2>
           <p className="text-xs text-[#b7c9ef] mt-1">
-            إجمالي روابط التشغيل المفهرسة: {serverRows.length} سيرفر عبر {topHosts.length}+ نطاق مختلف.
+            إجمالي الروابط المفهرسة: {serverRows.length} سيرفر عبر {topHosts.length}+ نطاق — لا تُمنح علامة التشغيل المؤكد إلا عند التحقق الفعلي من المشغل.
           </p>
         </div>
 
-        <button
-          type="button"
-          disabled={checkingBatch || filteredRows.length === 0}
-          onClick={() => void handleBatchProbeVisible()}
-          className="inline-flex items-center gap-2 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] disabled:opacity-50 px-4 py-2.5 text-xs font-black text-[#06131c] cursor-pointer"
-        >
-          {checkingBatch ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wrench className="w-4 h-4" />}
-          <span>فحص أول 25 سيرفر الآن</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {checkingBatch ? (
+            <button
+              type="button"
+              onClick={handleStopBatchCheck}
+              className="inline-flex items-center gap-2 rounded-xl bg-[#D92321] hover:bg-[#b71c1b] px-4 py-2.5 text-xs font-black text-white cursor-pointer"
+            >
+              <Square className="w-3.5 h-3.5 fill-current" />
+              <span>
+                إيقاف الفحص ({batchProgress.done}/{batchProgress.total})
+              </span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={filteredRows.length === 0}
+              onClick={() => void handleBatchCheckAllServers()}
+              className="inline-flex items-center gap-2 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] disabled:opacity-50 px-4 py-2.5 text-xs font-black text-[#06131c] cursor-pointer"
+            >
+              <Activity className="w-4 h-4" />
+              <span>فحص جميع السيرفرات ({filteredRows.length})</span>
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Host distribution chips */}
+      {/* 6-State Summary Strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+        {(
+          [
+            { key: 'confirmed_playing', count: statusCounts.confirmed_playing, accent: 'border-[#4CAF50]/35 text-[#8cf091]' },
+            { key: 'page_available', count: statusCounts.page_available, accent: 'border-[#f9c400]/35 text-[#f9c400]' },
+            { key: 'needs_manual_check', count: statusCounts.needs_manual_check, accent: 'border-orange-400/35 text-orange-300' },
+            { key: 'broken', count: statusCounts.broken, accent: 'border-[#D92321]/40 text-[#ff9f9d]' },
+            { key: 'iframe_blocked', count: statusCounts.iframe_blocked, accent: 'border-rose-400/40 text-rose-300' },
+            { key: 'unknown_error', count: statusCounts.unknown_error, accent: 'border-white/20 text-[#b7c9ef]' },
+          ] as const
+        ).map((card) => {
+          const meta = SERVER_HEALTH_META[card.key];
+          const isSelected = statusFilter === card.key;
+          return (
+            <button
+              key={card.key}
+              type="button"
+              onClick={() => setStatusFilter(isSelected ? 'all' : card.key)}
+              className={`rounded-2xl bg-[#0c1821] border p-3 text-right transition-all cursor-pointer ${
+                isSelected ? 'ring-2 ring-[#f9c400] border-[#f9c400]' : card.accent
+              }`}
+            >
+              <div className="flex items-center justify-between gap-1 text-xs font-black">
+                <span>{meta.emoji}</span>
+                <span className="font-latin text-base tabular-nums text-white">{card.count}</span>
+              </div>
+              <p className="mt-1 text-[11px] font-bold truncate">{meta.label}</p>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Host distribution chips & search */}
       <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-xs font-extrabold text-[#b7c9ef] flex items-center gap-1.5">
             <Globe className="w-4 h-4 text-sky-400" />
-            <span>النطاقات المستضيفة للسيرفرات (اضغط للتصفية)</span>
+            <span>تصفية حسب النطاق أو الحالة</span>
           </h3>
-          {suspiciousCount > 0 && (
-            <span className="inline-flex items-center gap-1 rounded-lg bg-[#D92321]/15 border border-[#D92321]/35 px-2.5 py-1 text-[11px] font-extrabold text-[#ff9f9d]">
-              <ShieldAlert className="w-3.5 h-3.5" />
-              {suspiciousCount} رابط مشبوه (قد يكون صفحة قسم/موقع)
-            </span>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {statusFilter !== 'all' && (
+              <button
+                type="button"
+                onClick={() => setStatusFilter('all')}
+                className="rounded-lg bg-white/10 hover:bg-white/20 px-2.5 py-1 text-[11px] font-bold text-white cursor-pointer"
+              >
+                إلغاء فلتر الحالة
+              </button>
+            )}
+            {suspiciousCount > 0 && (
+              <span className="inline-flex items-center gap-1 rounded-lg bg-[#D92321]/15 border border-[#D92321]/35 px-2.5 py-1 text-[11px] font-extrabold text-[#ff9f9d]">
+                <ShieldAlert className="w-3.5 h-3.5" />
+                {suspiciousCount} رابط مشبوه (قد يكون صفحة موقع)
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -516,81 +693,211 @@ export function AdminWatchServersPanel({
             type="search"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="بحث باسم العمل أو النطاق أو اسم السيرفر..."
+            placeholder="بحث باسم العمل أو السيرفر أو النطاق أو الرابط..."
             className="w-full rounded-xl bg-[#1a242e] border border-white/10 pr-10 pl-3 py-2 text-xs text-white focus:border-[#f9c400] focus:outline-none"
           />
         </div>
       </div>
 
-      {/* Inventory Table */}
-      <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] overflow-hidden">
-        <div className="max-h-[480px] overflow-auto divide-y divide-white/[0.06]">
-          {filteredRows.slice(0, 120).map((row, idx) => {
+      {/* Detailed Server Health Cards (All 9 Requested Fields) */}
+      <div className="space-y-3">
+        {filteredRows.length === 0 ? (
+          <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-8 text-center text-xs text-[#b7c9ef]">
+            لا توجد سيرفرات مطابقة لخيارات التصفية الحالية.
+          </div>
+        ) : (
+          filteredRows.slice(0, 120).map((row, idx) => {
             const mediaItem = mediaMap.get(row.mediaId);
-            const probe = probeResults[row.url];
+            const report = healthReports[row.url];
+            const isSingleChecking = Boolean(checkingSingleUrls[row.url]);
+            const finalBadgeCls = report
+              ? STATUS_BADGE_STYLE[report.status]
+              : 'bg-white/[0.06] border-white/15 text-[#b7c9ef]';
+
             return (
               <div
                 key={`${row.mediaId}_${idx}`}
-                className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 hover:bg-white/[0.02]"
+                className="rounded-2xl bg-[#0c1821] border border-white/[0.08] p-4 space-y-3 hover:border-white/20 transition-colors"
               >
-                <div className="min-w-0 space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-extrabold text-white truncate">
-                      {row.mediaTitle}
-                    </span>
-                    <span className="rounded bg-white/5 px-2 py-0.5 text-[10px] font-bold text-[#b7c9ef]">
-                      {row.locationLabel}
-                    </span>
-                    <span className="rounded bg-sky-500/15 px-2 py-0.5 text-[10px] font-bold text-sky-300 font-latin">
-                      {row.host}
-                    </span>
-                    {row.suspicious && (
-                      <span className="rounded bg-[#D92321]/20 px-2 py-0.5 text-[10px] font-black text-[#ff9f9d]">
-                        رابط مشبوه
+                {/* Header Row: 1. Server Name, 2. Server URL, 6. Final Check Result, Actions */}
+                <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-3">
+                  <div className="min-w-0 space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* 1. اسم السيرفر */}
+                      <span className="text-sm font-extrabold text-white">
+                        {row.serverName}
                       </span>
-                    )}
-                    {probe && (
-                      <span
-                        className={`rounded px-2 py-0.5 text-[10px] font-black ${
-                          probe.ok
-                            ? 'bg-[#4CAF50]/20 text-[#a6f5a9]'
-                            : 'bg-[#D92321]/20 text-[#ff9f9d]'
-                        }`}
-                      >
-                        {probe.statusText}
+                      <span className="rounded-md bg-white/5 px-2 py-0.5 text-[11px] font-bold text-[#b7c9ef]">
+                        {row.mediaTitle} · {row.locationLabel}
                       </span>
-                    )}
-                  </div>
-                  <p className="font-latin text-[10px] text-[#b7c9ef] truncate" dir="ltr">
-                    {row.serverName}: {row.url}
-                  </p>
-                </div>
+                      <span className="rounded-md bg-sky-500/15 px-2 py-0.5 text-[10px] font-bold text-sky-300 font-latin">
+                        {row.host}
+                      </span>
+                      {row.suspicious && (
+                        <span className="rounded-md bg-[#D92321]/20 px-2 py-0.5 text-[10px] font-black text-[#ff9f9d]">
+                          رابط مشبوه
+                        </span>
+                      )}
+                    </div>
 
-                <div className="flex items-center gap-2 shrink-0">
-                  <a
-                    href={row.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="rounded-lg bg-[#1a242e] hover:bg-white/10 p-2 text-[#b7c9ef] hover:text-white"
-                    title="فتح الرابط"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
-                  {mediaItem && (
+                    {/* 2. رابط السيرفر */}
+                    <p
+                      className="font-latin text-[11px] text-[#9fb2d4] break-all"
+                      dir="ltr"
+                    >
+                      {row.url}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {/* 6. نتيجة الفحص النهائية */}
+                    <span
+                      className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-extrabold ${finalBadgeCls}`}
+                    >
+                      <span>{report ? report.statusEmoji : '⚪'}</span>
+                      <span>
+                        {report ? report.statusLabel : 'غير مفحوص بعد'}
+                      </span>
+                    </span>
+
+                    {/* زر إعادة فحص لكل سيرفر */}
                     <button
                       type="button"
-                      onClick={() => onEditMedia(mediaItem)}
-                      className="inline-flex items-center gap-1 rounded-lg bg-[#1a242e] hover:bg-[#D92321] px-3 py-1.5 text-[11px] font-bold text-white cursor-pointer"
+                      disabled={isSingleChecking}
+                      onClick={() => void handleCheckSingleServer(row)}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] disabled:opacity-60 px-3 py-1.5 text-xs font-black text-[#06131c] cursor-pointer"
                     >
-                      <Edit3 className="w-3.5 h-3.5" />
-                      <span>تعديل</span>
+                      {isSingleChecking ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-3.5 h-3.5" />
+                      )}
+                      <span>{report ? 'إعادة فحص' : 'فحص متقدم'}</span>
                     </button>
-                  )}
+
+                    <a
+                      href={row.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 p-2 text-[#b7c9ef] hover:text-white"
+                      title="فتح الرابط في تبويب خارجي"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+
+                    {mediaItem && (
+                      <button
+                        type="button"
+                        onClick={() => onEditMedia(mediaItem)}
+                        className="inline-flex items-center gap-1 rounded-xl bg-[#1a242e] hover:bg-[#D92321] border border-white/10 px-3 py-1.5 text-[11px] font-bold text-white cursor-pointer"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>تعديل</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Multi-Stage Grid: 3. Connectivity, 4. Page Load, 5. Video Player */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                  {/* 3. حالة الوصول */}
+                  <div className="rounded-xl bg-[#12202b] border border-white/[0.06] p-3 space-y-1">
+                    <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-[#9fb2d4]">
+                      <span className="inline-flex items-center gap-1.5">
+                        <Wifi className="w-3.5 h-3.5 text-sky-400" />
+                        <span>حالة الوصول</span>
+                      </span>
+                      {report?.httpStatus ? (
+                        <span className="font-latin text-[10px] font-black text-white/80">
+                          HTTP {report.httpStatus}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="text-xs font-extrabold text-white">
+                      {report ? report.connectivity.label : 'بانتظار الفحص'}
+                    </p>
+                    <p className="text-[11px] text-[#b7c9ef]/80 leading-snug">
+                      {report ? report.connectivity.detail : 'اضغط فحص متقدم للتحقق من الاتصال.'}
+                    </p>
+                  </div>
+
+                  {/* 4. حالة تحميل الصفحة */}
+                  <div className="rounded-xl bg-[#12202b] border border-white/[0.06] p-3 space-y-1">
+                    <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-[#9fb2d4]">
+                      <span className="inline-flex items-center gap-1.5">
+                        <Globe className="w-3.5 h-3.5 text-[#f9c400]" />
+                        <span>حالة تحميل الصفحة (Iframe)</span>
+                      </span>
+                      {report?.pageLoad.frameBlocked && (
+                        <span className="text-[10px] font-black text-rose-300">محظور</span>
+                      )}
+                    </div>
+                    <p className="text-xs font-extrabold text-white">
+                      {report ? report.pageLoad.label : 'غير مفحوص'}
+                    </p>
+                    <p className="text-[11px] text-[#b7c9ef]/80 leading-snug">
+                      {report ? report.pageLoad.detail : 'يتم فحص سياسات التضمين وتحميل الصفحة.'}
+                    </p>
+                  </div>
+
+                  {/* 5. حالة مشغل الفيديو */}
+                  <div className="rounded-xl bg-[#12202b] border border-white/[0.06] p-3 space-y-1">
+                    <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-[#9fb2d4]">
+                      <span className="inline-flex items-center gap-1.5">
+                        <PlayCircle className="w-3.5 h-3.5 text-[#4CAF50]" />
+                        <span>حالة مشغل الفيديو</span>
+                      </span>
+                      {report?.playerCheck.playbackConfirmed && (
+                        <span className="text-[10px] font-black text-[#8cf091]">مؤكد</span>
+                      )}
+                    </div>
+                    <p className="text-xs font-extrabold text-white">
+                      {report ? report.playerCheck.label : 'غير مفحوص'}
+                    </p>
+                    <p className="text-[11px] text-[#b7c9ef]/80 leading-snug">
+                      {report
+                        ? report.playerCheck.detail
+                        : 'يتم التحقق من جاهزية عنصر الفيديو أو قيود المصدر.'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Footer Diagnostics: 7. Problem Reason, 8. Last Check Time, 9. Latency ms */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-white/[0.06] text-[11px]">
+                  {/* 7. سبب المشكلة إن وجدت */}
+                  <div className="flex items-start gap-1.5 min-w-0">
+                    {report?.status === 'confirmed_playing' ? (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-[#4CAF50] shrink-0 mt-0.5" />
+                    ) : report?.status === 'broken' || report?.status === 'iframe_blocked' ? (
+                      <XCircle className="w-3.5 h-3.5 text-[#ff8a88] shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle className="w-3.5 h-3.5 text-[#f9c400] shrink-0 mt-0.5" />
+                    )}
+                    <span className="font-bold text-[#dbe6ff] leading-snug">
+                      {report
+                        ? report.reasonText
+                        : row.suspicious
+                          ? 'تحذير: الرابط يبدو كصفحة موقع عام وليس مشغل فيديو مباشر.'
+                          : 'لم يتم إجراء فحص لهذا السيرفر في هذه الجلسة.'}
+                    </span>
+                  </div>
+
+                  {/* 8. وقت آخر فحص + 9. مدة الاستجابة بالمللي ثانية */}
+                  <div className="flex flex-wrap items-center gap-3 shrink-0 text-[#9fb2d4]">
+                    <span className="inline-flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>آخر فحص: {formatCheckTime(report?.checkedAt)}</span>
+                    </span>
+                    <span className="inline-flex items-center gap-1 font-latin tabular-nums">
+                      <Activity className="w-3.5 h-3.5 text-sky-400" />
+                      <span>{report ? `${report.latencyMs} ms` : '— ms'}</span>
+                    </span>
+                  </div>
                 </div>
               </div>
             );
-          })}
-        </div>
+          })
+        )}
       </div>
     </div>
   );
