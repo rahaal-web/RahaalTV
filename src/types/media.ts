@@ -602,4 +602,45 @@ export interface RecentlyWatchedPreferences {
   hideCompleted: boolean;
 }
 
+export type RecentlyWatchedDeviceKey = 'mobile' | 'tablet' | 'desktop' | 'tv';
+export type RecentlyWatchedCardSizePreset = 'small' | 'medium' | 'large' | 'custom';
+export type RecentlyWatchedAspectRatio = '2/3' | '3/4' | '16/9' | '4/3' | '1/1';
+export type RecentlyWatchedSortOrder = 'newest_first' | 'oldest_first' | 'custom';
+
+export interface RecentlyWatchedDeviceLayoutConfig {
+  cardWidthPx: number;
+  cardGapPx: number;
+  initialVisibleCount: number;
+}
+
+export interface RecentlyWatchedUiConfig {
+  enabled: boolean;
+  showTitle: boolean;
+  showViewAllButton: boolean;
+  showArrows: boolean;
+  enableDrag: boolean;
+  autoScroll: boolean;
+  autoScrollIntervalSec: number;
+  scrollDirection: 'rtl' | 'ltr';
+  enableWheelScroll: boolean;
+  cardSizePreset: RecentlyWatchedCardSizePreset;
+  cardWidthPx: number;
+  cardGapPx: number;
+  aspectRatio: RecentlyWatchedAspectRatio;
+  showMediaTitle: boolean;
+  showWatchedAt: boolean;
+  showProgressBar: boolean;
+  showEpisodeInfo: boolean;
+  maxStoredItems: number;
+  initialVisibleCount: number;
+  loadMoreOnScrollEnd: boolean;
+  loadMoreBatchSize: number;
+  sortOrder: RecentlyWatchedSortOrder;
+  customOrderIds: string[];
+  hideCompleted: boolean;
+  deduplicateItems: boolean;
+  deviceMode: 'unified' | 'per_device';
+  deviceSettings: Record<RecentlyWatchedDeviceKey, RecentlyWatchedDeviceLayoutConfig>;
+}
+
 export * from './scraperAdapter';

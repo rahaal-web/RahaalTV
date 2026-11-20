@@ -80,10 +80,11 @@ export function AdminSecurityLogsPanel({
         const allSynced =
           report.result.rejectedSections.length === 0 &&
           report.syncedImagePlaceholdersToCloud &&
-          report.recentlyWatchedReady;
+          report.recentlyWatchedReady &&
+          report.recentlyWatchedUiReady;
         if (allSynced) {
           onNotify(
-            'قواعد firestore.rules المنشورة مطابقة بالكامل لجميع أقسام الإعدادات والخلفيات المؤقتة وسجل المشاهدة!'
+            'قواعد firestore.rules المنشورة مطابقة بالكامل لجميع أقسام الإعدادات والخلفيات المؤقتة وسجل وشريط شاهدته مؤخراً!'
           );
         } else if (report.outdatedRulesDetected) {
           onNotify(
@@ -94,6 +95,7 @@ export function AdminSecurityLogsPanel({
             ...report.result.rejectedSections,
             ...(!report.syncedImagePlaceholdersToCloud ? ['settings/image_placeholders'] : []),
             ...(!report.recentlyWatchedReady ? ['recently_watched'] : []),
+            ...(!report.recentlyWatchedUiReady ? ['settings/recently_watched_ui'] : []),
           ];
           onNotify(
             `بعض الأقسام مرفوضة من قواعد Firebase (${missingList.join(', ')}) — راجع نتيجة الفحص أدناه.`
@@ -129,7 +131,8 @@ export function AdminSecurityLogsPanel({
       diagnosticReport?.ok &&
       diagnosticReport.result.rejectedSections.length === 0 &&
       diagnosticReport.syncedImagePlaceholdersToCloud &&
-      diagnosticReport.recentlyWatchedReady;
+      diagnosticReport.recentlyWatchedReady &&
+      diagnosticReport.recentlyWatchedUiReady;
 
     return (
       <div className="space-y-6">
@@ -143,7 +146,7 @@ export function AdminSecurityLogsPanel({
               <p className="text-xs leading-relaxed text-[#b7c9ef]">
                 تحمي هذه القواعد جميع مجموعات قاعدة البيانات (
                 <span className="font-latin text-white">
-                  media, settings, settings/image_placeholders, recently_watched, admins, admin_activity_logs, admin_workspace, scraper_adapters, fonts, requests, users, ratings
+                  media, settings, settings/image_placeholders, settings/recently_watched_ui, recently_watched, admins, admin_activity_logs, admin_workspace, scraper_adapters, fonts, requests, users, ratings
                 </span>
                 ) لمشروع{' '}
                 <span className="font-latin text-[#f9c400]">{activeFirebaseConfig.projectId}</span>{' '}
@@ -297,6 +300,14 @@ export function AdminSecurityLogsPanel({
                             : 'قواعد recently_watched غير منشورة',
                           ok: diagnosticReport.recentlyWatchedReady,
                         },
+                        {
+                          key: 'recentlyWatchedUi',
+                          label: 'تخطيط شريط شاهدته مؤخراً (Carousel UI)',
+                          sub: diagnosticReport.recentlyWatchedUiReady
+                            ? 'settings/recently_watched_ui جاهز'
+                            : `مرفوض (${diagnosticReport.recentlyWatchedUiErrorCode || 'permission-denied'})`,
+                          ok: diagnosticReport.recentlyWatchedUiReady,
+                        },
                       ] as Array<{ key: string; label: string; sub?: string; ok: boolean }>
                     ).map((row) => (
                       <div
@@ -373,14 +384,30 @@ export function AdminSecurityLogsPanel({
                           </p>
                         </div>
                       )}
+                      {!diagnosticReport.recentlyWatchedUiReady && (
+                        <div className="rounded-lg bg-black/30 border border-white/10 p-2.5 space-y-1">
+                          <p className="text-[11px] font-bold text-[#fde68a]">
+                            رفض فعلي على <span className="font-latin">settings/recently_watched_ui</span>:
+                          </p>
+                          <p className="font-latin text-[11px] text-white break-words" dir="ltr">
+                            {diagnosticReport.recentlyWatchedUiErrorCode || 'permission-denied'}
+                            {diagnosticReport.recentlyWatchedUiErrorMessage
+                              ? ` — ${diagnosticReport.recentlyWatchedUiErrorMessage}`
+                              : ''}
+                          </p>
+                        </div>
+                      )}
                       <p className="text-[11px] leading-relaxed">
-                        {!diagnosticReport.syncedImagePlaceholdersToCloud || !diagnosticReport.recentlyWatchedReady
-                          ? `القواعد المنشورة على Firebase حالياً تسمح بالإعدادات الأساسية، لكنها ما زالت تفتقد قواعد (${[
+                        {!diagnosticReport.syncedImagePlaceholdersToCloud ||
+                        !diagnosticReport.recentlyWatchedReady ||
+                        !diagnosticReport.recentlyWatchedUiReady
+                          ? `القواعد المنشورة على Firebase حالياً تسمح بالإعدادات الأساسية، لكنها ما زالت تحتاج نشر التحديث الأخير لـ (${[
                               !diagnosticReport.syncedImagePlaceholdersToCloud ? 'settings/image_placeholders' : '',
                               !diagnosticReport.recentlyWatchedReady ? 'recently_watched' : '',
+                              !diagnosticReport.recentlyWatchedUiReady ? 'settings/recently_watched_ui' : '',
                             ]
                               .filter(Boolean)
-                              .join(' و ')}) أو أنك نسخت نسخة سابقة قبل التحديث الأخير — انسخ النص الكامل الحالي (${rulesLineCount} سطراً) واضغط Publish في Firebase Console.`
+                              .join(' و ')}) — انسخ النص الكامل الحالي (${rulesLineCount} سطراً) واضغط Publish في Firebase Console.`
                           : diagnosticReport.rejectedHomeKeys.length > 0 &&
                               diagnosticReport.rejectedHomeKeys.length <= 5
                             ? 'القاعدة النشطة في Firebase قريبة من التحديث الأخير لكنها ما زالت تفتقد هذه الحقول من التحديث الأخير لـ homeConfig.'

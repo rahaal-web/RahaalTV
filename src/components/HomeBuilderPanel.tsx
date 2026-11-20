@@ -23,20 +23,32 @@ import {
   saveStoredHomeConfig,
 } from '../lib/homeConfig';
 import {
+  loadStoredRecentlyWatchedUiConfig,
+  normalizeRecentlyWatchedUiConfig,
+  saveStoredRecentlyWatchedUiConfig,
+} from '../lib/recentlyWatchedConfig';
+import {
   HomeHeroMode,
   HomeLayoutConfig,
   HomeSectionConfig,
   HomeSectionSource,
   MediaItem,
+  RecentlyWatchedRecord,
+  RecentlyWatchedUiConfig,
 } from '../types/media';
+import { RecentlyWatchedSettingsPanel } from './admin/RecentlyWatchedSettingsPanel';
 
 interface HomeBuilderPanelProps {
   catalog: MediaItem[];
   homeConfig: HomeLayoutConfig;
   tickerEnabled: boolean;
+  recentlyWatchedUiConfig?: RecentlyWatchedUiConfig;
+  recentlyWatchedItems?: RecentlyWatchedRecord[];
   busyAction: boolean;
   onChangeHomeConfig: (next: HomeLayoutConfig) => void;
   onChangeTickerEnabled: (enabled: boolean) => void;
+  onChangeRecentlyWatchedUiConfig?: (next: RecentlyWatchedUiConfig) => void;
+  onSaveRecentlyWatchedUiConfig?: (next: RecentlyWatchedUiConfig) => Promise<void>;
   onSaveHomeConfig: (next: HomeLayoutConfig) => Promise<void>;
   onPreviewHome: () => void;
   onOpenTypographyTab?: () => void;
@@ -60,9 +72,13 @@ export function HomeBuilderPanel({
   catalog,
   homeConfig,
   tickerEnabled,
+  recentlyWatchedUiConfig,
+  recentlyWatchedItems,
   busyAction,
   onChangeHomeConfig,
   onChangeTickerEnabled,
+  onChangeRecentlyWatchedUiConfig,
+  onSaveRecentlyWatchedUiConfig,
   onSaveHomeConfig,
   onPreviewHome,
   onOpenTypographyTab,
@@ -71,6 +87,35 @@ export function HomeBuilderPanel({
 }: HomeBuilderPanelProps) {
   const cfg = useMemo(() => normalizeHomeConfig(homeConfig), [homeConfig]);
   const [sliderSearch, setSliderSearch] = useState('');
+  const [fallbackRwUi, setFallbackRwUi] = useState<RecentlyWatchedUiConfig>(() =>
+    loadStoredRecentlyWatchedUiConfig()
+  );
+  const activeRwUi = useMemo(
+    () =>
+      recentlyWatchedUiConfig
+        ? normalizeRecentlyWatchedUiConfig(recentlyWatchedUiConfig)
+        : fallbackRwUi,
+    [recentlyWatchedUiConfig, fallbackRwUi]
+  );
+
+  const handleRwUiChange = (next: RecentlyWatchedUiConfig) => {
+    const normalized = normalizeRecentlyWatchedUiConfig(next);
+    if (onChangeRecentlyWatchedUiConfig) {
+      onChangeRecentlyWatchedUiConfig(normalized);
+    } else {
+      setFallbackRwUi(saveStoredRecentlyWatchedUiConfig(normalized));
+    }
+  };
+
+  const handleRwUiSave = async (next: RecentlyWatchedUiConfig) => {
+    const normalized = saveStoredRecentlyWatchedUiConfig(next);
+    if (onSaveRecentlyWatchedUiConfig) {
+      await onSaveRecentlyWatchedUiConfig(normalized);
+    } else {
+      setFallbackRwUi(normalized);
+      onNotify('تم حفظ إعدادات قسم شاهدته مؤخراً محلياً');
+    }
+  };
 
   const availableCategories = useMemo(() => {
     const set = new Set<string>();
@@ -1078,6 +1123,20 @@ export function HomeBuilderPanel({
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Recently Watched Settings Section */}
+      <div id="recently-watched-settings">
+        <RecentlyWatchedSettingsPanel
+          catalog={catalog}
+          uiConfig={activeRwUi}
+          recentlyWatchedItems={recentlyWatchedItems}
+          busyAction={busyAction}
+          onChangeUiConfig={handleRwUiChange}
+          onSaveUiConfig={handleRwUiSave}
+          onPreviewOnSite={onPreviewHome}
+          onNotify={onNotify}
+        />
       </div>
     </div>
   );

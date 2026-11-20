@@ -65,6 +65,14 @@ import {
   saveRecentlyWatchedPrefs,
 } from './lib/recentlyWatched';
 import {
+  getRecentlyWatchedPreviewOverride,
+  loadStoredRecentlyWatchedUiConfig,
+  normalizeRecentlyWatchedUiConfig,
+  saveStoredRecentlyWatchedUiConfig,
+  setRecentlyWatchedPreviewOverride,
+  subscribeRecentlyWatchedUiChanges,
+} from './lib/recentlyWatchedConfig';
+import {
   applyWebsiteFaviconToDocument,
   ensureWebsiteBrandingFontLoaded,
   loadStoredWebsiteBranding,
@@ -126,6 +134,7 @@ import {
   PopupShieldHostRule,
   RecentlyWatchedPreferences,
   RecentlyWatchedRecord,
+  RecentlyWatchedUiConfig,
   SiteSettings,
   UserProfileRecord,
   VisitorRequest,
@@ -239,9 +248,21 @@ export default function App() {
   const [recentlyWatchedPrefs, setRecentlyWatchedPrefs] = useState<RecentlyWatchedPreferences>(() =>
     loadRecentlyWatchedPrefs()
   );
+  const [recentlyWatchedUiConfig, setRecentlyWatchedUiConfig] = useState<RecentlyWatchedUiConfig>(() =>
+    loadStoredRecentlyWatchedUiConfig()
+  );
+  const [rwPreviewOverride, setRwPreviewOverride] = useState<RecentlyWatchedUiConfig | null>(() =>
+    getRecentlyWatchedPreviewOverride()
+  );
   const [cloudRecentlyWatched, setCloudRecentlyWatched] = useState<RecentlyWatchedRecord[]>([]);
   const [recentlyWatchedTick, setRecentlyWatchedTick] = useState(0);
   const mergedGuestForUidRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return subscribeRecentlyWatchedUiChanges(() => {
+      setRwPreviewOverride(getRecentlyWatchedPreviewOverride());
+    });
+  }, []);
   const [customFonts, setCustomFonts] = useState<
     Partial<Record<CustomFontSlot, CustomFontRecord>>
   >(() => loadStoredCustomFonts());
@@ -716,6 +737,21 @@ export default function App() {
       }
     );
 
+    const unsubRecentlyWatchedUi = onSnapshot(
+      doc(activeDb, 'settings', 'recently_watched_ui'),
+      (snap) => {
+        if (!snap.exists()) return;
+        const raw = snap.data() as Partial<RecentlyWatchedUiConfig>;
+        const synced = saveStoredRecentlyWatchedUiConfig(
+          normalizeRecentlyWatchedUiConfig(raw)
+        );
+        setRecentlyWatchedUiConfig(synced);
+      },
+      () => {
+        // Ignore if settings/recently_watched_ui rule is not yet deployed
+      }
+    );
+
     const fontsPath = 'fonts';
     const unsubFonts = onSnapshot(
       collection(activeDb, fontsPath),
@@ -792,6 +828,7 @@ export default function App() {
       unsubSliderStyle();
       unsubSiteBranding();
       unsubImagePlaceholders();
+      unsubRecentlyWatchedUi();
       unsubFonts();
       unsubRatings();
     };
@@ -1160,6 +1197,11 @@ export default function App() {
 
   const watchlistItems = activeCatalog.filter((i) => watchlistIds.includes(i.id));
 
+  const effectiveRecentlyWatchedUiConfig = rwPreviewOverride || recentlyWatchedUiConfig;
+  const effectiveRwMaxItems = effectiveRecentlyWatchedUiConfig.maxStoredItems;
+  const effectiveHideCompleted =
+    recentlyWatchedPrefs.hideCompleted || effectiveRecentlyWatchedUiConfig.hideCompleted;
+
   const activeWatchUserId = firebaseUser?.uid || 'guest';
   const recentlyWatchedAllItems = useMemo(
     () =>
@@ -1167,24 +1209,30 @@ export default function App() {
         userId: activeWatchUserId,
         isSignedIn: Boolean(firebaseUser),
         cloudRecords: cloudRecentlyWatched,
-        maxItems: recentlyWatchedPrefs.maxItems,
+        maxItems: effectiveRwMaxItems,
         hideCompleted: false,
+        sortOrder: effectiveRecentlyWatchedUiConfig.sortOrder,
+        customOrderIds: effectiveRecentlyWatchedUiConfig.customOrderIds,
+        deduplicateItems: effectiveRecentlyWatchedUiConfig.deduplicateItems,
       }),
     [
       activeWatchUserId,
       firebaseUser,
       cloudRecentlyWatched,
-      recentlyWatchedPrefs.maxItems,
+      effectiveRwMaxItems,
+      effectiveRecentlyWatchedUiConfig.sortOrder,
+      effectiveRecentlyWatchedUiConfig.customOrderIds,
+      effectiveRecentlyWatchedUiConfig.deduplicateItems,
       recentlyWatchedTick,
     ]
   );
 
   const recentlyWatchedItems = useMemo(
     () =>
-      recentlyWatchedPrefs.hideCompleted
+      effectiveHideCompleted
         ? recentlyWatchedAllItems.filter((rec) => !rec.completed)
         : recentlyWatchedAllItems,
-    [recentlyWatchedAllItems, recentlyWatchedPrefs.hideCompleted]
+    [recentlyWatchedAllItems, effectiveHideCompleted]
   );
 
   const handleUpdateRecentlyWatchedPrefs = (patch: Partial<RecentlyWatchedPreferences>) => {
@@ -1276,6 +1324,13 @@ export default function App() {
             adminsList={adminsList}
             siteSettings={siteSettings}
             imagePlaceholderConfig={imagePlaceholderConfig}
+            recentlyWatchedUiConfig={effectiveRecentlyWatchedUiConfig}
+            recentlyWatchedItems={recentlyWatchedAllItems}
+            onRecentlyWatchedUiChange={(next) => {
+              const clean = saveStoredRecentlyWatchedUiConfig(next);
+              setRecentlyWatchedPreviewOverride(null);
+              setRecentlyWatchedUiConfig(clean);
+            }}
             customFonts={customFonts}
             onCustomFontsChange={(next) => {
               saveStoredCustomFonts(next);
@@ -1435,10 +1490,22 @@ export default function App() {
                 items={recentlyWatchedItems}
                 catalog={activeCatalog}
                 isSignedIn={Boolean(firebaseUser)}
-                hideCompleted={recentlyWatchedPrefs.hideCompleted}
-                onToggleHideCompleted={(next) =>
-                  handleUpdateRecentlyWatchedPrefs({ hideCompleted: next })
-                }
+                hideCompleted={effectiveHideCompleted}
+                uiConfig={effectiveRecentlyWatchedUiConfig}
+                onToggleHideCompleted={(next) => {
+                  handleUpdateRecentlyWatchedPrefs({ hideCompleted: next });
+                  if (!next && effectiveRecentlyWatchedUiConfig.hideCompleted) {
+                    const updatedUi = normalizeRecentlyWatchedUiConfig({
+                      ...effectiveRecentlyWatchedUiConfig,
+                      hideCompleted: false,
+                    });
+                    if (rwPreviewOverride) {
+                      setRecentlyWatchedPreviewOverride(updatedUi);
+                    } else {
+                      setRecentlyWatchedUiConfig(saveStoredRecentlyWatchedUiConfig(updatedUi));
+                    }
+                  }
+                }}
                 onResumeItem={handleResumeRecentlyWatched}
                 onOpenDetails={handleOpenRecentlyWatchedDetails}
                 onRemoveItem={(rec) => void handleRemoveRecentlyWatched(rec)}

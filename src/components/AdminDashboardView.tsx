@@ -203,6 +203,7 @@ import {
   saveCustomFontToFirestore,
   saveImagePlaceholderConfigToFirestore,
   saveMediaToFirestore,
+  saveRecentlyWatchedUiConfigToFirestore,
   saveSiteSettingsToFirestore,
   seedCatalogToFirestore,
   signInWithEmailPassword,
@@ -463,6 +464,9 @@ interface AdminDashboardViewProps {
   onCustomFontsChange?: (next: Partial<Record<CustomFontSlot, CustomFontRecord>>) => void;
   onPopupShieldChange?: (next: PopupShieldConfig) => void;
   imagePlaceholderConfig?: ImagePlaceholderConfig;
+  recentlyWatchedUiConfig?: import('../types/media').RecentlyWatchedUiConfig;
+  recentlyWatchedItems?: import('../types/media').RecentlyWatchedRecord[];
+  onRecentlyWatchedUiChange?: (next: import('../types/media').RecentlyWatchedUiConfig) => void;
   requestedTab?: { tab: AdminTab; nonce: number };
   onExitDashboard: () => void;
   onPreviewMedia: (item: MediaItem) => void;
@@ -758,6 +762,9 @@ export function AdminDashboardView({
   onCustomFontsChange,
   onPopupShieldChange,
   imagePlaceholderConfig,
+  recentlyWatchedUiConfig,
+  recentlyWatchedItems,
+  onRecentlyWatchedUiChange,
   requestedTab,
   onExitDashboard,
   onPreviewMedia,
@@ -1354,6 +1361,15 @@ export function AdminDashboardView({
       setLocalPlaceholderConfig(normalizeImagePlaceholderConfig(imagePlaceholderConfig));
     }
   }, [imagePlaceholderConfig]);
+
+  const [localRwUiConfig, setLocalRwUiConfig] = useState(() =>
+    recentlyWatchedUiConfig || null
+  );
+  useEffect(() => {
+    if (recentlyWatchedUiConfig) {
+      setLocalRwUiConfig(recentlyWatchedUiConfig);
+    }
+  }, [recentlyWatchedUiConfig]);
 
   const effectiveCustomFonts = useMemo(
     () => customFonts || loadStoredCustomFonts(),
@@ -2651,6 +2667,40 @@ export function AdminDashboardView({
       );
     } catch {
       onNotify('تم الحفظ محلياً — تعذرت المزامنة السحابية لإعدادات الخلفيات المؤقتة');
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleSaveRecentlyWatchedUiConfig = async (
+    nextConfig: import('../types/media').RecentlyWatchedUiConfig
+  ) => {
+    const {
+      normalizeRecentlyWatchedUiConfig,
+      saveStoredRecentlyWatchedUiConfig,
+      setRecentlyWatchedPreviewOverride,
+    } = await import('../lib/recentlyWatchedConfig');
+    const clean = saveStoredRecentlyWatchedUiConfig(
+      normalizeRecentlyWatchedUiConfig(nextConfig)
+    );
+    setRecentlyWatchedPreviewOverride(null);
+    setLocalRwUiConfig(clean);
+    onRecentlyWatchedUiChange?.(clean);
+
+    if (!hasActor) {
+      onNotify('تم حفظ إعدادات قسم شاهدته مؤخراً محلياً — سجّل الدخول كمشرف للمزامنة');
+      return;
+    }
+    setBusyAction(true);
+    try {
+      const res = await saveRecentlyWatchedUiConfigToFirestore(clean, activeActorUid);
+      onNotify(
+        res.ok
+          ? `تم حفظ إعدادات شريط شاهدته مؤخراً ومزامنتها لجميع الزوار على (${res.projectId} / ${res.databaseId}) بنجاح!`
+          : `تم حفظ الإعدادات محلياً — قواعد (${res.projectId} / ${res.databaseId}) رفضت الكتابة إلى settings/recently_watched_ui (${res.errorCode || 'permission-denied'}). انسخ أحدث firestore.rules من تبويب «قواعد Firestore» واضغط Publish.`
+      );
+    } catch {
+      onNotify('تم الحفظ محلياً — تعذرت المزامنة السحابية لإعدادات شاهدته مؤخراً');
     } finally {
       setBusyAction(false);
     }
@@ -4658,6 +4708,8 @@ export function AdminDashboardView({
                   catalog={catalog}
                   homeConfig={activeHomeConfig}
                   tickerEnabled={settingsForm.tickerEnabled}
+                  recentlyWatchedUiConfig={localRwUiConfig || recentlyWatchedUiConfig}
+                  recentlyWatchedItems={recentlyWatchedItems}
                   busyAction={busyAction}
                   onChangeHomeConfig={(next) =>
                     setSettingsForm((prev) => ({ ...prev, homeConfig: next }))
@@ -4665,6 +4717,11 @@ export function AdminDashboardView({
                   onChangeTickerEnabled={(enabled) =>
                     setSettingsForm((prev) => ({ ...prev, tickerEnabled: enabled }))
                   }
+                  onChangeRecentlyWatchedUiConfig={(next) => {
+                    setLocalRwUiConfig(next);
+                    onRecentlyWatchedUiChange?.(next);
+                  }}
+                  onSaveRecentlyWatchedUiConfig={handleSaveRecentlyWatchedUiConfig}
                   onSaveHomeConfig={handleSaveHomeConfig}
                   onPreviewHome={onExitDashboard}
                   onOpenTypographyTab={() => navigateToTab('typography')}
@@ -4730,7 +4787,8 @@ export function AdminDashboardView({
                         branding: saveStoredWebsiteBranding(activeBranding),
                       },
                       activeActorUid,
-                      localPlaceholderConfig
+                      localPlaceholderConfig,
+                      localRwUiConfig || recentlyWatchedUiConfig
                     )
                   }
                 />

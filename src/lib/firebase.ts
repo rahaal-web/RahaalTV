@@ -45,6 +45,7 @@ import {
   ImagePlaceholderConfig,
   MediaItem,
   RecentlyWatchedRecord,
+  RecentlyWatchedUiConfig,
   RequestStatus,
   ServerHealthRecord,
   SiteSettings,
@@ -58,6 +59,11 @@ import {
   normalizeImagePlaceholderConfig,
   sanitizePlaceholderConfigForFirestore,
 } from './placeholderConfig';
+import {
+  loadStoredRecentlyWatchedUiConfig,
+  normalizeRecentlyWatchedUiConfig,
+  sanitizeRecentlyWatchedUiForFirestore,
+} from './recentlyWatchedConfig';
 import { reportClientError } from './clientLogger';
 import { isLikelyNonVideoWebsiteUrl } from './clientScraper';
 import {
@@ -1263,6 +1269,9 @@ export type RulesDiagnosticReport =
       imagePlaceholdersErrorCode?: string;
       imagePlaceholdersErrorMessage?: string;
       recentlyWatchedReady: boolean;
+      recentlyWatchedUiReady: boolean;
+      recentlyWatchedUiErrorCode?: string;
+      recentlyWatchedUiErrorMessage?: string;
       userEmail: string | null;
       emailVerified: boolean;
     }
@@ -1278,7 +1287,8 @@ export type RulesDiagnosticReport =
 export async function diagnoseFirestoreSettingsRules(
   settings: SiteSettings,
   uid: string,
-  imagePlaceholders?: ImagePlaceholderConfig
+  imagePlaceholders?: ImagePlaceholderConfig,
+  recentlyWatchedUi?: RecentlyWatchedUiConfig
 ): Promise<RulesDiagnosticReport> {
   const activeDb = getActiveDatabase();
   const activeCfg = getActiveFirebaseConfig();
@@ -1489,6 +1499,24 @@ export async function diagnoseFirestoreSettingsRules(
       }
     }
 
+    let targetRwUi = recentlyWatchedUi;
+    if (!targetRwUi) {
+      try {
+        const existingRwUiSnap = await getDoc(doc(activeDb, 'settings', 'recently_watched_ui'));
+        if (existingRwUiSnap.exists()) {
+          targetRwUi = normalizeRecentlyWatchedUiConfig(
+            existingRwUiSnap.data() as Partial<RecentlyWatchedUiConfig>
+          );
+        }
+      } catch {
+        // Fallback to local stored recently watched UI config
+      }
+    }
+    const rwUiProbeRes = await saveRecentlyWatchedUiConfigToFirestore(
+      targetRwUi || loadStoredRecentlyWatchedUiConfig(),
+      actorUid
+    );
+
     const rejectedSections = (
       ['homeConfig', 'typography', 'popupShield', 'branding'] as SettingsOptionalSection[]
     ).filter((k) => {
@@ -1516,7 +1544,8 @@ export async function diagnoseFirestoreSettingsRules(
       (!syncedHomeToCloud ||
         !syncedBrandingToCloud ||
         !placeholderProbeRes.ok ||
-        !recentlyWatchedReady);
+        !recentlyWatchedReady ||
+        !rwUiProbeRes.ok);
 
     if (rejectedSections.length === 0) {
       // Immediately synchronize live settings across settings/general and split docs
@@ -1548,6 +1577,9 @@ export async function diagnoseFirestoreSettingsRules(
       imagePlaceholdersErrorCode: placeholderProbeRes.errorCode,
       imagePlaceholdersErrorMessage: placeholderProbeRes.errorMessage,
       recentlyWatchedReady,
+      recentlyWatchedUiReady: rwUiProbeRes.ok,
+      recentlyWatchedUiErrorCode: rwUiProbeRes.errorCode,
+      recentlyWatchedUiErrorMessage: rwUiProbeRes.errorMessage,
       userEmail,
       emailVerified,
     };
@@ -1988,6 +2020,46 @@ export async function saveImagePlaceholderConfigToFirestore(
     });
     if (!isPermissionDeniedError(error)) {
       handleFirestoreError(error, OperationType.WRITE, 'settings/image_placeholders');
+    }
+    return {
+      ok: false,
+      projectId,
+      databaseId,
+      errorCode: code || 'permission-denied',
+      errorMessage: message,
+    };
+  }
+}
+
+export async function saveRecentlyWatchedUiConfigToFirestore(
+  cfg: RecentlyWatchedUiConfig,
+  uid: string
+): Promise<SaveImagePlaceholdersResult> {
+  const activeDb = getActiveDatabase();
+  const activeCfg = getActiveFirebaseConfig();
+  const projectId = activeCfg.projectId;
+  const databaseId = activeCfg.firestoreDatabaseId || '(default)';
+  const actorUid = getActiveAuth().currentUser?.uid || uid;
+  const cleanCfg = sanitizeRecentlyWatchedUiForFirestore(
+    normalizeRecentlyWatchedUiConfig(cfg)
+  );
+  try {
+    await setDoc(doc(activeDb, 'settings', 'recently_watched_ui'), {
+      ...cleanCfg,
+      updatedBy: actorUid,
+      updatedAt: serverTimestamp(),
+    });
+    return { ok: true, projectId, databaseId };
+  } catch (error) {
+    const { code, message } = getFirebaseErrorCodeAndMessage(error);
+    reportClientError({
+      source: 'firestore.settings.recently_watched_ui',
+      level: 'warn',
+      message: `Write to settings/recently_watched_ui on ${projectId}/${databaseId} failed (${code || 'unknown'}): ${message}`,
+      context: { projectId, databaseId, actorUid },
+    });
+    if (!isPermissionDeniedError(error)) {
+      handleFirestoreError(error, OperationType.WRITE, 'settings/recently_watched_ui');
     }
     return {
       ok: false,

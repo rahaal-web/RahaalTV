@@ -1,7 +1,16 @@
-import { useMemo, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+} from 'react';
 import {
   CheckCircle2,
   ChevronLeft,
+  ChevronRight,
   Clock,
   EyeOff,
   History,
@@ -10,10 +19,22 @@ import {
   SlidersHorizontal,
   Trash2,
 } from 'lucide-react';
-import type { MediaItem, RecentlyWatchedRecord } from '../types/media';
-import { FALLBACK_POSTER } from '../lib/mediaFilters';
+import type {
+  MediaItem,
+  RecentlyWatchedDeviceKey,
+  RecentlyWatchedRecord,
+  RecentlyWatchedUiConfig,
+} from '../types/media';
+import { FALLBACK_BACKDROP, FALLBACK_POSTER } from '../lib/mediaFilters';
 import { optimizeTmdbUrl } from '../lib/mediaImages';
 import { formatRelativeArabicTime } from '../lib/recentlyWatched';
+import {
+  DEFAULT_RECENTLY_WATCHED_UI_CONFIG,
+  normalizeRecentlyWatchedUiConfig,
+  resolveAspectRatioCssValue,
+  resolveImageSlotForCarouselCard,
+  resolveRecentlyWatchedLayoutForViewport,
+} from '../lib/recentlyWatchedConfig';
 import { OptimizedImage } from './OptimizedImage';
 
 interface RecentlyWatchedSectionProps {
@@ -21,6 +42,9 @@ interface RecentlyWatchedSectionProps {
   catalog: MediaItem[];
   isSignedIn: boolean;
   hideCompleted: boolean;
+  uiConfig?: RecentlyWatchedUiConfig;
+  forcedDevicePreview?: RecentlyWatchedDeviceKey;
+  isPreviewMode?: boolean;
   onToggleHideCompleted: (next: boolean) => void;
   onResumeItem: (record: RecentlyWatchedRecord, matchedMedia?: MediaItem) => void;
   onOpenDetails: (record: RecentlyWatchedRecord, matchedMedia?: MediaItem) => void;
@@ -28,20 +52,97 @@ interface RecentlyWatchedSectionProps {
   onOpenManager: () => void;
 }
 
-const INITIAL_PAGE_SIZE = 6;
+function getHorizontalMetrics(
+  el: HTMLElement,
+  direction: 'rtl' | 'ltr'
+): { progressPx: number; maxScrollPx: number } {
+  const maxScrollPx = Math.max(0, el.scrollWidth - el.clientWidth);
+  if (maxScrollPx <= 0) return { progressPx: 0, maxScrollPx: 0 };
+  if (direction === 'ltr') {
+    return {
+      progressPx: Math.min(maxScrollPx, Math.max(0, el.scrollLeft)),
+      maxScrollPx,
+    };
+  }
+  // Modern browsers (Chrome/Firefox/Safari 15+) use 0 at start and negative scrollLeft in RTL.
+  // Fallback guard handles legacy positive RTL scrollLeft if encountered.
+  const rawLeft = el.scrollLeft;
+  const progressPx = rawLeft <= 0 ? -rawLeft : maxScrollPx - rawLeft;
+  return {
+    progressPx: Math.min(maxScrollPx, Math.max(0, progressPx)),
+    maxScrollPx,
+  };
+}
 
 export function RecentlyWatchedSection({
   items,
   catalog,
   isSignedIn,
   hideCompleted,
+  uiConfig: propUiConfig,
+  forcedDevicePreview,
+  isPreviewMode = false,
   onToggleHideCompleted,
   onResumeItem,
   onOpenDetails,
   onRemoveItem,
   onOpenManager,
 }: RecentlyWatchedSectionProps) {
-  const [visibleCount, setVisibleCount] = useState(INITIAL_PAGE_SIZE);
+  const uiConfig = useMemo(
+    () =>
+      propUiConfig
+        ? normalizeRecentlyWatchedUiConfig(propUiConfig)
+        : DEFAULT_RECENTLY_WATCHED_UI_CONFIG,
+    [propUiConfig]
+  );
+
+  const [viewportWidth, setViewportWidth] = useState<number>(() =>
+    typeof window !== 'undefined' ? window.innerWidth : 1280
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || forcedDevicePreview) return;
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize, { passive: true });
+    return () => window.removeEventListener('resize', onResize);
+  }, [forcedDevicePreview]);
+
+  const layout = useMemo(
+    () =>
+      resolveRecentlyWatchedLayoutForViewport(
+        uiConfig,
+        viewportWidth,
+        forcedDevicePreview
+      ),
+    [uiConfig, viewportWidth, forcedDevicePreview]
+  );
+
+  const [visibleCount, setVisibleCount] = useState<number>(layout.initialVisibleCount);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [canScrollBackward, setCanScrollBackward] = useState(false);
+  const [canScrollForward, setCanScrollForward] = useState(false);
+
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const pointerStateRef = useRef<{
+    active: boolean;
+    pointerId: number;
+    startX: number;
+    startScrollLeft: number;
+    moved: boolean;
+  }>({
+    active: false,
+    pointerId: -1,
+    startX: 0,
+    startScrollLeft: 0,
+    moved: false,
+  });
+  const suppressClickRef = useRef(false);
+
+  // Sync visibleCount when admin updates initialVisibleCount or device overrides
+  useEffect(() => {
+    setVisibleCount(layout.initialVisibleCount);
+  }, [layout.initialVisibleCount]);
 
   const catalogById = useMemo(() => {
     const map = new Map<string, MediaItem>();
@@ -51,212 +152,607 @@ export function RecentlyWatchedSection({
     return map;
   }, [catalog]);
 
+  const displayedItems = useMemo(() => {
+    if (!items || items.length === 0) return [];
+    const safeCount = Math.max(layout.initialVisibleCount, visibleCount);
+    return items.slice(0, safeCount);
+  }, [items, layout.initialVisibleCount, visibleCount]);
+
+  const hasMoreBatches = items.length > displayedItems.length;
+
+  const syncScrollBoundaries = useCallback(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const { progressPx, maxScrollPx } = getHorizontalMetrics(el, uiConfig.scrollDirection);
+    const hasOverflow = maxScrollPx > 4;
+    setCanScrollBackward(hasOverflow && progressPx > 4);
+    setCanScrollForward((hasOverflow && progressPx < maxScrollPx - 4) || hasMoreBatches);
+
+    if (uiConfig.loadMoreOnScrollEnd && hasMoreBatches) {
+      const remaining = maxScrollPx - progressPx;
+      const threshold = Math.max(120, layout.cardWidthPx * 1.15);
+      if (remaining <= threshold) {
+        const prevLeft = el.scrollLeft;
+        setVisibleCount((prev) => Math.min(items.length, prev + uiConfig.loadMoreBatchSize));
+        requestAnimationFrame(() => {
+          if (scrollerRef.current) {
+            scrollerRef.current.scrollLeft = prevLeft;
+          }
+        });
+      }
+    }
+  }, [
+    uiConfig.scrollDirection,
+    uiConfig.loadMoreOnScrollEnd,
+    uiConfig.loadMoreBatchSize,
+    hasMoreBatches,
+    layout.cardWidthPx,
+    items.length,
+  ]);
+
+  useEffect(() => {
+    syncScrollBoundaries();
+    const el = scrollerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => syncScrollBoundaries());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [syncScrollBoundaries, displayedItems.length, layout.cardWidthPx, layout.cardGapPx]);
+
+  const scrollStep = useCallback(
+    (dir: 'forward' | 'backward') => {
+      const el = scrollerRef.current;
+      if (!el) return;
+
+      if (dir === 'forward' && hasMoreBatches) {
+        const { progressPx, maxScrollPx } = getHorizontalMetrics(el, uiConfig.scrollDirection);
+        if (maxScrollPx - progressPx < layout.cardWidthPx * 1.5) {
+          const prevLeft = el.scrollLeft;
+          setVisibleCount((prev) => Math.min(items.length, prev + uiConfig.loadMoreBatchSize));
+          requestAnimationFrame(() => {
+            if (scrollerRef.current) {
+              scrollerRef.current.scrollLeft = prevLeft;
+            }
+          });
+        }
+      }
+
+      const stepSize = Math.max(
+        layout.cardWidthPx + layout.cardGapPx,
+        Math.round(el.clientWidth * 0.72)
+      );
+      const sign =
+        uiConfig.scrollDirection === 'rtl'
+          ? dir === 'forward'
+            ? -1
+            : 1
+          : dir === 'forward'
+            ? 1
+            : -1;
+
+      el.scrollBy({
+        left: sign * stepSize,
+        behavior: 'smooth',
+      });
+    },
+    [
+      hasMoreBatches,
+      items.length,
+      layout.cardWidthPx,
+      layout.cardGapPx,
+      uiConfig.loadMoreBatchSize,
+      uiConfig.scrollDirection,
+    ]
+  );
+
+  // Non-intrusive horizontal wheel support on Desktop
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) return;
+      const wantsHorizontal = e.shiftKey || uiConfig.enableWheelScroll;
+      if (!wantsHorizontal) return;
+
+      // Let trackpads that already emit horizontal deltaX scroll natively
+      if (Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
+      if (Math.abs(e.deltaY) < 1) return;
+
+      const { progressPx, maxScrollPx } = getHorizontalMetrics(el, uiConfig.scrollDirection);
+      if (maxScrollPx <= 4) return;
+
+      const goingForward = e.deltaY > 0;
+      const atStart = progressPx <= 2;
+      const atEnd = progressPx >= maxScrollPx - 2;
+
+      // Never trap vertical page scrolling once user reaches horizontal edge
+      if ((goingForward && atEnd) || (!goingForward && atStart)) {
+        return;
+      }
+
+      e.preventDefault();
+      const deltaSign =
+        uiConfig.scrollDirection === 'rtl'
+          ? goingForward
+            ? -1
+            : 1
+          : goingForward
+            ? 1
+            : -1;
+      el.scrollLeft += deltaSign * Math.abs(e.deltaY);
+    };
+
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, [uiConfig.enableWheelScroll, uiConfig.scrollDirection]);
+
+  // Gentle auto-scroll with automatic pause on hover/focus/drag/touch/reduced-motion
+  useEffect(() => {
+    if (!uiConfig.autoScroll || displayedItems.length <= 1 || isPaused || isDragging) {
+      return;
+    }
+    if (
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    ) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      const el = scrollerRef.current;
+      if (!el) return;
+      const { progressPx, maxScrollPx } = getHorizontalMetrics(el, uiConfig.scrollDirection);
+      if (maxScrollPx <= 4) return;
+
+      if (progressPx >= maxScrollPx - 6 && !hasMoreBatches) {
+        el.scrollTo({ left: 0, behavior: 'smooth' });
+      } else {
+        scrollStep('forward');
+      }
+    }, Math.max(2, uiConfig.autoScrollIntervalSec) * 1000);
+
+    return () => window.clearInterval(timer);
+  }, [
+    uiConfig.autoScroll,
+    uiConfig.autoScrollIntervalSec,
+    uiConfig.scrollDirection,
+    displayedItems.length,
+    isPaused,
+    isDragging,
+    hasMoreBatches,
+    scrollStep,
+  ]);
+
+  // Mouse click-and-drag panning (mobile keeps pure native touch momentum)
+  const handlePointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (!uiConfig.enableDrag || e.pointerType !== 'mouse' || e.button !== 0) return;
+    const el = scrollerRef.current;
+    if (!el) return;
+
+    pointerStateRef.current = {
+      active: true,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startScrollLeft: el.scrollLeft,
+      moved: false,
+    };
+  };
+
+  const handlePointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    const state = pointerStateRef.current;
+    if (!state.active) return;
+    const el = scrollerRef.current;
+    if (!el) return;
+
+    const dx = e.clientX - state.startX;
+    if (!state.moved && Math.abs(dx) > 6) {
+      state.moved = true;
+      setIsDragging(true);
+      try {
+        el.setPointerCapture(state.pointerId);
+      } catch {
+        // Ignore capture failure on synthetic events
+      }
+    }
+
+    if (state.moved) {
+      el.scrollLeft = state.startScrollLeft - dx;
+    }
+  };
+
+  const finishPointerDrag = (e: PointerEvent<HTMLDivElement>) => {
+    const state = pointerStateRef.current;
+    if (!state.active) return;
+    const el = scrollerRef.current;
+
+    if (state.moved) {
+      suppressClickRef.current = true;
+      window.setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 120);
+      if (el) {
+        try {
+          if (el.hasPointerCapture(e.pointerId)) {
+            el.releasePointerCapture(e.pointerId);
+          }
+        } catch {
+          // Ignore
+        }
+      }
+    }
+
+    pointerStateRef.current.active = false;
+    pointerStateRef.current.moved = false;
+    setIsDragging(false);
+  };
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      scrollStep(uiConfig.scrollDirection === 'rtl' ? 'forward' : 'backward');
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      scrollStep(uiConfig.scrollDirection === 'rtl' ? 'backward' : 'forward');
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      el.scrollTo({ left: 0, behavior: 'smooth' });
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      const maxScrollPx = Math.max(0, el.scrollWidth - el.clientWidth);
+      el.scrollTo({
+        left: uiConfig.scrollDirection === 'rtl' ? -maxScrollPx : maxScrollPx,
+        behavior: 'smooth',
+      });
+    }
+  };
+
+  if (!uiConfig.enabled && !isPreviewMode) {
+    return null;
+  }
+
   if (!items || items.length === 0) {
     return null;
   }
 
-  const displayedItems = items.slice(0, visibleCount);
-  const hasMore = items.length > displayedItems.length;
+  const aspectRatioCss = resolveAspectRatioCssValue(uiConfig.aspectRatio);
+  const imgSpec = resolveImageSlotForCarouselCard(uiConfig.aspectRatio, layout.cardWidthPx);
+  const showHeaderBar = uiConfig.showTitle || uiConfig.showViewAllButton;
 
   return (
     <section
       aria-label="شاهدته مؤخراً"
-      className="mx-auto max-w-[1440px] px-3.5 sm:px-6 lg:px-8 space-y-3.5 sm:space-y-4"
+      className="mx-auto max-w-[1440px] px-3.5 sm:px-6 lg:px-8 space-y-3 sm:space-y-4 overflow-hidden"
     >
       {/* Header Row */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2.5 min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <History className="w-5 h-5 text-[#E50914] shrink-0" />
-            <h2
-              style={{ fontSize: 'var(--rtv-section-title-size, 22px)' }}
-              className="font-display font-extrabold text-white leading-snug truncate"
-            >
-              شاهدته مؤخراً
-            </h2>
-            <span className="font-latin rounded-lg bg-white/[0.06] border border-white/10 px-2 py-0.5 text-[11px] font-bold text-[#b7c9ef] tabular-nums">
-              {items.length}
-            </span>
+      {showHeaderBar && (
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+            {uiConfig.showTitle && (
+              <div className="flex items-center gap-2 min-w-0">
+                <History className="w-5 h-5 text-[#E50914] shrink-0" />
+                <h2
+                  style={{ fontSize: 'var(--rtv-section-title-size, 22px)' }}
+                  className="font-display font-extrabold text-white leading-snug truncate"
+                >
+                  شاهدته مؤخراً
+                </h2>
+                <span className="font-latin rounded-lg bg-white/[0.06] border border-white/10 px-2 py-0.5 text-[11px] font-bold text-[#b7c9ef] tabular-nums">
+                  {items.length}
+                </span>
+              </div>
+            )}
+
+            {!isSignedIn && uiConfig.showTitle && (
+              <span className="inline-flex items-center gap-1.5 rounded-lg bg-[#f9c400]/10 border border-[#f9c400]/25 px-2.5 py-1 text-[10.5px] font-bold text-[#fde68a]">
+                <Clock className="w-3 h-3 text-[#f9c400] shrink-0" />
+                <span>محفوظ محلياً على هذا الجهاز — سجّل الدخول لمزامنته</span>
+              </span>
+            )}
           </div>
 
-          {!isSignedIn && (
-            <span className="inline-flex items-center gap-1.5 rounded-lg bg-[#f9c400]/10 border border-[#f9c400]/25 px-2.5 py-1 text-[10.5px] font-bold text-[#fde68a]">
-              <Clock className="w-3 h-3 text-[#f9c400] shrink-0" />
-              <span>محفوظ محلياً على هذا الجهاز — سجّل الدخول لمزامنته</span>
-            </span>
-          )}
-        </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {uiConfig.showArrows && (
+              <div className="hidden sm:flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => scrollStep('backward')}
+                  disabled={!canScrollBackward}
+                  aria-label="السابق في شاهدته مؤخراً"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#181818] hover:bg-[#E50914] disabled:opacity-35 disabled:hover:bg-[#181818] border border-white/[0.08] text-white transition-colors cursor-pointer"
+                >
+                  {uiConfig.scrollDirection === 'rtl' ? (
+                    <ChevronRight className="w-4 h-4" />
+                  ) : (
+                    <ChevronLeft className="w-4 h-4" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => scrollStep('forward')}
+                  disabled={!canScrollForward}
+                  aria-label="التالي في شاهدته مؤخراً"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#181818] hover:bg-[#E50914] disabled:opacity-35 disabled:hover:bg-[#181818] border border-white/[0.08] text-white transition-colors cursor-pointer"
+                >
+                  {uiConfig.scrollDirection === 'rtl' ? (
+                    <ChevronLeft className="w-4 h-4" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+            )}
 
-        <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => onToggleHideCompleted(!hideCompleted)}
+              className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition-colors cursor-pointer ${
+                hideCompleted
+                  ? 'bg-[#4CAF50]/20 border-[#4CAF50]/50 text-[#4CAF50]'
+                  : 'bg-[#181818] border-white/[0.08] text-[#b7c9ef] hover:text-white'
+              }`}
+            >
+              <EyeOff className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">إخفاء المكتملة</span>
+            </button>
+
+            {uiConfig.showViewAllButton && (
+              <button
+                type="button"
+                onClick={onOpenManager}
+                className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-[#181818] hover:bg-[#E50914] border border-white/[0.08] px-3 sm:px-3.5 py-1.5 text-xs font-bold text-white transition-colors cursor-pointer"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
+                <span>عرض الكل</span>
+                <ChevronLeft className="w-3.5 h-3.5 shrink-0" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Single-Row Horizontal Carousel Track */}
+      <div
+        className="relative group/carousel"
+        onMouseEnter={() => setIsPaused(true)}
+        onMouseLeave={() => setIsPaused(false)}
+        onFocus={() => setIsPaused(true)}
+        onBlur={() => setIsPaused(false)}
+        onTouchStart={() => setIsPaused(true)}
+        onTouchEnd={() => setIsPaused(false)}
+      >
+        {/* Floating Side Arrows (Desktop & TV) */}
+        {uiConfig.showArrows && canScrollBackward && (
           <button
             type="button"
-            onClick={() => onToggleHideCompleted(!hideCompleted)}
-            className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition-colors cursor-pointer ${
-              hideCompleted
-                ? 'bg-[#4CAF50]/20 border-[#4CAF50]/50 text-[#4CAF50]'
-                : 'bg-[#181818] border-white/[0.08] text-[#b7c9ef] hover:text-white'
+            onClick={() => scrollStep('backward')}
+            aria-label="التمرير للخلف"
+            className={`hidden md:flex absolute top-[42%] -translate-y-1/2 z-30 h-11 w-11 items-center justify-center rounded-full bg-black/80 hover:bg-[#E50914] border border-white/15 text-white opacity-0 group-hover/carousel:opacity-100 focus:opacity-100 transition-all cursor-pointer shadow-2xl ${
+              uiConfig.scrollDirection === 'rtl' ? 'right-2' : 'left-2'
             }`}
           >
-            <EyeOff className="w-3.5 h-3.5 shrink-0" />
-            <span className="hidden sm:inline">إخفاء المكتملة</span>
+            {uiConfig.scrollDirection === 'rtl' ? (
+              <ChevronRight className="w-5 h-5" />
+            ) : (
+              <ChevronLeft className="w-5 h-5" />
+            )}
           </button>
+        )}
 
-          <button
-            type="button"
-            onClick={onOpenManager}
-            className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-[#181818] hover:bg-[#E50914] border border-white/[0.08] px-3 sm:px-3.5 py-1.5 text-xs font-bold text-white transition-colors cursor-pointer"
-          >
-            <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
-            <span>إدارة السجل</span>
-            <ChevronLeft className="w-3.5 h-3.5 shrink-0" />
-          </button>
-        </div>
-      </div>
+        <div
+          ref={scrollerRef}
+          dir={uiConfig.scrollDirection}
+          role="region"
+          aria-label="شريط الأعمال المشاهدة مؤخراً"
+          tabIndex={0}
+          onScroll={syncScrollBoundaries}
+          onKeyDown={handleKeyDown}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={finishPointerDrag}
+          onPointerCancel={finishPointerDrag}
+          onClickCapture={(e) => {
+            if (suppressClickRef.current) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }}
+          style={{
+            gap: `${layout.cardGapPx}px`,
+            touchAction: 'pan-y pan-x',
+          }}
+          className={`flex flex-nowrap overflow-x-auto no-scrollbar py-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#E50914]/75 rounded-2xl ${
+            isDragging
+              ? 'cursor-grabbing select-none snap-none'
+              : uiConfig.enableDrag
+                ? 'cursor-grab snap-x snap-mandatory scroll-smooth'
+                : 'snap-x snap-mandatory scroll-smooth'
+          }`}
+        >
+          {displayedItems.map((rec) => {
+            const matchedMedia = catalogById.get(rec.mediaId);
+            const rawImage = imgSpec.preferBackdrop
+              ? matchedMedia?.backdrop_url ||
+                matchedMedia?.backdrop ||
+                rec.backdrop ||
+                matchedMedia?.poster_url ||
+                matchedMedia?.poster ||
+                rec.poster ||
+                FALLBACK_BACKDROP
+              : matchedMedia?.poster_url ||
+                matchedMedia?.poster ||
+                rec.poster ||
+                FALLBACK_POSTER;
 
-      {/* Cards Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
-        {displayedItems.map((rec) => {
-          const matchedMedia = catalogById.get(rec.mediaId);
-          const posterSrc = optimizeTmdbUrl(
-            matchedMedia?.poster_url || matchedMedia?.poster || rec.poster || FALLBACK_POSTER,
-            'w342'
-          );
-          const title = matchedMedia?.title || rec.title;
-          const pct = Math.min(100, Math.max(0, rec.progressPct || 0));
+            const posterSrc = optimizeTmdbUrl(rawImage, imgSpec.tmdbSize);
+            const title = matchedMedia?.title || rec.title;
+            const pct = Math.min(100, Math.max(0, rec.progressPct || 0));
+            const hasMetaFooter =
+              uiConfig.showMediaTitle || uiConfig.showWatchedAt || uiConfig.showEpisodeInfo;
 
-          return (
-            <article
-              key={rec.id}
-              className="group relative flex flex-col rounded-2xl bg-[#181818] border border-white/[0.08] overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:border-white/25 hover:bg-[#202020] shadow-lg"
-            >
-              {/* Poster */}
-              <div
-                onClick={() => onResumeItem(rec, matchedMedia)}
-                className="relative aspect-[2/3] w-full overflow-hidden bg-[#111] cursor-pointer"
+            return (
+              <article
+                key={rec.id}
+                style={{
+                  width: `${layout.cardWidthPx}px`,
+                  minWidth: `${layout.cardWidthPx}px`,
+                  flex: '0 0 auto',
+                }}
+                className="group snap-start relative flex flex-col rounded-2xl bg-[#181818] border border-white/[0.08] overflow-hidden transition-transform duration-300 hover:-translate-y-1 hover:border-white/25 hover:bg-[#202020] shadow-lg"
               >
-                <OptimizedImage
-                  src={posterSrc}
-                  fallbackSrc={FALLBACK_POSTER}
-                  alt={title}
-                  slot="card_grid"
-                  loading="lazy"
-                  className="h-full w-full"
-                  imgClassName="object-cover object-top transition-transform duration-500 group-hover:scale-105"
-                />
+                {/* Fixed-Aspect Media Image (Zero CLS) */}
+                <div
+                  onClick={() => onResumeItem(rec, matchedMedia)}
+                  style={{ aspectRatio: aspectRatioCss }}
+                  className="relative w-full overflow-hidden bg-[#111] cursor-pointer"
+                >
+                  <OptimizedImage
+                    src={posterSrc}
+                    fallbackSrc={imgSpec.preferBackdrop ? FALLBACK_BACKDROP : FALLBACK_POSTER}
+                    alt={title}
+                    slot={imgSpec.slot}
+                    loading="lazy"
+                    className="h-full w-full"
+                    imgClassName="object-cover object-top transition-transform duration-500 group-hover:scale-105 pointer-events-none"
+                  />
 
-                <div className="pointer-events-none absolute inset-0 z-10 bg-gradient-to-t from-[#181818] via-black/15 to-black/50" />
+                  <div className="pointer-events-none absolute inset-0 z-10 bg-gradient-to-t from-[#181818] via-black/15 to-black/45" />
 
-                {/* Top Right Episode or Completion Badge */}
-                <div className="absolute top-2 right-2 z-20 flex flex-col items-end gap-1">
-                  {rec.completed ? (
-                    <span className="inline-flex items-center gap-1 rounded-lg bg-[#4CAF50]/90 px-2 py-0.5 text-[10px] font-black text-white shadow">
-                      <CheckCircle2 className="w-2.5 h-2.5" />
-                      <span>مكتمل</span>
-                    </span>
-                  ) : rec.episodeNumber ? (
-                    <span className="font-latin rounded-lg bg-[#E50914]/90 px-2 py-0.5 text-[10px] font-black text-white shadow">
-                      {rec.seasonNumber ? `S${rec.seasonNumber} · ` : ''}E{rec.episodeNumber}
-                    </span>
-                  ) : (
-                    <span className="font-latin rounded-lg bg-black/75 border border-white/15 px-2 py-0.5 text-[10px] font-bold text-white">
-                      {rec.quality || matchedMedia?.quality || 'HD'}
-                    </span>
+                  {/* Episode / Completion Badge */}
+                  {uiConfig.showEpisodeInfo && (
+                    <div className="absolute top-2 right-2 z-20 flex flex-col items-end gap-1">
+                      {rec.completed ? (
+                        <span className="inline-flex items-center gap-1 rounded-lg bg-[#4CAF50]/90 px-2 py-0.5 text-[10px] font-black text-white shadow">
+                          <CheckCircle2 className="w-2.5 h-2.5" />
+                          <span>مكتمل</span>
+                        </span>
+                      ) : rec.episodeNumber ? (
+                        <span className="font-latin rounded-lg bg-[#E50914]/90 px-2 py-0.5 text-[10px] font-black text-white shadow">
+                          {rec.seasonNumber ? `S${rec.seasonNumber} · ` : ''}E{rec.episodeNumber}
+                        </span>
+                      ) : (
+                        <span className="font-latin rounded-lg bg-black/75 border border-white/15 px-2 py-0.5 text-[10px] font-bold text-white">
+                          {rec.quality || matchedMedia?.quality || 'HD'}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Quick Remove Button */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRemoveItem(rec);
+                    }}
+                    aria-label={`إزالة ${title} من سجل المشاهدة`}
+                    title="إزالة من السجل"
+                    className="absolute top-2 left-2 z-20 inline-flex h-8 w-8 items-center justify-center rounded-lg bg-black/70 border border-white/15 text-white/80 hover:bg-[#D92321] hover:border-[#D92321] hover:text-white opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+
+                  {/* Center Resume Play Icon */}
+                  <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#E50914]/95 text-white shadow-[0_8px_24px_rgba(229,9,20,0.5)] scale-95 sm:scale-90 sm:opacity-0 transition-all duration-200 group-hover:scale-100 group-hover:opacity-100">
+                      <Play className="w-4.5 h-4.5 fill-current mr-[-2px]" />
+                    </div>
+                  </div>
+
+                  {/* Bottom Progress Bar */}
+                  {uiConfig.showProgressBar && (
+                    <div className="absolute inset-x-0 bottom-0 z-20 h-1 bg-white/15">
+                      <div
+                        className={`h-full transition-all duration-300 ${
+                          rec.completed ? 'bg-[#4CAF50]' : 'bg-[#E50914]'
+                        }`}
+                        style={{ width: `${Math.max(pct, 6)}%` }}
+                      />
+                    </div>
                   )}
                 </div>
 
-                {/* Top Left Quick Remove */}
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRemoveItem(rec);
-                  }}
-                  aria-label={`إزالة ${title} من سجل المشاهدة`}
-                  title="إزالة من السجل"
-                  className="absolute top-2 left-2 z-20 inline-flex h-8 w-8 items-center justify-center rounded-lg bg-black/70 border border-white/15 text-white/80 hover:bg-[#D92321] hover:border-[#D92321] hover:text-white opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all cursor-pointer"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                {/* Card Footer */}
+                <div className="flex flex-1 flex-col justify-between gap-2 p-2.5 text-right">
+                  {hasMetaFooter && (
+                    <div
+                      onClick={() => onResumeItem(rec, matchedMedia)}
+                      className="cursor-pointer min-w-0"
+                    >
+                      {uiConfig.showMediaTitle && (
+                        <h3
+                          style={{ fontSize: 'var(--rtv-card-title-size, 13px)' }}
+                          className="font-display font-bold text-white leading-snug line-clamp-1 group-hover:text-[#E50914] transition-colors"
+                        >
+                          {title}
+                        </h3>
+                      )}
+                      {(uiConfig.showEpisodeInfo || uiConfig.showWatchedAt) && (
+                        <div className="mt-1 flex items-center justify-between gap-1 text-[10.5px] font-medium text-[#a3a3a3]">
+                          {uiConfig.showEpisodeInfo ? (
+                            <span className="truncate">
+                              {rec.episodeNumber
+                                ? `الحلقة ${rec.episodeNumber}`
+                                : rec.year || matchedMedia?.year || '2026'}
+                            </span>
+                          ) : (
+                            <span />
+                          )}
+                          {uiConfig.showWatchedAt && (
+                            <span className="shrink-0 text-[#b7c9ef]/80">
+                              {formatRelativeArabicTime(rec.lastWatchedAtMs)}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
-                {/* Center Resume Play Icon */}
-                <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#E50914]/95 text-white shadow-[0_8px_24px_rgba(229,9,20,0.5)] scale-95 sm:scale-90 sm:opacity-0 transition-all duration-200 group-hover:scale-100 group-hover:opacity-100">
-                    <Play className="w-5 h-5 fill-current mr-[-2px]" />
+                  <div className="flex items-center gap-1.5 pt-1 border-t border-white/[0.06]">
+                    <button
+                      type="button"
+                      onClick={() => onResumeItem(rec, matchedMedia)}
+                      className="flex-1 inline-flex items-center justify-center gap-1 rounded-lg bg-[#E50914]/15 hover:bg-[#E50914] border border-[#E50914]/35 py-1.5 text-[11px] font-extrabold text-white transition-colors cursor-pointer"
+                    >
+                      <Play className="w-3 h-3 fill-current" />
+                      <span>{rec.completed ? 'إعادة' : 'متابعة'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onOpenDetails(rec, matchedMedia)}
+                      aria-label={`تفاصيل ${title}`}
+                      title="صفحة التفاصيل"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-white/[0.06] hover:bg-white/15 border border-white/10 text-[#b7c9ef] hover:text-white transition-colors cursor-pointer shrink-0"
+                    >
+                      <Info className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
+              </article>
+            );
+          })}
+        </div>
 
-                {/* Bottom Progress Bar */}
-                <div className="absolute inset-x-0 bottom-0 z-20 h-1 bg-white/15">
-                  <div
-                    className={`h-full transition-all duration-300 ${
-                      rec.completed ? 'bg-[#4CAF50]' : 'bg-[#E50914]'
-                    }`}
-                    style={{ width: `${Math.max(pct, 6)}%` }}
-                  />
-                </div>
-              </div>
-
-              {/* Footer */}
-              <div className="flex flex-1 flex-col justify-between gap-2 p-2.5 text-right">
-                <div
-                  onClick={() => onResumeItem(rec, matchedMedia)}
-                  className="cursor-pointer min-w-0"
-                >
-                  <h3
-                    style={{ fontSize: 'var(--rtv-card-title-size, 13px)' }}
-                    className="font-display font-bold text-white leading-snug line-clamp-1 group-hover:text-[#E50914] transition-colors"
-                  >
-                    {title}
-                  </h3>
-                  <div className="mt-1 flex items-center justify-between gap-1 text-[10.5px] font-medium text-[#a3a3a3]">
-                    <span className="truncate">
-                      {rec.episodeNumber
-                        ? `الحلقة ${rec.episodeNumber}`
-                        : rec.year || matchedMedia?.year || '2026'}
-                    </span>
-                    <span className="shrink-0 text-[#b7c9ef]/80">
-                      {formatRelativeArabicTime(rec.lastWatchedAtMs)}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-1.5 pt-1 border-t border-white/[0.06]">
-                  <button
-                    type="button"
-                    onClick={() => onResumeItem(rec, matchedMedia)}
-                    className="flex-1 inline-flex items-center justify-center gap-1 rounded-lg bg-[#E50914]/15 hover:bg-[#E50914] border border-[#E50914]/35 py-1.5 text-[11px] font-extrabold text-white transition-colors cursor-pointer"
-                  >
-                    <Play className="w-3 h-3 fill-current" />
-                    <span>{rec.completed ? 'إعادة' : 'متابعة'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onOpenDetails(rec, matchedMedia)}
-                    aria-label={`تفاصيل ${title}`}
-                    title="صفحة التفاصيل"
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-white/[0.06] hover:bg-white/15 border border-white/10 text-[#b7c9ef] hover:text-white transition-colors cursor-pointer shrink-0"
-                  >
-                    <Info className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            </article>
-          );
-        })}
-      </div>
-
-      {/* Show More Pagination */}
-      {hasMore && (
-        <div className="flex justify-center pt-1">
+        {/* Floating Forward Arrow */}
+        {uiConfig.showArrows && canScrollForward && (
           <button
             type="button"
-            onClick={() => setVisibleCount((prev) => prev + INITIAL_PAGE_SIZE)}
-            className="inline-flex items-center gap-2 rounded-xl bg-[#181818] hover:bg-[#242424] border border-white/10 px-5 py-2.5 text-xs font-extrabold text-white transition-colors cursor-pointer"
+            onClick={() => scrollStep('forward')}
+            aria-label="التمرير للأمام"
+            className={`hidden md:flex absolute top-[42%] -translate-y-1/2 z-30 h-11 w-11 items-center justify-center rounded-full bg-black/80 hover:bg-[#E50914] border border-white/15 text-white opacity-0 group-hover/carousel:opacity-100 focus:opacity-100 transition-all cursor-pointer shadow-2xl ${
+              uiConfig.scrollDirection === 'rtl' ? 'left-2' : 'right-2'
+            }`}
           >
-            <span>عرض المزيد ({items.length - displayedItems.length})</span>
+            {uiConfig.scrollDirection === 'rtl' ? (
+              <ChevronLeft className="w-5 h-5" />
+            ) : (
+              <ChevronRight className="w-5 h-5" />
+            )}
           </button>
-        </div>
-      )}
+        )}
+      </div>
     </section>
   );
 }

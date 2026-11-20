@@ -11,6 +11,13 @@ import {
   recordRecentlyWatchedPlayback,
   removeRecentlyWatchedEntry,
 } from '../src/lib/recentlyWatched';
+import {
+  CARD_SIZE_PRESET_WIDTHS,
+  DEFAULT_RECENTLY_WATCHED_UI_CONFIG,
+  normalizeRecentlyWatchedUiConfig,
+  resolveRecentlyWatchedLayoutForViewport,
+  sanitizeRecentlyWatchedUiForFirestore,
+} from '../src/lib/recentlyWatchedConfig';
 import type { MediaItem } from '../src/types/media';
 
 function createMockMedia(id: string, title: string, kind: MediaItem['kind'] = 'movie'): MediaItem {
@@ -159,7 +166,96 @@ test('Recently Watched builds deterministic IDs and signed-in listing respects s
   assert.equal(formatRelativeArabicTime(Date.now()), 'منذ لحظات');
 });
 
-test('Opening details page (SingleDetailView) NEVER records into Recently Watched', () => {
+test('Recently Watched sorting supports newest_first, oldest_first, and custom priority order', async () => {
+  await clearAllRecentlyWatchedEntries({ userId: 'guest', isSignedIn: false });
+
+  await recordRecentlyWatchedPlayback({
+    userId: 'guest',
+    isSignedIn: false,
+    media: createMockMedia('item-1', 'أول عمل'),
+    reason: 'start',
+  });
+  await new Promise((r) => setTimeout(r, 6));
+  await recordRecentlyWatchedPlayback({
+    userId: 'guest',
+    isSignedIn: false,
+    media: createMockMedia('item-2', 'ثاني عمل'),
+    reason: 'start',
+  });
+  await new Promise((r) => setTimeout(r, 6));
+  await recordRecentlyWatchedPlayback({
+    userId: 'guest',
+    isSignedIn: false,
+    media: createMockMedia('item-3', 'ثالث عمل'),
+    reason: 'start',
+  });
+
+  const oldest = listRecentlyWatchedItems({
+    userId: 'guest',
+    isSignedIn: false,
+    sortOrder: 'oldest_first',
+  });
+  assert.deepEqual(
+    oldest.map((x) => x.mediaId),
+    ['item-1', 'item-2', 'item-3']
+  );
+
+  const custom = listRecentlyWatchedItems({
+    userId: 'guest',
+    isSignedIn: false,
+    sortOrder: 'custom',
+    customOrderIds: ['item-2', 'item-1'],
+  });
+  assert.deepEqual(
+    custom.map((x) => x.mediaId),
+    ['item-2', 'item-1', 'item-3']
+  );
+
+  await clearAllRecentlyWatchedEntries({ userId: 'guest', isSignedIn: false });
+});
+
+test('RecentlyWatchedUiConfig normalizes presets, clamps values, and resolves per-device overrides', () => {
+  const normalized = normalizeRecentlyWatchedUiConfig({
+    cardSizePreset: 'large',
+    cardGapPx: 99,
+    maxStoredItems: 200,
+    customOrderIds: ['film-1', 'film-1', 'film-2'],
+    deviceMode: 'per_device',
+    deviceSettings: {
+      mobile: { cardWidthPx: 132, cardGapPx: 10, initialVisibleCount: 6 },
+      tablet: { cardWidthPx: 164, cardGapPx: 14, initialVisibleCount: 9 },
+      desktop: { cardWidthPx: 196, cardGapPx: 16, initialVisibleCount: 12 },
+      tv: { cardWidthPx: 240, cardGapPx: 22, initialVisibleCount: 15 },
+    },
+  });
+
+  assert.equal(normalized.cardWidthPx, CARD_SIZE_PRESET_WIDTHS.large);
+  assert.equal(normalized.cardGapPx, 40);
+  assert.equal(normalized.maxStoredItems, 60);
+  assert.deepEqual(normalized.customOrderIds, ['film-1', 'film-2']);
+
+  assert.equal(resolveRecentlyWatchedLayoutForViewport(normalized, 375).cardWidthPx, 132);
+  assert.equal(resolveRecentlyWatchedLayoutForViewport(normalized, 800).cardWidthPx, 164);
+  assert.equal(resolveRecentlyWatchedLayoutForViewport(normalized, 1280).cardWidthPx, 196);
+  assert.equal(resolveRecentlyWatchedLayoutForViewport(normalized, 1920).cardWidthPx, 240);
+
+  const sanitized = sanitizeRecentlyWatchedUiForFirestore(DEFAULT_RECENTLY_WATCHED_UI_CONFIG);
+  assert.equal(Object.keys(sanitized).length, 27);
+});
+
+test('RecentlyWatchedSection renders strictly as single-row horizontal carousel with lazy loading & firestore rules', () => {
+  const sectionPath = path.resolve(process.cwd(), 'src/components/RecentlyWatchedSection.tsx');
+  const sectionSource = fs.readFileSync(sectionPath, 'utf8');
+  assert.equal(sectionSource.includes('flex-nowrap overflow-x-auto'), true);
+  assert.equal(sectionSource.includes('grid-cols-'), false);
+  assert.equal(sectionSource.includes('loading="lazy"'), true);
+
+  const rulesPath = path.resolve(process.cwd(), 'firestore.rules');
+  const rulesSource = fs.readFileSync(rulesPath, 'utf8');
+  assert.equal(rulesSource.includes('match /settings/recently_watched_ui'), true);
+  assert.equal(rulesSource.includes('isValidImagePlaceholderSlotMap'), true);
+  assert.equal(rulesSource.includes('isHexColorString'), false);
+
   const detailPath = path.resolve(process.cwd(), 'src/components/SingleDetailView.tsx');
   const detailSource = fs.readFileSync(detailPath, 'utf8');
   assert.equal(detailSource.includes('recordRecentlyWatchedPlayback'), false);
@@ -168,3 +264,4 @@ test('Opening details page (SingleDetailView) NEVER records into Recently Watche
   const playerSource = fs.readFileSync(playerPath, 'utf8');
   assert.equal(playerSource.includes('recordRecentlyWatchedPlayback'), true);
 });
+

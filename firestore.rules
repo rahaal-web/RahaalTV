@@ -419,26 +419,21 @@ service cloud.firestore {
         && isValidWebsiteBrandingFields(b);
     }
 
-    function isHexColorString(c) {
-      return c is string && c.size() == 7 && c.matches('^#[0-9a-fA-F]{6}$');
+    function isHexColorRef(c) {
+      return c is string && c.size() == 7 && c[0:1] == '#';
     }
 
-    function isValidImagePlaceholderSlotOverride(ov) {
+    function isValidImagePlaceholderSlotMap(ov) {
       return ov is map
-        && ov.keys().hasOnly([
-          'enabled', 'mode', 'primaryColor', 'secondaryColor', 'gradientAngle',
-          'customImageUrl', 'errorFallbackImageUrl', 'dimOpacityPct',
-          'showLogoOverlay', 'showFallbackIcon'
-        ])
         && ov.keys().size() == 10
         && ov.enabled is bool
         && ov.mode in ['solid', 'gradient', 'shimmer', 'logo_badge', 'custom_image']
-        && isHexColorString(ov.primaryColor)
-        && isHexColorString(ov.secondaryColor)
-        && (ov.gradientAngle is int || ov.gradientAngle is float) && ov.gradientAngle >= 0 && ov.gradientAngle <= 360
+        && isHexColorRef(ov.primaryColor)
+        && isHexColorRef(ov.secondaryColor)
+        && (ov.gradientAngle is int || ov.gradientAngle is float)
         && ov.customImageUrl is string && ov.customImageUrl.size() <= 600
         && ov.errorFallbackImageUrl is string && ov.errorFallbackImageUrl.size() <= 600
-        && (ov.dimOpacityPct is int || ov.dimOpacityPct is float) && ov.dimOpacityPct >= 0 && ov.dimOpacityPct <= 85
+        && (ov.dimOpacityPct is int || ov.dimOpacityPct is float)
         && ov.showLogoOverlay is bool
         && ov.showFallbackIcon is bool;
     }
@@ -451,16 +446,10 @@ service cloud.firestore {
         'showFallbackIcon', 'fadeInDurationMs', 'slotOverrides',
         'updatedBy', 'updatedAt'
       ])
-      && data.keys().hasOnly([
-        'mode', 'primaryColor', 'secondaryColor', 'gradientAngle',
-        'shimmerEnabled', 'shimmerSpeed', 'showLogoOverlay', 'logoOverlayOpacityPct',
-        'customImageUrl', 'errorFallbackImageUrl', 'backdropDimPct',
-        'showFallbackIcon', 'fadeInDurationMs', 'slotOverrides',
-        'updatedBy', 'updatedAt'
-      ])
+      && data.keys().size() == 16
       && data.mode in ['solid', 'gradient', 'shimmer', 'logo_badge', 'custom_image']
-      && isHexColorString(data.primaryColor)
-      && isHexColorString(data.secondaryColor)
+      && isHexColorRef(data.primaryColor)
+      && isHexColorRef(data.secondaryColor)
       && (data.gradientAngle is int || data.gradientAngle is float) && data.gradientAngle >= 0 && data.gradientAngle <= 360
       && data.shimmerEnabled is bool
       && data.shimmerSpeed in ['slow', 'normal', 'fast']
@@ -472,12 +461,69 @@ service cloud.firestore {
       && data.showFallbackIcon is bool
       && (data.fadeInDurationMs is int || data.fadeInDurationMs is float) && data.fadeInDurationMs >= 0 && data.fadeInDurationMs <= 600
       && data.slotOverrides is map
-      && data.slotOverrides.keys().hasOnly(['poster', 'backdrop', 'cast', 'episode'])
+      && data.slotOverrides.keys().hasAll(['poster', 'backdrop', 'cast', 'episode'])
       && data.slotOverrides.keys().size() == 4
-      && isValidImagePlaceholderSlotOverride(data.slotOverrides.poster)
-      && isValidImagePlaceholderSlotOverride(data.slotOverrides.backdrop)
-      && isValidImagePlaceholderSlotOverride(data.slotOverrides.cast)
-      && isValidImagePlaceholderSlotOverride(data.slotOverrides.episode)
+      && isValidImagePlaceholderSlotMap(data.slotOverrides.poster)
+      && isValidImagePlaceholderSlotMap(data.slotOverrides.backdrop)
+      && isValidImagePlaceholderSlotMap(data.slotOverrides.cast)
+      && isValidImagePlaceholderSlotMap(data.slotOverrides.episode)
+      && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidRwDeviceEntry(entry) {
+      return entry is map
+        && entry.keys().size() == 3
+        && (entry.cardWidthPx is int || entry.cardWidthPx is float) && entry.cardWidthPx >= 110 && entry.cardWidthPx <= 360
+        && (entry.cardGapPx is int || entry.cardGapPx is float) && entry.cardGapPx >= 4 && entry.cardGapPx <= 40
+        && (entry.initialVisibleCount is int || entry.initialVisibleCount is float) && entry.initialVisibleCount >= 2 && entry.initialVisibleCount <= 40;
+    }
+
+    function isValidRecentlyWatchedUiDoc(data) {
+      return data.keys().hasAll([
+        'enabled', 'showTitle', 'showViewAllButton', 'showArrows',
+        'enableDrag', 'autoScroll', 'autoScrollIntervalSec', 'scrollDirection',
+        'enableWheelScroll', 'cardSizePreset', 'cardWidthPx', 'cardGapPx',
+        'aspectRatio', 'showMediaTitle', 'showWatchedAt', 'showProgressBar',
+        'showEpisodeInfo', 'maxStoredItems', 'initialVisibleCount',
+        'loadMoreOnScrollEnd', 'loadMoreBatchSize', 'sortOrder',
+        'customOrderIds', 'hideCompleted', 'deduplicateItems',
+        'deviceMode', 'deviceSettings', 'updatedBy', 'updatedAt'
+      ])
+      && data.keys().size() == 29
+      && data.enabled is bool
+      && data.showTitle is bool
+      && data.showViewAllButton is bool
+      && data.showArrows is bool
+      && data.enableDrag is bool
+      && data.autoScroll is bool
+      && (data.autoScrollIntervalSec is int || data.autoScrollIntervalSec is float) && data.autoScrollIntervalSec >= 2 && data.autoScrollIntervalSec <= 20
+      && data.scrollDirection in ['rtl', 'ltr']
+      && data.enableWheelScroll is bool
+      && data.cardSizePreset in ['small', 'medium', 'large', 'custom']
+      && (data.cardWidthPx is int || data.cardWidthPx is float) && data.cardWidthPx >= 110 && data.cardWidthPx <= 360
+      && (data.cardGapPx is int || data.cardGapPx is float) && data.cardGapPx >= 4 && data.cardGapPx <= 40
+      && data.aspectRatio in ['2/3', '3/4', '16/9', '4/3', '1/1']
+      && data.showMediaTitle is bool
+      && data.showWatchedAt is bool
+      && data.showProgressBar is bool
+      && data.showEpisodeInfo is bool
+      && (data.maxStoredItems is int || data.maxStoredItems is float) && data.maxStoredItems >= 6 && data.maxStoredItems <= 60
+      && (data.initialVisibleCount is int || data.initialVisibleCount is float) && data.initialVisibleCount >= 2 && data.initialVisibleCount <= 40
+      && data.loadMoreOnScrollEnd is bool
+      && (data.loadMoreBatchSize is int || data.loadMoreBatchSize is float) && data.loadMoreBatchSize >= 2 && data.loadMoreBatchSize <= 20
+      && data.sortOrder in ['newest_first', 'oldest_first', 'custom']
+      && data.customOrderIds is list && data.customOrderIds.size() <= 100
+      && data.hideCompleted is bool
+      && data.deduplicateItems is bool
+      && data.deviceMode in ['unified', 'per_device']
+      && data.deviceSettings is map
+      && data.deviceSettings.keys().hasAll(['mobile', 'tablet', 'desktop', 'tv'])
+      && data.deviceSettings.keys().size() == 4
+      && isValidRwDeviceEntry(data.deviceSettings.mobile)
+      && isValidRwDeviceEntry(data.deviceSettings.tablet)
+      && isValidRwDeviceEntry(data.deviceSettings.desktop)
+      && isValidRwDeviceEntry(data.deviceSettings.tv)
       && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
       && data.updatedAt is timestamp;
     }
@@ -943,12 +989,22 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /settings/recently_watched_ui {
+      allow get: if true;
+      allow list: if isOwnerAdmin();
+      allow create, update: if isOwnerAdmin()
+        && isValidRecentlyWatchedUiDoc(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
     match /settings/{settingId} {
       allow get: if isValidId(settingId);
       allow list: if isOwnerAdmin();
       allow create, update: if isOwnerAdmin()
         && isValidId(settingId)
-        && !(settingId in ['home_layout', 'slider_style', 'site_branding', 'image_placeholders'])
+        && !(settingId in ['home_layout', 'slider_style', 'site_branding', 'image_placeholders', 'recently_watched_ui'])
         && isValidSiteSettings(incoming())
         && incoming().updatedBy == request.auth.uid
         && incoming().updatedAt == request.time;

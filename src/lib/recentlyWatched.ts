@@ -220,11 +220,20 @@ export function listRecentlyWatchedItems(params: {
   cloudRecords?: RecentlyWatchedRecord[];
   maxItems?: number;
   hideCompleted?: boolean;
+  sortOrder?: 'newest_first' | 'oldest_first' | 'custom';
+  customOrderIds?: string[];
+  deduplicateItems?: boolean;
 }): RecentlyWatchedRecord[] {
   const localMap = loadLocalRecentlyWatchedMap();
+  const dedup = params.deduplicateItems !== false;
   const byMediaId = new Map<string, RecentlyWatchedRecord>();
+  const rawRecords: RecentlyWatchedRecord[] = [];
 
   const ingest = (rec: RecentlyWatchedRecord) => {
+    if (!dedup) {
+      rawRecords.push(rec);
+      return;
+    }
     const key = sanitizeMediaKey(rec.mediaId);
     const prev = byMediaId.get(key);
     if (!prev || (rec.lastWatchedAtMs || 0) >= (prev.lastWatchedAtMs || 0)) {
@@ -250,9 +259,28 @@ export function listRecentlyWatchedItems(params: {
     }
   }
 
-  let list = Array.from(byMediaId.values()).sort(
-    (a, b) => (b.lastWatchedAtMs || 0) - (a.lastWatchedAtMs || 0)
-  );
+  let list = dedup ? Array.from(byMediaId.values()) : rawRecords;
+
+  const sortOrder = params.sortOrder || 'newest_first';
+  if (sortOrder === 'oldest_first') {
+    list.sort((a, b) => (a.lastWatchedAtMs || 0) - (b.lastWatchedAtMs || 0));
+  } else if (sortOrder === 'custom' && Array.isArray(params.customOrderIds) && params.customOrderIds.length > 0) {
+    const rank = new Map<string, number>();
+    params.customOrderIds.forEach((id, idx) => {
+      const clean = sanitizeMediaKey(id);
+      if (!rank.has(clean)) rank.set(clean, idx);
+    });
+    list.sort((a, b) => {
+      const ra = rank.get(sanitizeMediaKey(a.mediaId));
+      const rb = rank.get(sanitizeMediaKey(b.mediaId));
+      if (ra !== undefined && rb !== undefined) return ra - rb;
+      if (ra !== undefined) return -1;
+      if (rb !== undefined) return 1;
+      return (b.lastWatchedAtMs || 0) - (a.lastWatchedAtMs || 0);
+    });
+  } else {
+    list.sort((a, b) => (b.lastWatchedAtMs || 0) - (a.lastWatchedAtMs || 0));
+  }
 
   if (params.hideCompleted) {
     list = list.filter((r) => !r.completed);

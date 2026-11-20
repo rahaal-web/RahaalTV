@@ -435,6 +435,52 @@
         "updatedBy", "updatedAt"
       ]
     },
+    "RecentlyWatchedUiSettings": {
+      "title": "RecentlyWatchedUiSettings",
+      "description": "Global admin-controlled display, card sizing, batch loading, sorting, and per-device layout settings for the Recently Watched horizontal carousel.",
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "showTitle": { "type": "boolean" },
+        "showViewAllButton": { "type": "boolean" },
+        "showArrows": { "type": "boolean" },
+        "enableDrag": { "type": "boolean" },
+        "autoScroll": { "type": "boolean" },
+        "autoScrollIntervalSec": { "type": "number" },
+        "scrollDirection": { "type": "string", "enum": ["rtl", "ltr"] },
+        "enableWheelScroll": { "type": "boolean" },
+        "cardSizePreset": { "type": "string", "enum": ["small", "medium", "large", "custom"] },
+        "cardWidthPx": { "type": "number" },
+        "cardGapPx": { "type": "number" },
+        "aspectRatio": { "type": "string", "enum": ["2/3", "3/4", "16/9", "4/3", "1/1"] },
+        "showMediaTitle": { "type": "boolean" },
+        "showWatchedAt": { "type": "boolean" },
+        "showProgressBar": { "type": "boolean" },
+        "showEpisodeInfo": { "type": "boolean" },
+        "maxStoredItems": { "type": "number" },
+        "initialVisibleCount": { "type": "number" },
+        "loadMoreOnScrollEnd": { "type": "boolean" },
+        "loadMoreBatchSize": { "type": "number" },
+        "sortOrder": { "type": "string", "enum": ["newest_first", "oldest_first", "custom"] },
+        "customOrderIds": { "type": "array", "items": { "type": "string" } },
+        "hideCompleted": { "type": "boolean" },
+        "deduplicateItems": { "type": "boolean" },
+        "deviceMode": { "type": "string", "enum": ["unified", "per_device"] },
+        "deviceSettings": { "type": "object" },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "enabled", "showTitle", "showViewAllButton", "showArrows",
+        "enableDrag", "autoScroll", "autoScrollIntervalSec", "scrollDirection",
+        "enableWheelScroll", "cardSizePreset", "cardWidthPx", "cardGapPx",
+        "aspectRatio", "showMediaTitle", "showWatchedAt", "showProgressBar",
+        "showEpisodeInfo", "maxStoredItems", "initialVisibleCount",
+        "loadMoreOnScrollEnd", "loadMoreBatchSize", "sortOrder",
+        "customOrderIds", "hideCompleted", "deduplicateItems",
+        "deviceMode", "deviceSettings", "updatedBy", "updatedAt"
+      ]
+    },
     "RecentlyWatchedEntry": {
       "title": "RecentlyWatchedEntry",
       "description": "User-scoped playback history entry deduplicated per media item for Recently Watched section.",
@@ -508,6 +554,10 @@
     "/settings/image_placeholders": {
       "schema": { "$ref": "#/entities/ImagePlaceholderSettings" },
       "description": "Dedicated settings document storing global and per-slot image loading placeholders and fallback visuals."
+    },
+    "/settings/recently_watched_ui": {
+      "schema": { "$ref": "#/entities/RecentlyWatchedUiSettings" },
+      "description": "Dedicated settings document storing horizontal carousel configuration and per-device sizing for Recently Watched."
     },
     "/settings/{settingId}": {
       "schema": { "$ref": "#/entities/SiteSettings" },
