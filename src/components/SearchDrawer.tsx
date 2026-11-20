@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Loader2, Search, Star, X } from 'lucide-react';
-import { handlePosterError, matchesCategoryFilter, normalizeArabicText } from '../lib/mediaFilters';
+import { FALLBACK_POSTER, matchesCategoryFilter, normalizeArabicText } from '../lib/mediaFilters';
 import { getPosterUrl } from '../lib/mediaImages';
 import { MediaItem } from '../types/media';
+import { OptimizedImage } from './OptimizedImage';
 
 interface SearchDrawerProps {
   catalog: MediaItem[];
@@ -188,14 +189,14 @@ export function SearchDrawer({
                   }}
                   className="group flex items-center gap-3.5 rounded-2xl bg-[#1a242e]/80 border border-white/[0.07] p-2.5 text-right hover:border-[#D92321]/60 hover:bg-[#1a242e] transition-all cursor-pointer"
                 >
-                  <img
-                    src={getPosterUrl(item)}
+                  <OptimizedImage
+                    src={getPosterUrl(item, 'card_small')}
+                    fallbackSrc={FALLBACK_POSTER}
                     alt={item.title}
+                    slot="card_small"
                     loading="lazy"
-                    decoding="async"
-                    referrerPolicy="no-referrer"
-                    onError={handlePosterError}
-                    className="h-24 w-18 rounded-xl object-cover object-top shrink-0"
+                    className="h-24 w-18 rounded-xl shrink-0"
+                    imgClassName="object-cover object-top"
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1">

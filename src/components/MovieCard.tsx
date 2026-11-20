@@ -1,7 +1,8 @@
 import { Bookmark, Check, Download, Film, Globe, Languages, Play, Star, Tag } from 'lucide-react';
-import { handlePosterError } from '../lib/mediaFilters';
-import { buildPosterSrcSet, getPosterUrl } from '../lib/mediaImages';
+import { FALLBACK_POSTER } from '../lib/mediaFilters';
+import { getPosterUrl } from '../lib/mediaImages';
 import { MediaItem } from '../types/media';
+import { OptimizedImage } from './OptimizedImage';
 
 interface MovieCardProps {
   item: MediaItem;
@@ -9,6 +10,7 @@ interface MovieCardProps {
   isInWatchlist: boolean;
   onToggleWatchlist: (item: MediaItem) => void;
   variant?: 'clean' | 'classic';
+  priority?: boolean;
 }
 
 export function MovieCardSkeleton() {
@@ -29,6 +31,7 @@ export function MovieCard({
   isInWatchlist,
   onToggleWatchlist,
   variant = 'clean',
+  priority = false,
 }: MovieCardProps) {
   const viewerAvg =
     item.communityRating && item.communityRating.count > 0
@@ -39,6 +42,7 @@ export function MovieCard({
     item.categories?.[0] ||
     (item.kind === 'series' ? 'مسلسلات' : item.kind === 'wrestling' ? 'مصارعة حرة' : 'افلام');
   const genresText = item.genres?.length ? item.genres.slice(0, 2).join('، ') : 'دراما';
+  const posterSrc = getPosterUrl(item, 'card_grid');
 
   if (variant === 'classic') {
     return (
@@ -48,20 +52,19 @@ export function MovieCard({
           onClick={() => onSelect(item)}
           className="moov-card-front absolute inset-0 cursor-pointer overflow-hidden rounded-[20px]"
         >
-          <img
-            src={getPosterUrl(item)}
-            srcSet={buildPosterSrcSet(getPosterUrl(item))}
-            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 280px"
+          <OptimizedImage
+            src={posterSrc}
+            fallbackSrc={FALLBACK_POSTER}
             alt={item.title}
-            loading="lazy"
-            decoding="async"
-            referrerPolicy="no-referrer"
-            onError={handlePosterError}
-            className="h-full w-full object-cover object-top transition-transform duration-500 group-hover:scale-105"
+            slot="card_grid"
+            priority={priority}
+            loading={priority ? 'eager' : 'lazy'}
+            className="h-full w-full"
+            imgClassName="object-cover object-top transition-transform duration-500 group-hover:scale-105"
           />
-          <div className="absolute inset-0 bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/35 to-transparent" />
+          <div className="pointer-events-none absolute inset-0 z-10 bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/35 to-transparent" />
 
-          <div className="absolute top-3 left-3 flex flex-col items-start gap-1.5 z-10">
+          <div className="absolute top-3 left-3 flex flex-col items-start gap-1.5 z-20">
             <span className="font-latin rounded-md bg-[#E50914] px-2 py-0.5 text-[11px] font-bold text-white shadow-md">
               {item.year || '2026'}
             </span>
@@ -71,7 +74,7 @@ export function MovieCard({
           </div>
 
           {viewerAvg && (
-            <div className="absolute top-3 right-3 z-10 flex flex-col items-end gap-1">
+            <div className="absolute top-3 right-3 z-20 flex flex-col items-end gap-1">
               <div className="flex items-center gap-1 rounded-md bg-[#4CAF50]/85 px-2 py-0.5 text-[10px] font-extrabold text-white backdrop-blur-sm border border-white/15">
                 <Star className="w-3 h-3 text-[#f9c400] fill-[#f9c400]" />
                 <span dir="ltr" className="font-latin tabular-nums">{viewerAvg}/5</span>
@@ -79,7 +82,7 @@ export function MovieCard({
             </div>
           )}
 
-          <div className="absolute inset-x-0 bottom-0 p-2.5 sm:p-3.5 text-right">
+          <div className="absolute inset-x-0 bottom-0 z-20 p-2.5 sm:p-3.5 text-right">
             <p className="text-[10.5px] sm:text-[11px] font-semibold text-[#a3a3a3] truncate mb-0.5">
               {primaryCat}
             </p>
@@ -200,24 +203,23 @@ export function MovieCard({
         onClick={() => onSelect(item)}
         className="relative aspect-[2/3] w-full overflow-hidden bg-[#121212] cursor-pointer"
       >
-        <img
-          src={getPosterUrl(item)}
-          srcSet={buildPosterSrcSet(getPosterUrl(item))}
-          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 280px"
+        <OptimizedImage
+          src={posterSrc}
+          fallbackSrc={FALLBACK_POSTER}
           alt={item.title}
-          loading="lazy"
-          decoding="async"
-          referrerPolicy="no-referrer"
-          onError={handlePosterError}
-          className="h-full w-full object-cover object-top transition-transform duration-500 ease-out group-hover:scale-105"
+          slot="card_grid"
+          priority={priority}
+          loading={priority ? 'eager' : 'lazy'}
+          className="h-full w-full"
+          imgClassName="object-cover object-top transition-transform duration-500 ease-out group-hover:scale-105"
         />
 
         {/* Measured Contrast Scrim */}
-        <div className="absolute inset-0 bg-gradient-to-t from-[#181818] via-transparent to-black/45 opacity-90" />
+        <div className="pointer-events-none absolute inset-0 z-10 bg-gradient-to-t from-[#181818] via-transparent to-black/45 opacity-90" />
 
         {/* Subtle Top-Right Viewer Rating */}
         {viewerAvg && (
-          <div className="absolute top-2 right-2 sm:top-2.5 sm:right-2.5 z-10 flex flex-col items-end gap-1">
+          <div className="absolute top-2 right-2 sm:top-2.5 sm:right-2.5 z-20 flex flex-col items-end gap-1">
             <div className="inline-flex items-center gap-1 rounded-lg bg-[#0c1821]/85 backdrop-blur-md px-2 py-0.5 text-[10px] font-extrabold text-[#4CAF50] border border-[#4CAF50]/40">
               <Star className="w-2.5 h-2.5 text-[#f9c400] fill-[#f9c400]" />
               <span dir="ltr" className="font-latin tabular-nums">{viewerAvg}/5</span>
@@ -233,7 +235,7 @@ export function MovieCard({
             onToggleWatchlist(item);
           }}
           aria-label={isInWatchlist ? 'إزالة من قائمتي' : 'إضافة إلى قائمتي'}
-          className={`absolute top-2 left-2 sm:top-2.5 sm:left-2.5 z-10 inline-flex h-10 w-10 sm:h-8 sm:w-8 items-center justify-center rounded-xl sm:rounded-lg backdrop-blur-md border transition-all cursor-pointer ${
+          className={`absolute top-2 left-2 sm:top-2.5 sm:left-2.5 z-20 inline-flex h-10 w-10 sm:h-8 sm:w-8 items-center justify-center rounded-xl sm:rounded-lg backdrop-blur-md border transition-all cursor-pointer ${
             isInWatchlist
               ? 'bg-[#E50914] border-[#E50914] text-white opacity-100'
               : 'bg-black/65 border-white/15 text-white/85 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-[#E50914] hover:border-[#E50914] hover:text-white'
@@ -243,7 +245,7 @@ export function MovieCard({
         </button>
 
         {/* Center Hover Play Button */}
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#E50914]/95 text-white shadow-[0_8px_24px_rgba(229,9,20,0.5)] scale-90 opacity-0 transition-all duration-200 group-hover:scale-100 group-hover:opacity-100">
             <Play className="w-5 h-5 fill-current mr-[-2px]" />
           </div>

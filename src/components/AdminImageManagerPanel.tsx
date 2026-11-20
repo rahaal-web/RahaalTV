@@ -22,6 +22,7 @@ import {
 } from '../lib/firebase';
 import { handleBackdropError, handlePosterError } from '../lib/mediaFilters';
 import {
+  optimizeTmdbUrl,
   evaluateImageQuality,
   getBackdropInfo,
   getMediaImageQualityStatus,
@@ -711,8 +712,10 @@ export function AdminImageManagerPanel({
                 <div className="col-span-4 space-y-1.5">
                   <div className="relative aspect-[2/3] w-full overflow-hidden rounded-xl bg-[#181818] border border-white/10">
                     <img
-                      src={posterUrl}
+                      src={optimizeTmdbUrl(posterUrl, 'w342')}
                       alt={item.title}
+                      loading="lazy"
+                      decoding="async"
                       referrerPolicy="no-referrer"
                       onError={handlePosterError}
                       className="h-full w-full object-cover object-top"
@@ -734,8 +737,10 @@ export function AdminImageManagerPanel({
                     {backdropInfo.hasDedicatedBackdrop ? (
                       <>
                         <img
-                          src={backdropInfo.url}
+                          src={optimizeTmdbUrl(backdropInfo.url, 'w780')}
                           alt={`خلفية ${item.title}`}
+                          loading="lazy"
+                          decoding="async"
                           referrerPolicy="no-referrer"
                           onError={handleBackdropError}
                           className="h-full w-full object-cover object-center"
@@ -845,8 +850,10 @@ export function AdminImageManagerPanel({
                   </div>
                   <div className="aspect-[2/3] w-44 mx-auto overflow-hidden rounded-xl bg-black border border-white/15">
                     <img
-                      src={singlePreview.resolved.poster_url || getPosterUrl(singlePreview.item)}
+                      src={optimizeTmdbUrl(singlePreview.resolved.poster_url || getPosterUrl(singlePreview.item, 'card_grid'), 'w342')}
                       alt=""
+                      loading="lazy"
+                      decoding="async"
                       referrerPolicy="no-referrer"
                       className="h-full w-full object-cover object-top"
                     />
@@ -869,8 +876,10 @@ export function AdminImageManagerPanel({
                   <div className="aspect-video w-full overflow-hidden rounded-xl bg-black border border-white/15 flex items-center justify-center">
                     {singlePreview.resolved.backdrop_url ? (
                       <img
-                        src={singlePreview.resolved.backdrop_url}
+                        src={optimizeTmdbUrl(singlePreview.resolved.backdrop_url, 'w780')}
                         alt=""
+                        loading="lazy"
+                        decoding="async"
                         referrerPolicy="no-referrer"
                         className="h-full w-full object-cover object-center"
                       />
@@ -987,14 +996,18 @@ export function AdminImageManagerPanel({
 
                   <div className="flex items-center gap-2 shrink-0">
                     <img
-                      src={cand.resolved.poster_url || cand.beforePoster}
+                      src={optimizeTmdbUrl(cand.resolved.poster_url || cand.beforePoster, 'w185')}
                       alt=""
+                      loading="lazy"
+                      decoding="async"
                       className="h-16 w-11 rounded-lg object-cover object-top border border-white/15"
                     />
                     {cand.resolved.backdrop_url && (
                       <img
-                        src={cand.resolved.backdrop_url}
+                        src={optimizeTmdbUrl(cand.resolved.backdrop_url, 'w300')}
                         alt=""
+                        loading="lazy"
+                        decoding="async"
                         className="h-16 w-28 rounded-lg object-cover object-center border border-[#4CAF50]/50"
                       />
                     )}
@@ -1059,8 +1072,10 @@ export function AdminImageManagerPanel({
                   </label>
                   <div className="aspect-[2/3] w-36 mx-auto overflow-hidden rounded-xl bg-black border border-white/15">
                     <img
-                      src={manualPosterUrl || getPosterUrl(manualModalItem)}
+                      src={optimizeTmdbUrl(manualPosterUrl || getPosterUrl(manualModalItem, 'admin_thumb'), 'w342')}
                       alt=""
+                      loading="lazy"
+                      decoding="async"
                       referrerPolicy="no-referrer"
                       onError={handlePosterError}
                       className="h-full w-full object-cover object-top"
@@ -1103,8 +1118,10 @@ export function AdminImageManagerPanel({
                   <div className="aspect-video w-full overflow-hidden rounded-xl bg-black border border-white/15 flex items-center justify-center">
                     {manualBackdropUrl.trim() ? (
                       <img
-                        src={manualBackdropUrl.trim()}
+                        src={optimizeTmdbUrl(manualBackdropUrl.trim(), 'w780')}
                         alt=""
+                        loading="lazy"
+                        decoding="async"
                         referrerPolicy="no-referrer"
                         onError={handleBackdropError}
                         className="h-full w-full object-cover object-center"

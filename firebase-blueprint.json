@@ -404,6 +404,72 @@
         "siteNameSizePx", "siteNameWeight", "siteNameLetterSpacingPx",
         "faviconMode", "faviconUrl", "updatedBy", "updatedAt"
       ]
+    },
+    "ImagePlaceholderSettings": {
+      "title": "ImagePlaceholderSettings",
+      "description": "Site-wide image loading placeholder and broken fallback customization managed by owner admins.",
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["solid", "gradient", "shimmer", "logo_badge", "custom_image"] },
+        "primaryColor": { "type": "string" },
+        "secondaryColor": { "type": "string" },
+        "gradientAngle": { "type": "number" },
+        "shimmerEnabled": { "type": "boolean" },
+        "shimmerSpeed": { "type": "string", "enum": ["slow", "normal", "fast"] },
+        "showLogoOverlay": { "type": "boolean" },
+        "logoOverlayOpacityPct": { "type": "number" },
+        "customImageUrl": { "type": "string", "maxLength": 600 },
+        "errorFallbackImageUrl": { "type": "string", "maxLength": 600 },
+        "backdropDimPct": { "type": "number" },
+        "showFallbackIcon": { "type": "boolean" },
+        "fadeInDurationMs": { "type": "number" },
+        "slotOverrides": { "type": "object" },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "mode", "primaryColor", "secondaryColor", "gradientAngle",
+        "shimmerEnabled", "shimmerSpeed", "showLogoOverlay", "logoOverlayOpacityPct",
+        "customImageUrl", "errorFallbackImageUrl", "backdropDimPct",
+        "showFallbackIcon", "fadeInDurationMs", "slotOverrides",
+        "updatedBy", "updatedAt"
+      ]
+    },
+    "RecentlyWatchedEntry": {
+      "title": "RecentlyWatchedEntry",
+      "description": "User-scoped playback history entry deduplicated per media item for Recently Watched section.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 3, "maxLength": 260, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "mediaId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "kind": { "type": "string", "enum": ["movie", "series", "tv", "wrestling"] },
+        "poster": { "type": "string", "maxLength": 500 },
+        "backdrop": { "type": "string", "maxLength": 500 },
+        "year": { "type": "string", "maxLength": 10 },
+        "quality": { "type": "string", "maxLength": 40 },
+        "slug": { "type": "string", "maxLength": 128 },
+        "englishTitle": { "type": "string", "maxLength": 200 },
+        "positionSec": { "type": "number" },
+        "durationSec": { "type": "number" },
+        "progressPct": { "type": "number" },
+        "completed": { "type": "boolean" },
+        "seasonNumber": { "type": "number" },
+        "episodeNumber": { "type": "number" },
+        "episodeTitle": { "type": "string", "maxLength": 120 },
+        "lastServerIndex": { "type": "number" },
+        "lastServerUrl": { "type": "string", "maxLength": 600 },
+        "lastWatchedAtMs": { "type": "number" },
+        "createdAtMs": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "userId", "mediaId", "title", "kind", "poster", "backdrop",
+        "year", "quality", "slug", "englishTitle", "positionSec", "durationSec",
+        "progressPct", "completed", "lastWatchedAtMs", "createdAtMs", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -439,9 +505,17 @@
       "schema": { "$ref": "#/entities/SiteBrandingSettings" },
       "description": "Dedicated split document storing website branding and favicon settings."
     },
+    "/settings/image_placeholders": {
+      "schema": { "$ref": "#/entities/ImagePlaceholderSettings" },
+      "description": "Dedicated settings document storing global and per-slot image loading placeholders and fallback visuals."
+    },
     "/settings/{settingId}": {
       "schema": { "$ref": "#/entities/SiteSettings" },
       "description": "Global platform configuration controlled by admins."
+    },
+    "/recently_watched/{entryId}": {
+      "schema": { "$ref": "#/entities/RecentlyWatchedEntry" },
+      "description": "Private user-scoped playback history entries synced for signed-in accounts."
     },
     "/ratings/{ratingId}": {
       "schema": { "$ref": "#/entities/MediaRating" },

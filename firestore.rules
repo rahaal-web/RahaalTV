@@ -419,6 +419,108 @@ service cloud.firestore {
         && isValidWebsiteBrandingFields(b);
     }
 
+    function isValidImagePlaceholderSlotOverride(ov) {
+      return ov is map
+        && ov.keys().hasAll([
+          'enabled', 'mode', 'primaryColor', 'secondaryColor', 'gradientAngle',
+          'customImageUrl', 'errorFallbackImageUrl', 'dimOpacityPct',
+          'showLogoOverlay', 'showFallbackIcon'
+        ])
+        && ov.keys().hasOnly([
+          'enabled', 'mode', 'primaryColor', 'secondaryColor', 'gradientAngle',
+          'customImageUrl', 'errorFallbackImageUrl', 'dimOpacityPct',
+          'showLogoOverlay', 'showFallbackIcon'
+        ])
+        && ov.enabled is bool
+        && ov.mode in ['solid', 'gradient', 'shimmer', 'logo_badge', 'custom_image']
+        && ov.primaryColor is string && ov.primaryColor.size() == 7 && ov.primaryColor.matches('^#[0-9a-fA-F]{6}$')
+        && ov.secondaryColor is string && ov.secondaryColor.size() == 7 && ov.secondaryColor.matches('^#[0-9a-fA-F]{6}$')
+        && (ov.gradientAngle is int || ov.gradientAngle is float) && ov.gradientAngle >= 0 && ov.gradientAngle <= 360
+        && ov.customImageUrl is string && ov.customImageUrl.size() <= 600
+        && ov.errorFallbackImageUrl is string && ov.errorFallbackImageUrl.size() <= 600
+        && (ov.dimOpacityPct is int || ov.dimOpacityPct is float) && ov.dimOpacityPct >= 0 && ov.dimOpacityPct <= 85
+        && ov.showLogoOverlay is bool
+        && ov.showFallbackIcon is bool;
+    }
+
+    function isValidImagePlaceholdersDoc(data) {
+      return data.keys().hasAll([
+        'mode', 'primaryColor', 'secondaryColor', 'gradientAngle',
+        'shimmerEnabled', 'shimmerSpeed', 'showLogoOverlay', 'logoOverlayOpacityPct',
+        'customImageUrl', 'errorFallbackImageUrl', 'backdropDimPct',
+        'showFallbackIcon', 'fadeInDurationMs', 'slotOverrides',
+        'updatedBy', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'mode', 'primaryColor', 'secondaryColor', 'gradientAngle',
+        'shimmerEnabled', 'shimmerSpeed', 'showLogoOverlay', 'logoOverlayOpacityPct',
+        'customImageUrl', 'errorFallbackImageUrl', 'backdropDimPct',
+        'showFallbackIcon', 'fadeInDurationMs', 'slotOverrides',
+        'updatedBy', 'updatedAt'
+      ])
+      && data.mode in ['solid', 'gradient', 'shimmer', 'logo_badge', 'custom_image']
+      && data.primaryColor is string && data.primaryColor.size() == 7 && data.primaryColor.matches('^#[0-9a-fA-F]{6}$')
+      && data.secondaryColor is string && data.secondaryColor.size() == 7 && data.secondaryColor.matches('^#[0-9a-fA-F]{6}$')
+      && (data.gradientAngle is int || data.gradientAngle is float) && data.gradientAngle >= 0 && data.gradientAngle <= 360
+      && data.shimmerEnabled is bool
+      && data.shimmerSpeed in ['slow', 'normal', 'fast']
+      && data.showLogoOverlay is bool
+      && (data.logoOverlayOpacityPct is int || data.logoOverlayOpacityPct is float) && data.logoOverlayOpacityPct >= 5 && data.logoOverlayOpacityPct <= 90
+      && data.customImageUrl is string && data.customImageUrl.size() <= 600
+      && data.errorFallbackImageUrl is string && data.errorFallbackImageUrl.size() <= 600
+      && (data.backdropDimPct is int || data.backdropDimPct is float) && data.backdropDimPct >= 0 && data.backdropDimPct <= 85
+      && data.showFallbackIcon is bool
+      && (data.fadeInDurationMs is int || data.fadeInDurationMs is float) && data.fadeInDurationMs >= 0 && data.fadeInDurationMs <= 600
+      && data.slotOverrides is map
+      && data.slotOverrides.keys().hasAll(['poster', 'backdrop', 'cast', 'episode'])
+      && data.slotOverrides.keys().hasOnly(['poster', 'backdrop', 'cast', 'episode'])
+      && isValidImagePlaceholderSlotOverride(data.slotOverrides.poster)
+      && isValidImagePlaceholderSlotOverride(data.slotOverrides.backdrop)
+      && isValidImagePlaceholderSlotOverride(data.slotOverrides.cast)
+      && isValidImagePlaceholderSlotOverride(data.slotOverrides.episode)
+      && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidRecentlyWatchedDoc(data) {
+      return data.keys().hasAll([
+        'id', 'userId', 'mediaId', 'title', 'kind', 'poster', 'backdrop',
+        'year', 'quality', 'slug', 'englishTitle', 'positionSec', 'durationSec',
+        'progressPct', 'completed', 'lastWatchedAtMs', 'createdAtMs', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'id', 'userId', 'mediaId', 'title', 'kind', 'poster', 'backdrop',
+        'year', 'quality', 'slug', 'englishTitle', 'positionSec', 'durationSec',
+        'progressPct', 'completed', 'lastWatchedAtMs', 'createdAtMs',
+        'seasonNumber', 'episodeNumber', 'episodeTitle',
+        'lastServerIndex', 'lastServerUrl', 'createdAt', 'updatedAt'
+      ])
+      && isValidRatingId(data.id)
+      && isValidId(data.userId)
+      && isValidId(data.mediaId)
+      && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+      && data.kind in ['movie', 'series', 'tv', 'wrestling']
+      && data.poster is string && data.poster.size() <= 500
+      && data.backdrop is string && data.backdrop.size() <= 500
+      && data.year is string && data.year.size() <= 10
+      && data.quality is string && data.quality.size() <= 40
+      && data.slug is string && data.slug.size() <= 128
+      && data.englishTitle is string && data.englishTitle.size() <= 200
+      && (data.positionSec is int || data.positionSec is float) && data.positionSec >= 0
+      && (data.durationSec is int || data.durationSec is float) && data.durationSec >= 0
+      && (data.progressPct is int || data.progressPct is float) && data.progressPct >= 0 && data.progressPct <= 100
+      && data.completed is bool
+      && (data.lastWatchedAtMs is int || data.lastWatchedAtMs is float) && data.lastWatchedAtMs >= 0
+      && (data.createdAtMs is int || data.createdAtMs is float) && data.createdAtMs >= 0
+      && (!('seasonNumber' in data) || (data.seasonNumber is int && data.seasonNumber >= 1 && data.seasonNumber <= 200))
+      && (!('episodeNumber' in data) || (data.episodeNumber is int && data.episodeNumber >= 1 && data.episodeNumber <= 5000))
+      && (!('episodeTitle' in data) || (data.episodeTitle is string && data.episodeTitle.size() <= 120))
+      && (!('lastServerIndex' in data) || (data.lastServerIndex is int && data.lastServerIndex >= 0 && data.lastServerIndex <= 100))
+      && (!('lastServerUrl' in data) || (data.lastServerUrl is string && data.lastServerUrl.size() <= 600))
+      && (!('createdAt' in data) || data.createdAt is timestamp)
+      && data.updatedAt is timestamp;
+    }
+
     function isValidWebsiteBrandingDoc(data) {
       return data.keys().hasAll([
         'logoMode', 'logoUrl', 'logoWidthPx', 'logoHeightPx', 'logoPlacement',
@@ -831,16 +933,56 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /settings/image_placeholders {
+      allow get: if true;
+      allow list: if isOwnerAdmin();
+      allow create, update: if isOwnerAdmin()
+        && isValidImagePlaceholdersDoc(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
     match /settings/{settingId} {
       allow get: if isValidId(settingId);
       allow list: if isOwnerAdmin();
       allow create, update: if isOwnerAdmin()
         && isValidId(settingId)
-        && !(settingId in ['home_layout', 'slider_style', 'site_branding'])
+        && !(settingId in ['home_layout', 'slider_style', 'site_branding', 'image_placeholders'])
         && isValidSiteSettings(incoming())
         && incoming().updatedBy == request.auth.uid
         && incoming().updatedAt == request.time;
       allow delete: if false;
+    }
+
+    match /recently_watched/{entryId} {
+      allow get: if isSignedIn()
+        && isValidRatingId(entryId)
+        && (
+          (resource == null && entryId.size() > request.auth.uid.size() + 2 && entryId[0:request.auth.uid.size() + 2] == request.auth.uid + '__')
+          || (resource != null && existing().userId == request.auth.uid)
+        );
+      allow list: if isSignedIn() && existing().userId == request.auth.uid;
+      allow create: if isSignedIn()
+        && isValidRatingId(entryId)
+        && isValidRecentlyWatchedDoc(incoming())
+        && incoming().id == entryId
+        && incoming().userId == request.auth.uid
+        && entryId == request.auth.uid + '__' + incoming().mediaId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isSignedIn()
+        && isValidRatingId(entryId)
+        && isValidRecentlyWatchedDoc(incoming())
+        && existing().userId == request.auth.uid
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().mediaId == existing().mediaId
+        && (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt)
+        && incoming().updatedAt == request.time;
+      allow delete: if isSignedIn()
+        && isValidRatingId(entryId)
+        && existing().userId == request.auth.uid;
     }
 
     match /ratings/{ratingId} {

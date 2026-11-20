@@ -131,7 +131,11 @@ export function WebsiteBrandingPanel({
         logoUrl: uploaded.url,
         logoMode: draft.logoMode === 'hidden' || draft.logoMode === 'text_only' ? 'image_and_text' : draft.logoMode,
       });
-      onNotify('تم رفع الشعار وتجهيزه للمعاينة — اضغط حفظ الهوية لتثبيته في الموقع.');
+      const savingsNote =
+        uploaded.savedPct && uploaded.savedPct > 0
+          ? ` (تم ضغط الحجم بنسبة ${uploaded.savedPct}%)`
+          : '';
+      onNotify(`تم رفع الشعار وتجهيزه للمعاينة${savingsNote} — اضغط حفظ الهوية لتثبيته في الموقع.`);
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'تعذر رفع الشعار');
     } finally {
@@ -175,7 +179,11 @@ export function WebsiteBrandingPanel({
         faviconUrl: uploaded.url,
         faviconMimeType: uploaded.mimeType,
       });
-      onNotify('تم رفع أيقونة المتصفح (Favicon) — اضغط حفظ الهوية لتحديث المتصفح.');
+      const savingsNote =
+        uploaded.savedPct && uploaded.savedPct > 0
+          ? ` (توفير ${uploaded.savedPct}% من الحجم)`
+          : '';
+      onNotify(`تم رفع أيقونة المتصفح (Favicon)${savingsNote} — اضغط حفظ الهوية لتحديث المتصفح.`);
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'تعذر رفع الأيقونة');
     } finally {

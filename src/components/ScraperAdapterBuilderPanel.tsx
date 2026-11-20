@@ -1891,6 +1891,9 @@ export function ScraperAdapterBuilderPanel({
                   <img
                     src={testResult.extractedPreview.poster}
                     alt={testResult.extractedPreview.title}
+                    loading="lazy"
+                    decoding="async"
+                    referrerPolicy="no-referrer"
                     className="h-48 w-32 rounded-xl object-cover shrink-0 border border-white/10"
                   />
                 ) : (

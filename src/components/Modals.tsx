@@ -11,6 +11,7 @@ import {
   ChevronUp,
   Film,
   Globe,
+  History,
   LayoutDashboard,
   Loader2,
   LogOut,
@@ -71,7 +72,7 @@ import {
   LOAD_TIMEOUT_IFRAME_MS,
   resolveProactiveFilterDecision,
 } from '../lib/serverFailover';
-import { handlePosterError } from '../lib/mediaFilters';
+import { FALLBACK_BACKDROP, FALLBACK_POSTER } from '../lib/mediaFilters';
 import {
   detectClientCapabilities,
   exitAnyFullscreen,
@@ -79,7 +80,8 @@ import {
   requestElementFullscreen,
   safeCopyToClipboard,
 } from '../lib/browserCompat';
-import { getPosterUrl } from '../lib/mediaImages';
+import { getBackdropUrl, getPosterUrl } from '../lib/mediaImages';
+import { PlaybackRecordReason, recordRecentlyWatchedPlayback } from '../lib/recentlyWatched';
 import {
   AdminPrivilegeRole,
   MediaItem,
@@ -90,6 +92,7 @@ import {
   VisitorRequest,
 } from '../types/media';
 import { FooterTopic } from './Footer';
+import { OptimizedImage } from './OptimizedImage';
 
 function useDialogAccessibility(
   active: boolean,
@@ -127,6 +130,7 @@ interface WatchlistModalProps {
   items: MediaItem[];
   onSelectMedia: (item: MediaItem) => void;
   onRemove: (item: MediaItem) => void;
+  onOpenWatchHistory?: () => void;
 }
 
 export function WatchlistModal({
@@ -135,6 +139,7 @@ export function WatchlistModal({
   items,
   onSelectMedia,
   onRemove,
+  onOpenWatchHistory,
 }: WatchlistModalProps) {
   useDialogAccessibility(isOpen, onClose);
   if (!isOpen) return null;
@@ -156,14 +161,29 @@ export function WatchlistModal({
               قائمتي للمشاهدة لاحقًا ({items.length})
             </h2>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-10 w-10 sm:h-9 sm:w-9 items-center justify-center rounded-xl bg-white/5 text-white hover:bg-[#D92321] cursor-pointer shrink-0"
-            aria-label="إغلاق قائمتي"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {onOpenWatchHistory && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenWatchHistory();
+                }}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-white/[0.06] hover:bg-[#E50914] border border-white/10 px-2.5 py-1.5 text-[11px] font-bold text-white transition-colors cursor-pointer"
+              >
+                <History className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">سجل المشاهدة</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-10 w-10 sm:h-9 sm:w-9 items-center justify-center rounded-xl bg-white/5 text-white hover:bg-[#D92321] cursor-pointer shrink-0"
+              aria-label="إغلاق قائمتي"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         <div className="max-h-[72vh] sm:max-h-[65vh] overflow-y-auto p-3.5 sm:p-5">
@@ -190,14 +210,14 @@ export function WatchlistModal({
                     }}
                     className="flex items-center gap-3 sm:gap-3.5 text-right flex-1 min-w-0 cursor-pointer group"
                   >
-                    <img
-                      src={getPosterUrl(item)}
+                    <OptimizedImage
+                      src={getPosterUrl(item, 'card_small')}
+                      fallbackSrc={FALLBACK_POSTER}
                       alt={item.title}
+                      slot="card_small"
                       loading="lazy"
-                      decoding="async"
-                      referrerPolicy="no-referrer"
-                      onError={handlePosterError}
-                      className="h-18 w-14 rounded-xl object-cover object-top shrink-0"
+                      className="h-18 w-14 rounded-xl shrink-0"
+                      imgClassName="object-cover object-top"
                     />
                     <div className="min-w-0">
                       <h3 className="font-display text-sm font-bold text-white group-hover:text-[#D92321] truncate">
@@ -381,10 +401,15 @@ export function TrailerModal({
             )
           ) : (
             <>
-              <img
-                src={item.backdrop || item.poster}
+              <OptimizedImage
+                src={getBackdropUrl(item, 'backdrop_detail')}
+                fallbackSrc={FALLBACK_BACKDROP}
                 alt={item.title}
-                className={`h-full w-full object-cover transition-transform duration-[6000ms] ${
+                slot="backdrop_detail"
+                priority
+                loading="eager"
+                className="h-full w-full"
+                imgClassName={`object-cover transition-transform duration-[6000ms] ${
                   playing ? 'scale-110' : 'scale-100'
                 }`}
               />
@@ -457,6 +482,9 @@ interface PlayerModalProps {
   onUpdateHostRule?: (rule: PopupShieldHostRule) => void;
   isInWatchlist?: boolean;
   onToggleWatchlist?: (item: MediaItem) => void;
+  userId?: string;
+  isSignedIn?: boolean;
+  onRecentlyWatchedUpdated?: () => void;
   onNotify?: (message: string) => void;
   onClose: () => void;
 }
@@ -549,6 +577,9 @@ export function PlayerModal({
   onUpdateHostRule,
   isInWatchlist = false,
   onToggleWatchlist,
+  userId = 'guest',
+  isSignedIn = false,
+  onRecentlyWatchedUpdated,
   onNotify,
   onClose,
 }: PlayerModalProps) {
@@ -607,6 +638,25 @@ export function PlayerModal({
     lastTime: 0,
     side: null,
   });
+  const startedPlaybackKeyRef = useRef<string | null>(null);
+  const lastLocalHeartbeatMsRef = useRef<number>(0);
+  const latestPlaybackContextRef = useRef<{
+    item: MediaItem | null;
+    seasonIdx: number;
+    episodeNum: number;
+    selectedServer: number;
+    streamUrl: string;
+    userId: string;
+    isSignedIn: boolean;
+  }>({
+    item,
+    seasonIdx: 0,
+    episodeNum: initialEpisode,
+    selectedServer: initialServerIndex,
+    streamUrl: '',
+    userId,
+    isSignedIn,
+  });
 
   useDialogAccessibility(Boolean(item), onClose);
   const canUsePiP = detectClientCapabilities().supportsPictureInPicture;
@@ -661,6 +711,59 @@ export function PlayerModal({
     }
   }, []);
 
+  const flushRecentlyWatched = useCallback(
+    (reason: PlaybackRecordReason) => {
+      const ctx = latestPlaybackContextRef.current;
+      if (!ctx.item) return;
+
+      const attemptKey = `${ctx.item.id}::s${ctx.seasonIdx}::e${ctx.episodeNum}::srv${ctx.selectedServer}`;
+      if (reason === 'start') {
+        if (startedPlaybackKeyRef.current === attemptKey) return;
+        startedPlaybackKeyRef.current = attemptKey;
+      } else if (!startedPlaybackKeyRef.current) {
+        // Never record heartbeat/episode_switch/close if genuine playback never started
+        return;
+      }
+
+      const now = Date.now();
+      if (reason === 'heartbeat' && now - lastLocalHeartbeatMsRef.current < 8000) {
+        return;
+      }
+      lastLocalHeartbeatMsRef.current = now;
+
+      const vid = videoElementRef.current;
+      const positionSec =
+        vid && Number.isFinite(vid.currentTime) ? Math.max(0, vid.currentTime) : 0;
+      const durationSec =
+        vid && Number.isFinite(vid.duration) && vid.duration > 0 ? vid.duration : 0;
+
+      const seasonObj = ctx.item.seasons?.[ctx.seasonIdx];
+      const epObj = (seasonObj?.episodes || []).find((e) => e.number === ctx.episodeNum);
+      const hasEpisodes = Boolean(ctx.item.seasons && ctx.item.seasons.length > 0);
+
+      void recordRecentlyWatchedPlayback({
+        userId: ctx.userId || 'guest',
+        isSignedIn: Boolean(ctx.isSignedIn),
+        media: ctx.item,
+        seasonNumber: hasEpisodes ? seasonObj?.seasonNumber || ctx.seasonIdx + 1 : undefined,
+        episodeNumber: hasEpisodes ? ctx.episodeNum : undefined,
+        episodeTitle: epObj?.title,
+        positionSec,
+        durationSec,
+        lastServerIndex: ctx.selectedServer,
+        lastServerUrl: ctx.streamUrl || undefined,
+        reason,
+      })
+        .then(() => {
+          onRecentlyWatchedUpdated?.();
+        })
+        .catch(() => {
+          // Silent safeguard
+        });
+    },
+    [onRecentlyWatchedUpdated]
+  );
+
   const confirmServerLoadReady = useCallback(
     (serverIdx: number, expectedToken?: number) => {
       if (expectedToken !== undefined && attemptTokenRef.current !== expectedToken) return;
@@ -683,8 +786,16 @@ export function PlayerModal({
         filterMapRef.current = nextMap;
         setFilterMap(nextMap);
       }
+
+      // For embedded iframes, confirmation that frame loaded cleanly without fault means genuine playback session began.
+      // For direct <video> streams, onPlaying handles 'start' once frames actually begin playing.
+      const streamUrl = latestPlaybackContextRef.current.streamUrl || existing?.url || '';
+      const isDirectStream = /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(streamUrl);
+      if (!isDirectStream) {
+        flushRecentlyWatched('start');
+      }
     },
-    [clearLoadTimeout]
+    [clearLoadTimeout, flushRecentlyWatched]
   );
 
   // Reset selections when media item or initial props change
@@ -715,6 +826,8 @@ export function PlayerModal({
     setShieldSessionOverrides({});
     setShowMobileDetails(false);
     setIsMobileCinemaFill(false);
+    startedPlaybackKeyRef.current = null;
+    lastLocalHeartbeatMsRef.current = 0;
   }, [item?.id, initialEpisode, initialServerIndex, clearLoadTimeout]);
 
   // Keep selectedServerRef synchronized
@@ -722,8 +835,16 @@ export function PlayerModal({
     selectedServerRef.current = selectedServer;
   }, [selectedServer]);
 
-  // Cleanup any load timer on unmount
-  useEffect(() => clearLoadTimeout, [clearLoadTimeout]);
+  // Cleanup load timer and flush close watch position on modal close / media switch
+  useEffect(() => {
+    return () => {
+      clearLoadTimeout();
+      if (startedPlaybackKeyRef.current) {
+        flushRecentlyWatched('close');
+        startedPlaybackKeyRef.current = null;
+      }
+    };
+  }, [item?.id, clearLoadTimeout, flushRecentlyWatched]);
 
   // Helper to mark a server faulty at runtime and auto-switch to next untried healthy server in order
   const handleServerFaultFailover = useCallback(
@@ -1010,6 +1131,15 @@ export function PlayerModal({
     filterMap[previewServerIndex]?.directStreamUrl ||
     extractSafeStreamSrc(previewServerObj?.embedCode, previewServerObj?.url);
   const currentActiveStreamSrc = previewEpSrc || previewServerSrc;
+  latestPlaybackContextRef.current = {
+    item,
+    seasonIdx,
+    episodeNum,
+    selectedServer: previewServerIndex,
+    streamUrl: currentActiveStreamSrc || '',
+    userId,
+    isSignedIn,
+  };
   const currentShieldDecision = resolveEffectiveShieldDecision(
     currentActiveStreamSrc,
     effectiveShieldConfig,
@@ -1623,6 +1753,11 @@ export function PlayerModal({
   };
 
   const handleSelectEpisodeOrSeason = (nextSeasonIdx: number, nextEpisodeNum: number) => {
+    if (startedPlaybackKeyRef.current) {
+      flushRecentlyWatched('episode_switch');
+    }
+    startedPlaybackKeyRef.current = null;
+    lastLocalHeartbeatMsRef.current = 0;
     clearLoadTimeout();
     attemptTokenRef.current += 1;
     triedServersRef.current = new Set([0]);
@@ -2257,10 +2392,17 @@ export function PlayerModal({
                               hasStartedPlayingRef.current = true;
                               setAutoplayBlocked(false);
                               confirmServerLoadReady(safeServerIndex, attemptTokenRef.current);
+                              flushRecentlyWatched('start');
+                            }}
+                            onTimeUpdate={() => {
+                              if (hasStartedPlayingRef.current) {
+                                flushRecentlyWatched('heartbeat');
+                              }
                             }}
                             onPause={() => {
                               if (hasStartedPlayingRef.current) {
                                 userPausedRef.current = true;
+                                flushRecentlyWatched('heartbeat');
                               }
                             }}
                             onError={() =>
@@ -2888,6 +3030,7 @@ interface LoginModalProps {
   onLogout: () => Promise<void>;
   onContinueAsGuest?: () => void;
   onExitGuest?: () => void;
+  onOpenWatchHistory?: () => void;
   onOpenAdmin: () => void;
   onNotify?: (msg: string) => void;
 }
@@ -2902,6 +3045,7 @@ export function LoginModal({
   onLogout,
   onContinueAsGuest,
   onExitGuest,
+  onOpenWatchHistory,
   onOpenAdmin,
   onNotify,
 }: LoginModalProps) {
@@ -2999,6 +3143,8 @@ export function LoginModal({
               <img
                 src={firebaseUser.photoURL}
                 alt={firebaseUser.displayName || 'User'}
+                loading="lazy"
+                decoding="async"
                 referrerPolicy="no-referrer"
                 className="mx-auto h-16 w-16 rounded-2xl object-cover border-2 border-[#D92321]"
               />
@@ -3045,6 +3191,20 @@ export function LoginModal({
               </button>
             )}
 
+            {onOpenWatchHistory && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenWatchHistory();
+                }}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-white/[0.06] hover:bg-white/15 border border-white/10 py-3 text-xs font-extrabold text-white transition-colors cursor-pointer"
+              >
+                <History className="w-4 h-4 text-[#E50914]" />
+                <span>سجل المشاهدة (شاهدته مؤخراً)</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => {
@@ -3082,6 +3242,20 @@ export function LoginModal({
               <ShieldCheck className="w-4 h-4" />
               <span>تسجيل الدخول بحساب أو إنشاء حساب</span>
             </button>
+
+            {onOpenWatchHistory && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenWatchHistory();
+                }}
+                className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-white/[0.06] hover:bg-white/15 border border-white/10 py-3 text-xs font-extrabold text-white transition-colors cursor-pointer"
+              >
+                <History className="w-4 h-4 text-[#E50914]" />
+                <span>سجل المشاهدة (شاهدته مؤخراً)</span>
+              </button>
+            )}
 
             {onExitGuest && (
               <button

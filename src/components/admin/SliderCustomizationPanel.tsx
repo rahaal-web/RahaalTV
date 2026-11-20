@@ -22,6 +22,7 @@ import {
   MediaItem,
 } from '../../types/media';
 import { DEFAULT_HOME_CONFIG, normalizeHomeConfig } from '../../lib/homeConfig';
+import { optimizeTmdbUrl } from '../../lib/mediaImages';
 
 interface SliderCustomizationPanelProps {
   homeConfig: HomeLayoutConfig;
@@ -309,7 +310,7 @@ export function SliderCustomizationPanel({
         >
           {activeSlide && (() => {
             const fitMode = draft.heroImageFit || 'cover';
-            const previewImg = activeSlide.backdrop || activeSlide.poster;
+            const previewImg = optimizeTmdbUrl(activeSlide.backdrop || activeSlide.poster, 'w780');
             const blurPx = draft.heroBackdropBlurPx ?? 24;
             const dimOpacity = Math.min(0.85, Math.max(0, (draft.heroBackdropDimPct ?? 45) / 100));
             return (
@@ -317,9 +318,11 @@ export function SliderCustomizationPanel({
                 {fitMode === 'contain_blur' && (
                   <>
                     <img
-                      src={previewImg}
+                      src={optimizeTmdbUrl(activeSlide.backdrop || activeSlide.poster, 'w300')}
                       alt=""
                       aria-hidden="true"
+                      loading="lazy"
+                      decoding="async"
                       style={{ filter: `blur(${blurPx}px)` }}
                       className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center scale-[1.14]"
                     />
@@ -333,6 +336,8 @@ export function SliderCustomizationPanel({
                 <img
                   src={previewImg}
                   alt={activeSlide.title}
+                  loading="lazy"
+                  decoding="async"
                   className={
                     fitMode === 'cover'
                       ? 'absolute inset-0 h-full w-full object-cover object-center opacity-80'

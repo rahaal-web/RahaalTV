@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Wrench, X } from 'lucide-react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, doc, onSnapshot, orderBy, query, where } from 'firebase/firestore';
@@ -22,9 +22,11 @@ import {
   TrailerModal,
   WatchlistModal,
 } from './components/Modals';
+import { RecentlyWatchedSection } from './components/RecentlyWatchedSection';
 import { SearchDrawer } from './components/SearchDrawer';
 import { OfflineIndicator } from './components/PWAControls';
 import { SingleDetailView } from './components/SingleDetailView';
+import { WatchHistoryManagerModal } from './components/WatchHistoryManagerModal';
 import { CATALOG_ITEMS } from './data/catalog';
 import {
   extractHomeBaseFromRecord,
@@ -49,6 +51,19 @@ import {
   saveStoredPopupShieldConfig,
   setLiveShieldConfig,
 } from './lib/popupShield';
+import {
+  loadStoredPlaceholderConfig,
+  normalizeImagePlaceholderConfig,
+  saveStoredPlaceholderConfig,
+} from './lib/placeholderConfig';
+import {
+  clearAllRecentlyWatchedEntries,
+  listRecentlyWatchedItems,
+  loadRecentlyWatchedPrefs,
+  mergeGuestRecentlyWatchedToAccount,
+  removeRecentlyWatchedEntry,
+  saveRecentlyWatchedPrefs,
+} from './lib/recentlyWatched';
 import {
   applyWebsiteFaviconToDocument,
   ensureWebsiteBrandingFontLoaded,
@@ -106,8 +121,11 @@ import {
   CustomFontRecord,
   CustomFontSlot,
   HomeLayoutConfig,
+  ImagePlaceholderConfig,
   MediaItem,
   PopupShieldHostRule,
+  RecentlyWatchedPreferences,
+  RecentlyWatchedRecord,
   SiteSettings,
   UserProfileRecord,
   VisitorRequest,
@@ -214,6 +232,16 @@ export default function App() {
     });
   }, []);
   const [siteSettings, setSiteSettings] = useState<SiteSettings>(DEFAULT_SETTINGS);
+  const [imagePlaceholderConfig, setImagePlaceholderConfig] = useState<ImagePlaceholderConfig>(() =>
+    loadStoredPlaceholderConfig()
+  );
+  const [watchHistoryOpen, setWatchHistoryOpen] = useState(false);
+  const [recentlyWatchedPrefs, setRecentlyWatchedPrefs] = useState<RecentlyWatchedPreferences>(() =>
+    loadRecentlyWatchedPrefs()
+  );
+  const [cloudRecentlyWatched, setCloudRecentlyWatched] = useState<RecentlyWatchedRecord[]>([]);
+  const [recentlyWatchedTick, setRecentlyWatchedTick] = useState(0);
+  const mergedGuestForUidRef = useRef<string | null>(null);
   const [customFonts, setCustomFonts] = useState<
     Partial<Record<CustomFontSlot, CustomFontRecord>>
   >(() => loadStoredCustomFonts());
@@ -353,6 +381,10 @@ export default function App() {
           setWatchlistOpen(false);
           return true;
         }
+        if (watchHistoryOpen) {
+          setWatchHistoryOpen(false);
+          return true;
+        }
         if (loginOpen) {
           setLoginOpen(false);
           return true;
@@ -368,7 +400,7 @@ export default function App() {
         return false;
       },
     });
-  }, [playerState, trailerItem, searchOpen, watchlistOpen, loginOpen, footerTopic, view]);
+  }, [playerState, trailerItem, searchOpen, watchlistOpen, watchHistoryOpen, loginOpen, footerTopic, view]);
 
   useEffect(() => {
     setLiveShieldConfig(siteSettings.popupShield);
@@ -671,6 +703,19 @@ export default function App() {
       }
     );
 
+    const unsubImagePlaceholders = onSnapshot(
+      doc(activeDb, 'settings', 'image_placeholders'),
+      (snap) => {
+        if (!snap.exists()) return;
+        const raw = snap.data() as Partial<ImagePlaceholderConfig>;
+        const synced = saveStoredPlaceholderConfig(normalizeImagePlaceholderConfig(raw));
+        setImagePlaceholderConfig(synced);
+      },
+      () => {
+        // Ignore if settings/image_placeholders rule is not yet deployed
+      }
+    );
+
     const fontsPath = 'fonts';
     const unsubFonts = onSnapshot(
       collection(activeDb, fontsPath),
@@ -746,6 +791,7 @@ export default function App() {
       unsubHomeLayout();
       unsubSliderStyle();
       unsubSiteBranding();
+      unsubImagePlaceholders();
       unsubFonts();
       unsubRatings();
     };
@@ -825,6 +871,8 @@ export default function App() {
         setVisitorRequests([]);
         setUsersList([]);
         setAdminsList([]);
+        setCloudRecentlyWatched([]);
+        mergedGuestForUidRef.current = null;
       }
       setAuthLoading(false);
     });
@@ -916,10 +964,30 @@ export default function App() {
       );
     }
 
+    const unsubRecentlyWatched = onSnapshot(
+      query(collection(activeDb, 'recently_watched'), where('userId', '==', firebaseUser.uid)),
+      (snapshot) => {
+        const list = snapshot.docs.map((d) => d.data() as RecentlyWatchedRecord);
+        setCloudRecentlyWatched(list);
+        if (mergedGuestForUidRef.current !== firebaseUser.uid) {
+          mergedGuestForUidRef.current = firebaseUser.uid;
+          void mergeGuestRecentlyWatchedToAccount(firebaseUser.uid, list).then((merged) => {
+            if (merged.length > 0) {
+              setRecentlyWatchedTick((t) => t + 1);
+            }
+          });
+        }
+      },
+      () => {
+        // Keep local history available even if recently_watched rules are pending deploy
+      }
+    );
+
     return () => {
       unsubRequests();
       unsubUsers();
       unsubAdmins();
+      unsubRecentlyWatched();
     };
   }, [authLoading, firebaseUser, isOwnerAdmin, dbReconnectNonce]);
 
@@ -1092,6 +1160,82 @@ export default function App() {
 
   const watchlistItems = activeCatalog.filter((i) => watchlistIds.includes(i.id));
 
+  const activeWatchUserId = firebaseUser?.uid || 'guest';
+  const recentlyWatchedAllItems = useMemo(
+    () =>
+      listRecentlyWatchedItems({
+        userId: activeWatchUserId,
+        isSignedIn: Boolean(firebaseUser),
+        cloudRecords: cloudRecentlyWatched,
+        maxItems: recentlyWatchedPrefs.maxItems,
+        hideCompleted: false,
+      }),
+    [
+      activeWatchUserId,
+      firebaseUser,
+      cloudRecentlyWatched,
+      recentlyWatchedPrefs.maxItems,
+      recentlyWatchedTick,
+    ]
+  );
+
+  const recentlyWatchedItems = useMemo(
+    () =>
+      recentlyWatchedPrefs.hideCompleted
+        ? recentlyWatchedAllItems.filter((rec) => !rec.completed)
+        : recentlyWatchedAllItems,
+    [recentlyWatchedAllItems, recentlyWatchedPrefs.hideCompleted]
+  );
+
+  const handleUpdateRecentlyWatchedPrefs = (patch: Partial<RecentlyWatchedPreferences>) => {
+    const next = saveRecentlyWatchedPrefs(patch);
+    setRecentlyWatchedPrefs(next);
+  };
+
+  const handleResumeRecentlyWatched = (rec: RecentlyWatchedRecord, matchedMedia?: MediaItem) => {
+    const target = matchedMedia || activeCatalog.find((m) => m.id === rec.mediaId);
+    if (!target) {
+      showToast('لم يعد هذا العمل متوفراً في الكتالوج الحالي');
+      return;
+    }
+    setPlayerState({
+      item: target,
+      episode: rec.episodeNumber || 1,
+      serverIndex: rec.lastServerIndex || 0,
+    });
+  };
+
+  const handleOpenRecentlyWatchedDetails = (
+    rec: RecentlyWatchedRecord,
+    matchedMedia?: MediaItem
+  ) => {
+    const target = matchedMedia || activeCatalog.find((m) => m.id === rec.mediaId);
+    if (!target) {
+      showToast('لم يعد هذا العمل متوفراً في الكتالوج الحالي');
+      return;
+    }
+    handleSelectMedia(target);
+  };
+
+  const handleRemoveRecentlyWatched = async (rec: RecentlyWatchedRecord) => {
+    await removeRecentlyWatchedEntry({
+      mediaId: rec.mediaId,
+      userId: activeWatchUserId,
+      isSignedIn: Boolean(firebaseUser),
+    });
+    setRecentlyWatchedTick((t) => t + 1);
+    showToast('تمت إزالة العمل من سجل المشاهدة');
+  };
+
+  const handleClearAllRecentlyWatched = async () => {
+    await clearAllRecentlyWatchedEntries({
+      userId: activeWatchUserId,
+      isSignedIn: Boolean(firebaseUser),
+    });
+    setRecentlyWatchedTick((t) => t + 1);
+    showToast('تم مسح سجل المشاهدة بالكامل');
+  };
+
   /* ---------------- Dedicated Standalone /admin Page (No Header / No Footer) ---------------- */
   if (view === 'admin') {
     return (
@@ -1131,6 +1275,7 @@ export default function App() {
             usersList={usersList}
             adminsList={adminsList}
             siteSettings={siteSettings}
+            imagePlaceholderConfig={imagePlaceholderConfig}
             customFonts={customFonts}
             onCustomFontsChange={(next) => {
               saveStoredCustomFonts(next);
@@ -1249,6 +1394,7 @@ export default function App() {
         onSelectCategory={(category) => handleApplyFilter({ category })}
         onOpenSearch={() => setSearchOpen(true)}
         onOpenWatchlist={() => setWatchlistOpen(true)}
+        onOpenWatchHistory={() => setWatchHistoryOpen(true)}
         onOpenContact={() => setFooterTopic('requests')}
         onOpenLogin={() => setLoginOpen(true)}
         onOpenAdmin={() => openAdminPage()}
@@ -1284,6 +1430,21 @@ export default function App() {
             onOpenHomeBuilder={() => openAdminPage('home_builder')}
             watchlistIds={watchlistIds}
             onToggleWatchlist={handleToggleWatchlist}
+            recentlyWatchedSection={
+              <RecentlyWatchedSection
+                items={recentlyWatchedItems}
+                catalog={activeCatalog}
+                isSignedIn={Boolean(firebaseUser)}
+                hideCompleted={recentlyWatchedPrefs.hideCompleted}
+                onToggleHideCompleted={(next) =>
+                  handleUpdateRecentlyWatchedPrefs({ hideCompleted: next })
+                }
+                onResumeItem={handleResumeRecentlyWatched}
+                onOpenDetails={handleOpenRecentlyWatchedDetails}
+                onRemoveItem={(rec) => void handleRemoveRecentlyWatched(rec)}
+                onOpenManager={() => setWatchHistoryOpen(true)}
+              />
+            }
           />
         )}
 
@@ -1348,6 +1509,22 @@ export default function App() {
         items={watchlistItems}
         onSelectMedia={handleSelectMedia}
         onRemove={handleToggleWatchlist}
+        onOpenWatchHistory={() => setWatchHistoryOpen(true)}
+      />
+
+      <WatchHistoryManagerModal
+        isOpen={watchHistoryOpen}
+        onClose={() => setWatchHistoryOpen(false)}
+        items={recentlyWatchedAllItems}
+        catalog={activeCatalog}
+        isSignedIn={Boolean(firebaseUser)}
+        prefs={recentlyWatchedPrefs}
+        onUpdatePrefs={handleUpdateRecentlyWatchedPrefs}
+        onResumeItem={handleResumeRecentlyWatched}
+        onOpenDetails={handleOpenRecentlyWatchedDetails}
+        onRemoveItem={handleRemoveRecentlyWatched}
+        onClearAll={handleClearAllRecentlyWatched}
+        onOpenLogin={() => setLoginOpen(true)}
       />
 
       <TrailerModal
@@ -1368,6 +1545,9 @@ export default function App() {
           onUpdateHostRule={handleUpdateHostRule}
           isInWatchlist={watchlistIds.includes(playerState.item.id)}
           onToggleWatchlist={handleToggleWatchlist}
+          userId={activeWatchUserId}
+          isSignedIn={Boolean(firebaseUser)}
+          onRecentlyWatchedUpdated={() => setRecentlyWatchedTick((t) => t + 1)}
           onNotify={showToast}
           onClose={() => setPlayerState(null)}
         />
@@ -1383,6 +1563,7 @@ export default function App() {
         onLogout={handleLogout}
         onContinueAsGuest={handleContinueAsGuest}
         onExitGuest={handleExitGuest}
+        onOpenWatchHistory={() => setWatchHistoryOpen(true)}
         onOpenAdmin={() => openAdminPage()}
         onNotify={showToast}
       />

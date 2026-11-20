@@ -355,9 +355,10 @@ export function AdminContentAuditPanel({
                                 className="mt-1 h-4 w-4 accent-[#D92321] cursor-pointer shrink-0"
                               />
                               <img
-                                src={getPosterUrl(item)}
+                                src={getPosterUrl(item, 'admin_thumb')}
                                 alt={item.title}
                                 loading="lazy"
+                                decoding="async"
                                 className="h-16 w-11 rounded-lg object-cover object-top shrink-0 border border-white/10"
                               />
                               <div className="min-w-0 space-y-1">

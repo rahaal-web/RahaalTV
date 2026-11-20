@@ -1,5 +1,49 @@
+import type { PopupShieldProfileMode } from '../types/media';
+
+export type WatchMode = PopupShieldProfileMode;
+
 export const LOAD_TIMEOUT_DIRECT_MS = 12_000;
 export const LOAD_TIMEOUT_IFRAME_MS = 14_000;
+
+export function buildCompatibleModeChain({
+  primaryMode,
+  isDirectMedia,
+  antiSandboxDetected = false,
+  hasDirectStreamFallback = false,
+}: {
+  primaryMode: WatchMode;
+  isDirectMedia: boolean;
+  antiSandboxDetected?: boolean;
+  hasDirectStreamFallback?: boolean;
+}): WatchMode[] {
+  if (isDirectMedia) {
+    return ['direct_media'];
+  }
+
+  const orderedIframeModes: WatchMode[] = ['strict_sandbox', 'redirect_guard', 'direct_unrestricted'];
+  const allowedIframeModes = antiSandboxDetected
+    ? orderedIframeModes.filter((m) => m !== 'strict_sandbox')
+    : orderedIframeModes;
+
+  const chain: WatchMode[] = [];
+  if (hasDirectStreamFallback && primaryMode === 'direct_media') {
+    chain.push('direct_media');
+  } else if (primaryMode !== 'direct_media' && allowedIframeModes.includes(primaryMode)) {
+    chain.push(primaryMode);
+  }
+
+  for (const mode of allowedIframeModes) {
+    if (!chain.includes(mode)) {
+      chain.push(mode);
+    }
+  }
+
+  if (hasDirectStreamFallback && !chain.includes('direct_media')) {
+    chain.push('direct_media');
+  }
+
+  return chain;
+}
 
 export type AutoplayErrorKind = 'autoplay_blocked' | 'aborted' | 'playback_error';
 

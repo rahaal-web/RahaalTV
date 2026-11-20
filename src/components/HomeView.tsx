@@ -28,12 +28,9 @@ import { normalizeHomeConfig, resolveSectionMediaItems } from '../lib/homeConfig
 import {
   FALLBACK_BACKDROP,
   FALLBACK_POSTER,
-  handleBackdropError,
-  handlePosterError,
   matchesCategoryFilter,
 } from '../lib/mediaFilters';
 import {
-  buildBackdropSrcSet,
   getBackdropInfo,
   getHeroThumbUrl,
   getPosterUrl,
@@ -46,6 +43,7 @@ import {
   SiteSettings,
 } from '../types/media';
 import { MovieCard, MovieCardSkeleton } from './MovieCard';
+import { OptimizedImage } from './OptimizedImage';
 
 interface HomeViewProps {
   catalog: MediaItem[];
@@ -59,6 +57,7 @@ interface HomeViewProps {
   onOpenHomeBuilder?: () => void;
   watchlistIds: string[];
   onToggleWatchlist: (item: MediaItem) => void;
+  recentlyWatchedSection?: ReactNode;
 }
 
 const QUICK_FILTER_TABS: Array<{
@@ -261,6 +260,7 @@ export function HomeView({
   onOpenHomeBuilder,
   watchlistIds,
   onToggleWatchlist,
+  recentlyWatchedSection,
 }: HomeViewProps) {
   const homeConfig = useMemo(
     () => normalizeHomeConfig(siteSettings.homeConfig),
@@ -487,10 +487,7 @@ export function HomeView({
         const heroBgSrc = backdropInfo.hasDedicatedBackdrop
           ? backdropInfo.url
           : FALLBACK_BACKDROP;
-        const heroBgSrcSet = backdropInfo.hasDedicatedBackdrop
-          ? buildBackdropSrcSet(backdropInfo.url)
-          : undefined;
-        const ambientPoster = getPosterUrl(activeHero);
+        const ambientPoster = getPosterUrl(activeHero, 'card_small');
         const imageFitMode = homeConfig.heroImageFit || 'cover';
         const blurPx = homeConfig.heroBackdropBlurPx ?? 24;
         const dimPct = homeConfig.heroBackdropDimPct ?? 45;
@@ -534,15 +531,18 @@ export function HomeView({
               {/* Layer 1: Optional Ambient Scaled + Blurred Background Copy (when heroImageFit === 'contain_blur') */}
               {isAmbientBlurMode && (
                 <>
-                  <img
+                  <OptimizedImage
                     key={`hero-blur-bg-${activeHero.id}`}
                     src={heroBgSrc}
+                    fallbackSrc={FALLBACK_BACKDROP}
                     alt=""
-                    aria-hidden="true"
-                    referrerPolicy="no-referrer"
-                    onError={handleBackdropError}
+                    ariaHidden
+                    slot="backdrop_card"
+                    loading="eager"
+                    disablePlaceholder
                     style={{ filter: `blur(${blurPx}px)` }}
-                    className="pointer-events-none select-none absolute inset-0 h-full w-full object-cover object-center scale-[1.14]"
+                    className="pointer-events-none select-none !absolute inset-0 h-full w-full scale-[1.14]"
+                    imgClassName="object-cover object-center"
                   />
                   <div
                     aria-hidden="true"
@@ -553,31 +553,38 @@ export function HomeView({
               )}
 
               {/* Layer 2: Foreground Hero Image (Contain Default / Cover / Sharp Contain over Blur) */}
-              <img
+              <OptimizedImage
                 key={activeHero.id}
                 src={heroBgSrc}
-                srcSet={heroBgSrcSet}
-                sizes="100vw"
+                fallbackSrc={FALLBACK_BACKDROP}
                 alt={activeHero.title}
-                fetchPriority="high"
-                referrerPolicy="no-referrer"
-                onError={handleBackdropError}
+                slot="slider_backdrop"
+                priority
+                loading="eager"
                 className={
                   isCoverMode
-                    ? 'rtv-hero-cinematic-in absolute inset-0 h-full w-full object-cover object-center transition-opacity duration-700'
-                    : 'rtv-hero-contain-in pointer-events-none absolute inset-0 z-[1] h-full w-full object-contain object-center transition-opacity duration-500'
+                    ? 'rtv-hero-cinematic-in !absolute inset-0 h-full w-full'
+                    : 'rtv-hero-contain-in pointer-events-none !absolute inset-0 z-[1] h-full w-full'
+                }
+                imgClassName={
+                  isCoverMode
+                    ? 'object-cover object-center transition-opacity duration-700'
+                    : 'object-contain object-center transition-opacity duration-500'
                 }
               />
 
               {/* Subtle blurred poster accent overlay in Cover mode when item lacks a dedicated backdrop */}
               {isCoverMode && !backdropInfo.hasDedicatedBackdrop && (
-                <img
+                <OptimizedImage
                   src={ambientPoster}
+                  fallbackSrc={FALLBACK_POSTER}
                   alt=""
-                  aria-hidden="true"
-                  referrerPolicy="no-referrer"
-                  onError={handlePosterError}
-                  className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center opacity-25 blur-2xl scale-110"
+                  ariaHidden
+                  slot="card_small"
+                  loading="lazy"
+                  disablePlaceholder
+                  className="pointer-events-none !absolute inset-0 h-full w-full opacity-25 blur-2xl scale-110"
+                  imgClassName="object-cover object-center"
                 />
               )}
 
@@ -1074,14 +1081,15 @@ export function HomeView({
                                 : 'border-2 border-white/20 opacity-75 hover:opacity-100 hover:border-white/55'
                             }`}
                           >
-                            <img
+                            <OptimizedImage
                               src={getHeroThumbUrl(item)}
+                              fallbackSrc={FALLBACK_POSTER}
                               alt={item.title}
-                              loading="eager"
-                              decoding="async"
-                              referrerPolicy="no-referrer"
-                              onError={handlePosterError}
-                              className="h-full w-full object-cover object-top"
+                              slot="hero_thumb"
+                              priority={isActiveThumb}
+                              loading={isActiveThumb || Math.abs(idx - activeSlideIndex) <= 1 ? 'eager' : 'lazy'}
+                              className="h-full w-full"
+                              imgClassName="object-cover object-top"
                             />
                           </button>
                         );
@@ -1175,13 +1183,14 @@ export function HomeView({
                   onClick={() => onSelectMedia(item)}
                   className="inline-flex items-center gap-2.5 rounded-xl bg-[#202020] border border-white/[0.06] px-3 py-1.5 hover:border-[#E50914] transition-colors shrink-0 cursor-pointer"
                 >
-                  <img
-                    src={item.poster || FALLBACK_POSTER}
+                  <OptimizedImage
+                    src={getPosterUrl(item, 'card_small')}
+                    fallbackSrc={FALLBACK_POSTER}
                     alt={item.title}
+                    slot="card_small"
                     loading="lazy"
-                    referrerPolicy="no-referrer"
-                    onError={handlePosterError}
-                    className="h-9 w-7 rounded object-cover"
+                    className="h-9 w-7 rounded shrink-0"
+                    imgClassName="object-cover"
                   />
                   <div className="text-right">
                     <p className="text-xs font-bold text-white whitespace-nowrap">{item.title}</p>
@@ -1198,6 +1207,9 @@ export function HomeView({
           </div>
         </section>
       )}
+
+      {/* 2B. Independent Recently Watched Section (Hidden automatically when empty) */}
+      {recentlyWatchedSection}
 
       {/* 3. Dynamic Admin-Controlled Content Sections */}
       {enabledSections.map((section) => {

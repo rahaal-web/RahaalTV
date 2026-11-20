@@ -19,6 +19,7 @@ export type AdminTab =
   | 'scraper_adapters'
   | 'crawl_operations'
   | 'website_branding'
+  | 'image_placeholders'
   | 'slider_customization'
   | 'home_builder'
   | 'typography'
@@ -269,6 +270,16 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         description: 'إدارة الشعار، اسم الموقع وخطه ولونه، وأيقونة المتصفح Favicon مع معاينة فورية',
         keywords: ['branding', 'logo', 'favicon', 'identity', 'site name', 'هوية', 'لوجو', 'شعار', 'اسم الموقع', 'ايقونة'],
         iconName: 'BadgeCheck',
+        ownerOnly: true,
+      },
+      {
+        id: 'image_placeholders',
+        groupId: 'design',
+        label: 'إعدادات الصور والخلفيات المؤقتة',
+        shortLabel: 'خلفيات الصور',
+        description: 'تخصيص خلفية التحميل المؤقتة، تأثير Shimmer، الشعار المائي، وصورة بديلة للأخطاء',
+        keywords: ['images', 'placeholder', 'shimmer', 'fallback', 'تجميل', 'صور', 'خلفية مؤقتة', 'بديل'],
+        iconName: 'ImageIcon',
         ownerOnly: true,
       },
       {

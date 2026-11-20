@@ -33,17 +33,13 @@ import {
   sanitizeRatingMediaId,
   submitMediaRatingToFirestore,
 } from '../lib/firebase';
-import { FALLBACK_BACKDROP, FALLBACK_POSTER, handleBackdropError, handlePosterError } from '../lib/mediaFilters';
-import {
-  buildBackdropSrcSet,
-  buildPosterSrcSet,
-  getBackdropUrl,
-  getPosterUrl,
-} from '../lib/mediaImages';
+import { FALLBACK_BACKDROP, FALLBACK_POSTER } from '../lib/mediaFilters';
+import { getBackdropUrl, getPosterUrl } from '../lib/mediaImages';
 import { resolveDisplayShortUrl } from '../lib/permalink';
 import { formatShortServerName } from '../lib/playerTheme';
 import { MediaItem, CatalogFilterState, MediaRatingRecord } from '../types/media';
 import { MovieCard } from './MovieCard';
+import { OptimizedImage } from './OptimizedImage';
 
 interface SingleDetailViewProps {
   catalog: MediaItem[];
@@ -305,17 +301,18 @@ export function SingleDetailView({
     <div className="pb-10 overflow-x-hidden">
       {/* 1. Compact Single Hero Head */}
       <section className="relative overflow-hidden border-b border-white/[0.08] bg-[#0c1821]">
-        <img
-          src={getBackdropUrl(item) || FALLBACK_BACKDROP}
-          srcSet={buildBackdropSrcSet(getBackdropUrl(item))}
-          sizes="100vw"
+        <OptimizedImage
+          src={getBackdropUrl(item, 'backdrop_detail')}
+          fallbackSrc={FALLBACK_BACKDROP}
           alt={item.title}
-          referrerPolicy="no-referrer"
-          onError={handleBackdropError}
-          className="absolute inset-0 h-full w-full object-cover object-center opacity-90"
+          slot="backdrop_detail"
+          priority
+          loading="eager"
+          className="!absolute inset-0 h-full w-full opacity-90"
+          imgClassName="object-cover object-center"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-[#06131c] via-[#06131c]/30 to-black/15" />
-        <div className="absolute inset-0 bg-gradient-to-l from-[#06131c]/70 via-[#06131c]/20 to-transparent" />
+        <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-t from-[#06131c] via-[#06131c]/30 to-black/15" />
+        <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-l from-[#06131c]/70 via-[#06131c]/20 to-transparent" />
 
         <div className="relative z-10 mx-auto max-w-[1440px] px-3.5 sm:px-6 lg:px-8 pt-20 pb-5 md:pt-24 md:pb-7">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
@@ -421,16 +418,17 @@ export function SingleDetailView({
                   {item.quality}
                 </div>
 
-                <img
-                  src={getPosterUrl(item) || FALLBACK_POSTER}
-                  srcSet={buildPosterSrcSet(getPosterUrl(item))}
-                  sizes="(max-width: 768px) 270px, 320px"
+                <OptimizedImage
+                  src={getPosterUrl(item, 'detail_poster')}
+                  fallbackSrc={FALLBACK_POSTER}
                   alt={item.title}
-                  referrerPolicy="no-referrer"
-                  onError={handlePosterError}
-                  className="h-full w-full object-cover object-top"
+                  slot="detail_poster"
+                  priority
+                  loading="eager"
+                  className="h-full w-full"
+                  imgClassName="object-cover object-top"
                 />
-                <div className="absolute inset-0 bg-gradient-to-t from-[#06131c]/85 via-transparent to-black/15" />
+                <div className="pointer-events-none absolute inset-0 z-10 bg-gradient-to-t from-[#06131c]/85 via-transparent to-black/15" />
 
                 {/* Centered Frosted Trailer Button (.single-trailer-button) */}
                 <button
@@ -1234,18 +1232,33 @@ export function SingleDetailView({
                           setSelectedEpisodeNumber(ep.number);
                           onOpenPlayer(item, ep.number, 0);
                         }}
-                        className="group flex items-center justify-between rounded-2xl bg-[#1a242e] border border-white/[0.08] p-4 text-right hover:border-[#D92321] transition-all cursor-pointer"
+                        className="group flex items-center justify-between gap-3 rounded-2xl bg-[#1a242e] border border-white/[0.08] p-3.5 text-right hover:border-[#D92321] transition-all cursor-pointer"
                       >
-                        <div>
-                          <p className="text-sm font-extrabold text-white group-hover:text-[#D92321]">
-                            الحلقة {String(ep.number).padStart(2, '0')}
-                          </p>
-                          <p className="text-[11px] text-[#b7c9ef] mt-0.5">
-                            {ep.duration} • {ep.quality}
-                            {epSrvCount > 0 ? ` • ${epSrvCount} سيرفر` : ''}
-                          </p>
+                        <div className="flex items-center gap-3 min-w-0">
+                          {ep.thumbnailUrl ? (
+                            <div className="aspect-video w-16 shrink-0 rounded-lg overflow-hidden border border-white/10">
+                              <OptimizedImage
+                                src={ep.thumbnailUrl}
+                                fallbackSrc={FALLBACK_BACKDROP}
+                                alt={`الحلقة ${ep.number}`}
+                                slot="episode_thumb"
+                                loading="lazy"
+                                className="h-full w-full"
+                                imgClassName="object-cover"
+                              />
+                            </div>
+                          ) : null}
+                          <div className="min-w-0">
+                            <p className="text-sm font-extrabold text-white group-hover:text-[#D92321] truncate">
+                              الحلقة {String(ep.number).padStart(2, '0')}
+                            </p>
+                            <p className="text-[11px] text-[#b7c9ef] mt-0.5 truncate">
+                              {ep.duration} • {ep.quality}
+                              {epSrvCount > 0 ? ` • ${epSrvCount} سيرفر` : ''}
+                            </p>
+                          </div>
                         </div>
-                        <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#0c1821] text-[#D92321] group-hover:bg-[#D92321] group-hover:text-white transition-colors">
+                        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#0c1821] text-[#D92321] group-hover:bg-[#D92321] group-hover:text-white transition-colors">
                           <Play className="w-4 h-4 fill-current" />
                         </span>
                       </button>
@@ -1276,9 +1289,22 @@ export function SingleDetailView({
                     key={actor.name}
                     className="flex flex-col items-center rounded-2xl bg-[#1a242e]/70 border border-white/[0.07] p-3.5 sm:p-4 text-center"
                   >
-                    <div className="mb-3 flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full bg-gradient-to-br from-[#D92321] to-[#1a242e] border-2 border-white/20 text-base sm:text-lg font-black text-white shadow-lg">
-                      {actor.initials}
-                    </div>
+                    {actor.avatarUrl ? (
+                      <div className="mb-3 h-14 w-14 sm:h-16 sm:w-16 rounded-full overflow-hidden border-2 border-white/20 shadow-lg shrink-0">
+                        <OptimizedImage
+                          src={actor.avatarUrl}
+                          alt={actor.name}
+                          slot="cast_avatar"
+                          loading="lazy"
+                          className="h-full w-full"
+                          imgClassName="object-cover object-top"
+                        />
+                      </div>
+                    ) : (
+                      <div className="mb-3 flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full bg-gradient-to-br from-[#D92321] to-[#1a242e] border-2 border-white/20 text-base sm:text-lg font-black text-white shadow-lg">
+                        {actor.initials}
+                      </div>
+                    )}
                     <p className="text-xs sm:text-sm font-extrabold text-white leading-snug">{actor.name}</p>
                     <p className="text-[11px] sm:text-xs text-[#b7c9ef] mt-1">{actor.role}</p>
                   </div>

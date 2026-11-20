@@ -4,6 +4,7 @@ export interface CastMember {
   name: string;
   role: string;
   initials: string;
+  avatarUrl?: string;
 }
 
 export interface EpisodeItem {
@@ -11,6 +12,7 @@ export interface EpisodeItem {
   title: string;
   duration: string;
   quality: string;
+  thumbnailUrl?: string;
   watchUrl?: string;
   sourceUrl?: string;
   watchSubpageUrl?: string;
@@ -96,6 +98,12 @@ export interface MediaItem {
   communityRating?: {
     average: number;
     count: number;
+  };
+  ageRating?: string;
+  director?: string;
+  reviewSummary?: {
+    average10?: number;
+    count?: number;
   };
   createdAtMs?: number;
   updatedAtMs?: number;
@@ -394,5 +402,204 @@ export interface MediaRatingRecord {
   updatedAtMs?: number;
 }
 
-export * from './scraperAdapter';
+export type NotificationCategory =
+  | 'new_season'
+  | 'new_episode'
+  | 'watchlist_update'
+  | 'favorite_genre'
+  | 'site_update'
+  | 'admin_notice';
 
+export interface NotificationPreferences {
+  new_season: boolean;
+  new_episode: boolean;
+  watchlist_update: boolean;
+  favorite_genre: boolean;
+  site_update: boolean;
+  admin_notice: boolean;
+  browserPushEnabled: boolean;
+}
+
+export interface UserNotificationRecord {
+  id: string;
+  category: NotificationCategory;
+  title: string;
+  body: string;
+  mediaId?: string;
+  readByUids?: string[];
+  createdAtMs?: number;
+}
+
+export type AgeRatingTier = 'all' | '18+' | '16+' | '13+' | 'kids';
+
+export interface UserSubProfile {
+  id: string;
+  userId: string;
+  name: string;
+  avatarEmoji: string;
+  avatarColor: string;
+  isKids: boolean;
+  maxAgeRating: AgeRatingTier;
+  hasPin: boolean;
+  pinHash?: string;
+  pinSalt?: string;
+  watchlistIds: string[];
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface MediaReviewRecord {
+  id?: string;
+  mediaId: string;
+  userId: string;
+  rating10: number;
+  comment?: string;
+  createdAtMs?: number;
+  updatedAtMs?: number;
+}
+
+export interface WatchProgressRecord {
+  id: string;
+  userId: string;
+  profileId: string;
+  mediaId: string;
+  mediaTitle: string;
+  kind: MediaKind;
+  seasonNumber?: number;
+  episodeNumber?: number;
+  positionSec: number;
+  durationSec: number;
+  progressPct: number;
+  completed: boolean;
+  hiddenFromContinueWatching: boolean;
+  lastServerUrl?: string;
+  updatedAtMs: number;
+}
+
+export interface AnalyticsDailyRecord {
+  id: string;
+  playbackStarts: number;
+  playbackCompletes: number;
+  watchlistAdds: number;
+  mediaCounts: Record<string, number>;
+  episodeCounts: Record<string, number>;
+  genreCounts: Record<string, number>;
+  updatedAtMs: number;
+}
+
+export type ServerWatchMode = PopupShieldProfileMode;
+
+export interface ServerHealthRecord {
+  id: string;
+  url: string;
+  host: string;
+  mediaId?: string;
+  mediaTitle?: string;
+  seasonNumber?: number;
+  episodeNumber?: number;
+  serverName: string;
+  status:
+    | 'confirmed_playing'
+    | 'page_available'
+    | 'needs_manual_check'
+    | 'broken'
+    | 'iframe_blocked'
+    | 'unknown_error';
+  connectivityStatus: string;
+  httpStatus: number;
+  canEmbedInIframe: boolean;
+  pageLoadStatus: string;
+  playerInitResult: string;
+  triedModes: ServerWatchMode[];
+  lastSuccessfulMode: ServerWatchMode | '';
+  videoPlaybackConfirmed: boolean;
+  latencyMs: number;
+  lastFailureReason: string;
+  lastCheckedAtMs: number;
+  ttlMs: number;
+  checkedBy?: string;
+}
+
+export type ImageSlotType =
+  | 'card_small'
+  | 'card_grid'
+  | 'detail_poster'
+  | 'slider_backdrop'
+  | 'backdrop_card'
+  | 'backdrop_detail'
+  | 'hero_thumb'
+  | 'episode_thumb'
+  | 'cast_avatar'
+  | 'admin_thumb';
+
+export type ImagePlaceholderMode =
+  | 'solid'
+  | 'gradient'
+  | 'shimmer'
+  | 'logo_badge'
+  | 'custom_image';
+
+export type ImagePlaceholderSlotKey = 'poster' | 'backdrop' | 'cast' | 'episode';
+
+export interface ImagePlaceholderSlotOverride {
+  enabled: boolean;
+  mode: ImagePlaceholderMode;
+  primaryColor: string;
+  secondaryColor: string;
+  gradientAngle: number;
+  customImageUrl: string;
+  errorFallbackImageUrl: string;
+  dimOpacityPct: number;
+  showLogoOverlay: boolean;
+  showFallbackIcon: boolean;
+}
+
+export interface ImagePlaceholderConfig {
+  mode: ImagePlaceholderMode;
+  primaryColor: string;
+  secondaryColor: string;
+  gradientAngle: number;
+  shimmerEnabled: boolean;
+  shimmerSpeed: 'slow' | 'normal' | 'fast';
+  showLogoOverlay: boolean;
+  logoOverlayOpacityPct: number;
+  customImageUrl: string;
+  errorFallbackImageUrl: string;
+  backdropDimPct: number;
+  showFallbackIcon: boolean;
+  fadeInDurationMs: number;
+  slotOverrides: Record<ImagePlaceholderSlotKey, ImagePlaceholderSlotOverride>;
+}
+
+export interface RecentlyWatchedRecord {
+  id: string;
+  userId: string;
+  mediaId: string;
+  tmdbId?: string;
+  slug?: string;
+  title: string;
+  englishTitle?: string;
+  kind: MediaKind;
+  year?: string;
+  quality?: string;
+  poster?: string;
+  backdrop?: string;
+  seasonNumber?: number;
+  episodeNumber?: number;
+  episodeTitle?: string;
+  positionSec: number;
+  durationSec: number;
+  progressPct: number;
+  completed: boolean;
+  lastServerIndex?: number;
+  lastServerUrl?: string;
+  lastWatchedAtMs: number;
+  createdAtMs: number;
+}
+
+export interface RecentlyWatchedPreferences {
+  maxItems: number;
+  hideCompleted: boolean;
+}
+
+export * from './scraperAdapter';

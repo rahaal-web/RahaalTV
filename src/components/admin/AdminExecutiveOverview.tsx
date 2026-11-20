@@ -769,7 +769,7 @@ export function AdminExecutiveOverview({
               className="group flex items-center gap-3 rounded-2xl bg-[#1a242e]/70 hover:bg-[#1a242e] border border-white/[0.06] hover:border-[#D92321]/50 p-2.5 text-right transition-all cursor-pointer"
             >
               <img
-                src={getPosterUrl(item)}
+                src={getPosterUrl(item, 'admin_thumb')}
                 alt={item.title}
                 loading="lazy"
                 decoding="async"

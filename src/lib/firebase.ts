@@ -18,9 +18,15 @@ import {
   Firestore,
   getDoc,
   getDocFromServer,
+  getDocs,
+  increment,
+  limit,
+  orderBy,
+  query,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
   writeBatch,
 } from 'firebase/firestore';
 import {
@@ -33,14 +39,24 @@ import fallbackBackdropImg from '../assets/images/hero_scifi_backdrop_1794813333
 import fallbackPosterImg from '../assets/images/poster_running_man_1794813333683.jpg';
 import {
   AdminPrivilegeRole,
+  AnalyticsDailyRecord,
   CustomFontRecord,
   CustomFontSlot,
+  ImagePlaceholderConfig,
   MediaItem,
+  RecentlyWatchedRecord,
   RequestStatus,
+  ServerHealthRecord,
   SiteSettings,
   StreamServer,
+  UserSubProfile,
   VisitorRequest,
+  WatchProgressRecord,
 } from '../types/media';
+import {
+  normalizeImagePlaceholderConfig,
+  sanitizePlaceholderConfigForFirestore,
+} from './placeholderConfig';
 import { reportClientError } from './clientLogger';
 import { isLikelyNonVideoWebsiteUrl } from './clientScraper';
 import {
@@ -564,10 +580,15 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
     .slice(0, 25)
     .map((c) => {
       const nm = String(c.name).trim().slice(0, 80);
+      const cleanAvatar =
+        typeof c.avatarUrl === 'string' && c.avatarUrl.trim()
+          ? c.avatarUrl.trim().slice(0, 500)
+          : '';
       return {
         name: nm,
         role: String(c.role || 'ممثل').trim().slice(0, 60) || 'ممثل',
         initials: String(c.initials || nm.slice(0, 2).toUpperCase() || 'RT').slice(0, 6),
+        ...(cleanAvatar ? { avatarUrl: cleanAvatar } : {}),
       };
     });
 
@@ -590,11 +611,16 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
           cleanEmbedCode = '';
         }
       }
+      const cleanThumb =
+        typeof ep.thumbnailUrl === 'string' && ep.thumbnailUrl.trim()
+          ? ep.thumbnailUrl.trim().slice(0, 500)
+          : '';
       return {
         number: epNum,
         title: String(ep.title || `الحلقة ${epNum}`).trim().slice(0, 120) || `الحلقة ${epNum}`,
         duration: String(ep.duration || '45 دقيقة').trim().slice(0, 40) || '45 دقيقة',
         quality: epQual,
+        ...(cleanThumb ? { thumbnailUrl: cleanThumb } : {}),
         watchUrl: cleanWatchUrl || epServers[0]?.url || '',
         embedCode: cleanEmbedCode,
         servers: epServers,
@@ -1664,3 +1690,414 @@ export async function deleteMediaRatingFromFirestore(mediaId: string, uid: strin
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
+
+export async function recordAnalyticsEventInFirestore(
+  dayKey: string,
+  event: {
+    kind: 'playback_start' | 'playback_complete' | 'watchlist_add';
+    mediaId: string;
+    episodeKey?: string;
+    genres?: string[];
+  }
+): Promise<void> {
+  const activeDb = getActiveDatabase();
+  const cleanDay = String(dayKey || '').replace(/[^0-9\-]/g, '').slice(0, 20);
+  if (!cleanDay) return;
+  const cleanMedia = sanitizeRatingMediaId(event.mediaId);
+  const docRef = doc(activeDb, 'analytics_daily', cleanDay);
+  try {
+    const updateData: Record<string, unknown> = {
+      id: cleanDay,
+      updatedAtMs: Date.now(),
+      updatedAt: serverTimestamp(),
+    };
+    if (event.kind === 'playback_start') {
+      updateData.playbackStarts = increment(1);
+      updateData[`mediaCounts.${cleanMedia}`] = increment(1);
+      if (event.episodeKey) {
+        const cleanEp = String(event.episodeKey).replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 160);
+        updateData[`episodeCounts.${cleanEp}`] = increment(1);
+      }
+      for (const g of (event.genres || []).slice(0, 4)) {
+        const cleanG = String(g || '').trim().replace(/[.$/[\]#]/g, '_').slice(0, 60);
+        if (cleanG) {
+          updateData[`genreCounts.${cleanG}`] = increment(1);
+        }
+      }
+    } else if (event.kind === 'playback_complete') {
+      updateData.playbackCompletes = increment(1);
+    } else if (event.kind === 'watchlist_add') {
+      updateData.watchlistAdds = increment(1);
+    }
+    await setDoc(docRef, updateData, { merge: true });
+  } catch (error) {
+    if (!isPermissionDeniedError(error)) {
+      reportClientError({
+        source: 'firestore.analytics',
+        level: 'warn',
+        message: `Analytics write failed for ${cleanDay}: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+}
+
+export async function fetchAnalyticsDailyRange(days = 30): Promise<AnalyticsDailyRecord[]> {
+  const activeDb = getActiveDatabase();
+  const safeDays = Math.max(1, Math.min(90, Math.round(days)));
+  try {
+    const q = query(
+      collection(activeDb, 'analytics_daily'),
+      orderBy('id', 'desc'),
+      limit(safeDays)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => {
+      const data = d.data() as Partial<AnalyticsDailyRecord>;
+      return {
+        id: String(data.id || d.id),
+        playbackStarts: Number(data.playbackStarts) || 0,
+        playbackCompletes: Number(data.playbackCompletes) || 0,
+        watchlistAdds: Number(data.watchlistAdds) || 0,
+        mediaCounts: (data.mediaCounts || {}) as Record<string, number>,
+        episodeCounts: (data.episodeCounts || {}) as Record<string, number>,
+        genreCounts: (data.genreCounts || {}) as Record<string, number>,
+        updatedAtMs: Number(data.updatedAtMs) || Date.now(),
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function saveUserSubProfileToFirestore(
+  uid: string,
+  profile: UserSubProfile
+): Promise<void> {
+  const activeDb = getActiveDatabase();
+  const cleanUid = String(uid || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 128);
+  const cleanProfileId = String(profile.id || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 64);
+  if (!cleanUid || !cleanProfileId) return;
+  try {
+    await setDoc(doc(activeDb, 'users', cleanUid, 'profiles', cleanProfileId), {
+      ...profile,
+      id: cleanProfileId,
+      userId: cleanUid,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    if (!isPermissionDeniedError(error)) {
+      handleFirestoreError(error, OperationType.WRITE, `users/${cleanUid}/profiles/${cleanProfileId}`);
+    }
+  }
+}
+
+export async function deleteUserSubProfileFromFirestore(
+  uid: string,
+  profileId: string
+): Promise<void> {
+  const activeDb = getActiveDatabase();
+  const cleanUid = String(uid || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 128);
+  const cleanProfileId = String(profileId || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 64);
+  if (!cleanUid || !cleanProfileId) return;
+  try {
+    await deleteDoc(doc(activeDb, 'users', cleanUid, 'profiles', cleanProfileId));
+  } catch (error) {
+    if (!isPermissionDeniedError(error)) {
+      handleFirestoreError(error, OperationType.DELETE, `users/${cleanUid}/profiles/${cleanProfileId}`);
+    }
+  }
+}
+
+export function buildServerHealthId(url: string): string {
+  const raw = String(url || '').trim();
+  let hash = 2166136261;
+  for (let i = 0; i < raw.length; i += 1) {
+    hash ^= raw.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const hex = (hash >>> 0).toString(16).padStart(8, '0');
+  let host = 'srv';
+  try {
+    host = new URL(raw).hostname.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 48) || 'srv';
+  } catch {
+    host = 'srv';
+  }
+  return `${host}_${hex}`.slice(0, 128);
+}
+
+export async function saveServerHealthRecordToFirestore(
+  record: ServerHealthRecord,
+  uid?: string
+): Promise<void> {
+  const activeDb = getActiveDatabase();
+  const id = record.id || buildServerHealthId(record.url);
+  try {
+    await setDoc(doc(activeDb, 'server_health', id), {
+      ...record,
+      id,
+      ...(uid ? { checkedBy: uid } : {}),
+      updatedAt: serverTimestamp(),
+    });
+  } catch {
+    // Non-fatal: localStorage cache remains authoritative fallback
+  }
+}
+
+export async function bulkSaveServerHealthRecordsToFirestore(
+  records: ServerHealthRecord[],
+  uid?: string
+): Promise<void> {
+  if (!records || records.length === 0) return;
+  const activeDb = getActiveDatabase();
+  try {
+    const batch = writeBatch(activeDb);
+    for (const rec of records.slice(0, 100)) {
+      const id = rec.id || buildServerHealthId(rec.url);
+      batch.set(doc(activeDb, 'server_health', id), {
+        ...rec,
+        id,
+        ...(uid ? { checkedBy: uid } : {}),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    await batch.commit();
+  } catch {
+    // Non-fatal: localStorage cache remains authoritative fallback
+  }
+}
+
+export async function saveWatchProgressToFirestore(
+  record: WatchProgressRecord
+): Promise<void> {
+  const activeDb = getActiveDatabase();
+  const cleanId = String(record.id || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 260);
+  if (!cleanId) return;
+  try {
+    await setDoc(doc(activeDb, 'watch_progress', cleanId), {
+      ...record,
+      id: cleanId,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    if (!isPermissionDeniedError(error)) {
+      reportClientError({
+        source: 'firestore.watch_progress',
+        level: 'warn',
+        message: `Watch progress write failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+}
+
+export async function deleteWatchProgressFromFirestore(progressId: string): Promise<void> {
+  const activeDb = getActiveDatabase();
+  const cleanId = String(progressId || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 260);
+  if (!cleanId) return;
+  try {
+    await deleteDoc(doc(activeDb, 'watch_progress', cleanId));
+  } catch (error) {
+    if (!isPermissionDeniedError(error)) {
+      reportClientError({
+        source: 'firestore.watch_progress',
+        level: 'warn',
+        message: `Watch progress delete failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+}
+
+export async function saveImagePlaceholderConfigToFirestore(
+  cfg: ImagePlaceholderConfig,
+  uid: string
+): Promise<boolean> {
+  const activeDb = getActiveDatabase();
+  const cleanCfg = sanitizePlaceholderConfigForFirestore(normalizeImagePlaceholderConfig(cfg));
+  try {
+    await setDoc(doc(activeDb, 'settings', 'image_placeholders'), {
+      ...cleanCfg,
+      updatedBy: uid,
+      updatedAt: serverTimestamp(),
+    });
+    return true;
+  } catch (error) {
+    if (!isPermissionDeniedError(error)) {
+      handleFirestoreError(error, OperationType.WRITE, 'settings/image_placeholders');
+    }
+    return false;
+  }
+}
+
+function buildRecentlyWatchedDocPayload(record: RecentlyWatchedRecord, includeCreatedAt: boolean) {
+  const cleanId = String(record.id || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 260);
+  const payload: Record<string, unknown> = {
+    id: cleanId,
+    userId: String(record.userId || '').trim().slice(0, 128),
+    mediaId: sanitizeRatingMediaId(record.mediaId),
+    title: String(record.title || '').trim().slice(0, 200) || 'عمل بدون عنوان',
+    kind: (['movie', 'series', 'tv', 'wrestling'] as const).includes(record.kind) ? record.kind : 'movie',
+    poster: String(record.poster || '').trim().slice(0, 500),
+    backdrop: String(record.backdrop || '').trim().slice(0, 500),
+    year: String(record.year || '').trim().slice(0, 10),
+    quality: String(record.quality || '').trim().slice(0, 40),
+    slug: String(record.slug || '').trim().slice(0, 128),
+    englishTitle: String(record.englishTitle || '').trim().slice(0, 200),
+    positionSec: Math.max(0, Math.round(Number(record.positionSec) || 0)),
+    durationSec: Math.max(0, Math.round(Number(record.durationSec) || 0)),
+    progressPct: Math.min(100, Math.max(0, Math.round(Number(record.progressPct) || 0))),
+    completed: Boolean(record.completed),
+    lastWatchedAtMs: Number(record.lastWatchedAtMs) || Date.now(),
+    createdAtMs: Number(record.createdAtMs) || Date.now(),
+    updatedAt: serverTimestamp(),
+  };
+  if (typeof record.seasonNumber === 'number') {
+    payload.seasonNumber = Math.max(1, Math.round(record.seasonNumber));
+  }
+  if (typeof record.episodeNumber === 'number') {
+    payload.episodeNumber = Math.max(1, Math.round(record.episodeNumber));
+  }
+  if (record.episodeTitle) {
+    payload.episodeTitle = String(record.episodeTitle).trim().slice(0, 120);
+  }
+  if (typeof record.lastServerIndex === 'number') {
+    payload.lastServerIndex = Math.max(0, Math.round(record.lastServerIndex));
+  }
+  if (record.lastServerUrl) {
+    payload.lastServerUrl = String(record.lastServerUrl).trim().slice(0, 600);
+  }
+  if (includeCreatedAt) {
+    payload.createdAt = serverTimestamp();
+  }
+  return { cleanId, payload };
+}
+
+export async function saveRecentlyWatchedToFirestore(
+  record: RecentlyWatchedRecord,
+  isNewCandidate = false
+): Promise<boolean> {
+  const activeDb = getActiveDatabase();
+  const cleanId = String(record.id || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 260);
+  if (!cleanId || !record.userId || record.userId === 'guest') return false;
+
+  try {
+    const docRef = doc(activeDb, 'recently_watched', cleanId);
+    let existsOnServer = !isNewCandidate;
+    if (isNewCandidate) {
+      const snap = await getDoc(docRef);
+      existsOnServer = snap.exists();
+    }
+    const { payload } = buildRecentlyWatchedDocPayload(record, !existsOnServer);
+    if (existsOnServer) {
+      await setDoc(docRef, payload, { merge: true });
+    } else {
+      await setDoc(docRef, payload);
+    }
+    return true;
+  } catch (error) {
+    if (!isPermissionDeniedError(error)) {
+      reportClientError({
+        source: 'firestore.recently_watched',
+        level: 'warn',
+        message: `Recently watched write failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+    return false;
+  }
+}
+
+export async function batchMergeRecentlyWatchedToFirestore(
+  records: RecentlyWatchedRecord[]
+): Promise<boolean> {
+  if (!records.length) return true;
+  const activeDb = getActiveDatabase();
+  try {
+    const slice = records.slice(0, 40);
+    const existenceFlags = await Promise.all(
+      slice.map(async (rec) => {
+        const cleanId = String(rec.id || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 260);
+        if (!cleanId || !rec.userId || rec.userId === 'guest') return false;
+        try {
+          const snap = await getDoc(doc(activeDb, 'recently_watched', cleanId));
+          return snap.exists();
+        } catch {
+          return false;
+        }
+      })
+    );
+
+    const batch = writeBatch(activeDb);
+    let ops = 0;
+    slice.forEach((rec, idx) => {
+      const existsOnServer = existenceFlags[idx];
+      const { cleanId, payload } = buildRecentlyWatchedDocPayload(rec, !existsOnServer);
+      if (!cleanId || !rec.userId || rec.userId === 'guest') return;
+      if (existsOnServer) {
+        batch.set(doc(activeDb, 'recently_watched', cleanId), payload, { merge: true });
+      } else {
+        batch.set(doc(activeDb, 'recently_watched', cleanId), payload);
+      }
+      ops += 1;
+    });
+    if (ops > 0) {
+      await batch.commit();
+    }
+    return true;
+  } catch (error) {
+    if (!isPermissionDeniedError(error)) {
+      reportClientError({
+        source: 'firestore.recently_watched.merge',
+        level: 'warn',
+        message: `Recently watched batch merge failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+    return false;
+  }
+}
+
+export async function deleteRecentlyWatchedFromFirestore(entryId: string): Promise<boolean> {
+  const activeDb = getActiveDatabase();
+  const cleanId = String(entryId || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 260);
+  if (!cleanId) return false;
+  try {
+    await deleteDoc(doc(activeDb, 'recently_watched', cleanId));
+    return true;
+  } catch (error) {
+    if (!isPermissionDeniedError(error)) {
+      reportClientError({
+        source: 'firestore.recently_watched.delete',
+        level: 'warn',
+        message: `Recently watched delete failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+    return false;
+  }
+}
+
+export async function clearRecentlyWatchedCollectionForUser(uid: string): Promise<boolean> {
+  const activeDb = getActiveDatabase();
+  const cleanUid = String(uid || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 128);
+  if (!cleanUid) return false;
+  try {
+    const q = query(
+      collection(activeDb, 'recently_watched'),
+      where('userId', '==', cleanUid),
+      limit(100)
+    );
+    const snap = await getDocs(q);
+    if (snap.empty) return true;
+    const batch = writeBatch(activeDb);
+    snap.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+    return true;
+  } catch (error) {
+    if (!isPermissionDeniedError(error)) {
+      reportClientError({
+        source: 'firestore.recently_watched.clear',
+        level: 'warn',
+        message: `Recently watched clear failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+    return false;
+  }
+}
+
+

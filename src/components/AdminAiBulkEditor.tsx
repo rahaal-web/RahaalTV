@@ -834,8 +834,10 @@ export function AdminAiBulkEditor({
                         {idx + 1}
                       </span>
                       <img
-                        src={getPosterUrl(item)}
+                        src={getPosterUrl(item, 'admin_thumb')}
                         alt={item.title}
+                        loading="lazy"
+                        decoding="async"
                         className="h-12 w-9 rounded-lg object-cover object-top bg-[#0c1821] shrink-0"
                       />
                       <div className="min-w-0">

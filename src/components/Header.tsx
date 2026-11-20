@@ -4,6 +4,7 @@ import {
   ChevronDown,
   Clapperboard,
   Film,
+  History,
   Home,
   LayoutDashboard,
   LayoutGrid,
@@ -26,6 +27,7 @@ interface HeaderProps {
   onSelectCategory: (category: string) => void;
   onOpenSearch: () => void;
   onOpenWatchlist: () => void;
+  onOpenWatchHistory?: () => void;
   onOpenContact: () => void;
   onOpenLogin: () => void;
   onOpenAdmin: () => void;
@@ -47,6 +49,7 @@ export function Header({
   onSelectCategory,
   onOpenSearch,
   onOpenWatchlist,
+  onOpenWatchHistory,
   onOpenContact,
   onOpenLogin,
   onOpenAdmin,
@@ -301,6 +304,8 @@ export function Header({
                 <img
                   src={userPhoto}
                   alt={username || 'حسابي'}
+                  loading="eager"
+                  decoding="async"
                   referrerPolicy="no-referrer"
                   className="h-5 w-5 rounded-full object-cover border border-white/40 shrink-0"
                 />
@@ -423,6 +428,20 @@ export function Header({
                 <Tv className="w-4 h-4 text-[#E50914]" />
                 <span>المسلسلات</span>
               </button>
+
+              {onOpenWatchHistory && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    onOpenWatchHistory();
+                  }}
+                  className="flex min-h-11 w-full items-center gap-3 rounded-xl bg-[#1c1c1c] px-3.5 text-sm font-bold text-white hover:bg-[#262626] transition-colors cursor-pointer"
+                >
+                  <History className="w-4 h-4 text-[#f9c400]" />
+                  <span>شاهدته مؤخراً (سجل المشاهدة)</span>
+                </button>
+              )}
 
               <button
                 type="button"

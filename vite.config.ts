@@ -90,16 +90,31 @@ export default defineConfig(() => {
               },
             },
             {
-              urlPattern: /\.(?:png|jpg|jpeg|webp|svg|gif)$/i,
+              urlPattern: /^https:\/\/image\.tmdb\.org\/t\/p\/.*/i,
               handler: 'StaleWhileRevalidate',
               options: {
-                cacheName: 'media-images-cache',
+                cacheName: 'tmdb-images-cache',
                 expiration: {
-                  maxEntries: 120,
-                  maxAgeSeconds: 60 * 60 * 24 * 30,
+                  maxEntries: 160,
+                  maxAgeSeconds: 60 * 60 * 24 * 14,
                 },
                 cacheableResponse: {
                   statuses: [0, 200],
+                },
+              },
+            },
+            {
+              urlPattern: ({ sameOrigin, request }) =>
+                sameOrigin && request.destination === 'image',
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'same-origin-images-cache',
+                expiration: {
+                  maxEntries: 80,
+                  maxAgeSeconds: 60 * 60 * 24 * 30,
+                },
+                cacheableResponse: {
+                  statuses: [200],
                 },
               },
             },

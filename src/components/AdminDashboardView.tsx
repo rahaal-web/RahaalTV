@@ -167,8 +167,14 @@ const SliderCustomizationPanel = lazy(() =>
     default: m.SliderCustomizationPanel,
   }))
 );
+const AdminImagePlaceholderPanel = lazy(() =>
+  import('./admin/AdminImagePlaceholderPanel').then((m) => ({
+    default: m.AdminImagePlaceholderPanel,
+  }))
+);
 
 import {
+  optimizeTmdbUrl,
   evaluateImageQuality,
   getBackdropInfo,
   getMediaImageQualityStatus,
@@ -195,6 +201,7 @@ import {
   grantAdminRoleInFirestore,
   revokeAdminRoleFromFirestore,
   saveCustomFontToFirestore,
+  saveImagePlaceholderConfigToFirestore,
   saveMediaToFirestore,
   saveSiteSettingsToFirestore,
   seedCatalogToFirestore,
@@ -313,6 +320,11 @@ import {
   saveStoredWebsiteBranding,
 } from '../lib/websiteBranding';
 import {
+  loadStoredPlaceholderConfig,
+  normalizeImagePlaceholderConfig,
+  saveStoredPlaceholderConfig,
+} from '../lib/placeholderConfig';
+import {
   AdminPrivilegeRole,
   AdminRoleRecord,
   CastMember,
@@ -321,6 +333,7 @@ import {
   DownloadMirror,
   EpisodeItem,
   HomeLayoutConfig,
+  ImagePlaceholderConfig,
   MediaItem,
   MediaKind,
   PlayerThemeConfig,
@@ -449,6 +462,7 @@ interface AdminDashboardViewProps {
   customFonts?: Partial<Record<CustomFontSlot, CustomFontRecord>>;
   onCustomFontsChange?: (next: Partial<Record<CustomFontSlot, CustomFontRecord>>) => void;
   onPopupShieldChange?: (next: PopupShieldConfig) => void;
+  imagePlaceholderConfig?: ImagePlaceholderConfig;
   requestedTab?: { tab: AdminTab; nonce: number };
   onExitDashboard: () => void;
   onPreviewMedia: (item: MediaItem) => void;
@@ -743,6 +757,7 @@ export function AdminDashboardView({
   customFonts,
   onCustomFontsChange,
   onPopupShieldChange,
+  imagePlaceholderConfig,
   requestedTab,
   onExitDashboard,
   onPreviewMedia,
@@ -1330,6 +1345,15 @@ export function AdminDashboardView({
       ),
     [settingsForm.branding, settingsForm.siteName, siteSettings.branding, siteSettings.siteName]
   );
+
+  const [localPlaceholderConfig, setLocalPlaceholderConfig] = useState<ImagePlaceholderConfig>(() =>
+    normalizeImagePlaceholderConfig(imagePlaceholderConfig || loadStoredPlaceholderConfig())
+  );
+  useEffect(() => {
+    if (imagePlaceholderConfig) {
+      setLocalPlaceholderConfig(normalizeImagePlaceholderConfig(imagePlaceholderConfig));
+    }
+  }, [imagePlaceholderConfig]);
 
   const effectiveCustomFonts = useMemo(
     () => customFonts || loadStoredCustomFonts(),
@@ -2605,6 +2629,28 @@ export function AdminDashboardView({
       );
     } catch {
       onNotify('تم تطبيق الهوية محلياً — تعذرت المزامنة مع Firestore');
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleSaveImagePlaceholders = async (nextConfig: ImagePlaceholderConfig) => {
+    const clean = saveStoredPlaceholderConfig(normalizeImagePlaceholderConfig(nextConfig));
+    setLocalPlaceholderConfig(clean);
+    if (!hasActor) {
+      onNotify('تم حفظ إعدادات الصور والخلفيات المؤقتة محلياً — سجّل الدخول كمشرف للمزامنة');
+      return;
+    }
+    setBusyAction(true);
+    try {
+      const ok = await saveImagePlaceholderConfigToFirestore(clean, activeActorUid);
+      onNotify(
+        ok
+          ? 'تم حفظ إعدادات الخلفيات المؤقتة وصورة الفشل ومزامنتها لجميع الزوار بنجاح!'
+          : 'تم حفظ الإعدادات محلياً — يرجى التأكد من نشر قواعد Firestore لـ settings/image_placeholders'
+      );
+    } catch {
+      onNotify('تم الحفظ محلياً — تعذرت المزامنة السحابية لإعدادات الخلفيات المؤقتة');
     } finally {
       setBusyAction(false);
     }
@@ -4140,6 +4186,8 @@ export function AdminDashboardView({
                 <img
                   src={user.photoURL}
                   alt={activeActorName}
+                  loading="lazy"
+                  decoding="async"
                   referrerPolicy="no-referrer"
                   className="h-6 w-6 rounded-full object-cover"
                 />
@@ -4585,6 +4633,16 @@ export function AdminDashboardView({
                 />
               )}
 
+              {isOwner && activeTab === 'image_placeholders' && (
+                <AdminImagePlaceholderPanel
+                  config={localPlaceholderConfig}
+                  sampleMedia={catalog.slice(0, 6)}
+                  busy={busyAction}
+                  onSaveConfig={handleSaveImagePlaceholders}
+                  onNotify={onNotify}
+                />
+              )}
+
               {isOwner && activeTab === 'slider_customization' && (
                 <SliderCustomizationPanel
                   homeConfig={activeHomeConfig}
@@ -4897,8 +4955,10 @@ export function AdminDashboardView({
                     <div className="flex flex-col md:flex-row gap-5">
                       {scrapedResult.poster_url || scrapedResult.poster ? (
                         <img
-                          src={upgradeKnownImageUrl(scrapedResult.poster_url || scrapedResult.poster)}
+                          src={optimizeTmdbUrl(scrapedResult.poster_url || scrapedResult.poster, 'w342')}
                           alt={scrapedResult.title}
+                          loading="lazy"
+                          decoding="async"
                           className="h-64 w-44 rounded-2xl object-cover object-top border border-white/10 shrink-0"
                         />
                       ) : (
@@ -5714,8 +5774,10 @@ export function AdminDashboardView({
                               className="h-4 w-4 accent-[#4CAF50] cursor-pointer"
                             />
                             <img
-                              src={upgradeKnownImageUrl(item.poster_url || item.poster) || ASSETS.runningMan}
+                              src={optimizeTmdbUrl(item.poster_url || item.poster, 'w185') || ASSETS.runningMan}
                               alt={item.title}
+                              loading="lazy"
+                              decoding="async"
                               className="h-24 w-16 rounded-xl object-cover object-top border border-white/10"
                             />
                           </div>
@@ -6219,6 +6281,8 @@ export function AdminDashboardView({
                               <img
                                 src={u.photoURL}
                                 alt={u.displayName}
+                                loading="lazy"
+                                decoding="async"
                                 referrerPolicy="no-referrer"
                                 className="h-10 w-10 rounded-xl object-cover shrink-0"
                               />
@@ -6937,8 +7001,10 @@ export function AdminDashboardView({
                             </div>
                             <div className="aspect-[2/3] w-28 sm:w-32 mx-auto md:mx-0 overflow-hidden rounded-xl border border-white/15 bg-[#0c1821]">
                               <img
-                                src={currentPosterUrl}
+                                src={optimizeTmdbUrl(currentPosterUrl, 'w342')}
                                 alt="معاينة البوستر"
+                                loading="lazy"
+                                decoding="async"
                                 className="h-full w-full object-cover object-top"
                               />
                             </div>
@@ -6959,8 +7025,10 @@ export function AdminDashboardView({
                             <div className="aspect-video w-full overflow-hidden rounded-xl border border-white/15 bg-[#0c1821] relative">
                               {backdropInfo.hasDedicatedBackdrop ? (
                                 <img
-                                  src={backdropInfo.url}
+                                  src={optimizeTmdbUrl(backdropInfo.url, 'w780')}
                                   alt="معاينة الخلفية العريضة"
+                                  loading="lazy"
+                                  decoding="async"
                                   className="h-full w-full object-cover object-center"
                                 />
                               ) : (
@@ -7116,8 +7184,10 @@ export function AdminDashboardView({
                               <div className="flex items-center gap-3 rounded-lg bg-[#1a242e] p-2">
                                 {editorImageProposal.poster_url ? (
                                   <img
-                                    src={editorImageProposal.poster_url}
+                                    src={optimizeTmdbUrl(editorImageProposal.poster_url, 'w185')}
                                     alt="البوستر المقترح"
+                                    loading="lazy"
+                                    decoding="async"
                                     className="h-16 w-11 rounded object-cover object-top shrink-0"
                                   />
                                 ) : null}
@@ -7134,8 +7204,10 @@ export function AdminDashboardView({
                               <div className="flex items-center gap-3 rounded-lg bg-[#1a242e] p-2">
                                 {editorImageProposal.backdrop_url ? (
                                   <img
-                                    src={editorImageProposal.backdrop_url}
+                                    src={optimizeTmdbUrl(editorImageProposal.backdrop_url, 'w300')}
                                     alt="الخلفية المقترحة"
+                                    loading="lazy"
+                                    decoding="async"
                                     className="h-14 w-24 rounded object-cover object-center shrink-0"
                                   />
                                 ) : null}

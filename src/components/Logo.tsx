@@ -62,6 +62,8 @@ export function Logo({
           <img
             src={logoSrc}
             alt={cfg.siteName || 'Logo'}
+            loading="eager"
+            decoding="async"
             style={{ width: `${scaledWidth}px`, height: `${scaledHeight}px` }}
             className="object-contain shrink-0 rounded-lg"
           />

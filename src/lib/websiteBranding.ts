@@ -7,6 +7,7 @@ import type {
   WebsiteBrandingConfig,
 } from '../types/media';
 import { getActiveFirebaseApp } from './dbConnectionManager';
+import { compressImageForUpload } from './imageCompressor';
 
 export const WEBSITE_BRANDING_STORAGE_KEY = 'rahaltv_website_branding_v1';
 export const WEBSITE_BRANDING_LOCAL_ASSETS_KEY = 'rahaltv_website_branding_local_assets_v1';
@@ -476,6 +477,9 @@ export async function optimizeAndUploadBrandingAsset(params: {
   url: string;
   mimeType: string;
   storageProvider: 'backend' | 'firebase_storage' | 'local_cache';
+  beforeBytes?: number;
+  afterBytes?: number;
+  savedPct?: number;
 }> {
   const { file, kind, idToken } = params;
   const lowerName = file.name.toLowerCase();
@@ -485,22 +489,26 @@ export async function optimizeAndUploadBrandingAsset(params: {
     file.type === 'image/x-icon' ||
     file.type === 'image/vnd.microsoft.icon';
   const isRaster =
-    /\.(png|jpe?g|webp)$/i.test(lowerName) ||
-    ['image/png', 'image/jpeg', 'image/webp'].includes(file.type);
+    /\.(png|jpe?g|webp|avif)$/i.test(lowerName) ||
+    ['image/png', 'image/jpeg', 'image/webp', 'image/avif'].includes(file.type);
 
   if (kind === 'favicon' && !isSvg && !isIco && !/\.(png)$/i.test(lowerName) && file.type !== 'image/png') {
     throw new Error('صيغ Favicon المدعومة هي PNG و ICO و SVG فقط.');
   }
   if (kind === 'logo' && !isSvg && !isRaster) {
-    throw new Error('صيغ الشعار المدعومة هي PNG و JPG و WEBP و SVG فقط.');
+    throw new Error('صيغ الشعار المدعومة هي PNG و JPG و WEBP و AVIF و SVG فقط.');
   }
-  if (file.size > 2 * 1024 * 1024) {
-    throw new Error('الحد الأقصى لحجم الملف هو 2 ميغابايت.');
+  if (file.size > 4 * 1024 * 1024) {
+    throw new Error('الحد الأقصى لحجم الملف قبل الضغط هو 4 ميغابايت.');
   }
 
   let preparedBlob: Blob = file;
   let mimeType = file.type || 'image/png';
   let extension = lowerName.split('.').pop() || 'png';
+  let dataUrl = '';
+  let beforeBytes = file.size;
+  let afterBytes = file.size;
+  let savedPct = 0;
 
   if (isSvg) {
     const rawText = await file.text();
@@ -508,22 +516,22 @@ export async function optimizeAndUploadBrandingAsset(params: {
     preparedBlob = new Blob([cleanSvg], { type: 'image/svg+xml' });
     mimeType = 'image/svg+xml';
     extension = 'svg';
+    afterBytes = preparedBlob.size;
+    dataUrl = await fileToDataUrl(preparedBlob);
   } else if (isIco) {
     mimeType = 'image/x-icon';
     extension = 'ico';
-  } else if (kind === 'favicon') {
-    const optimized = await optimizeRasterImage(file, 64, 64, 'image/png');
-    preparedBlob = optimized.blob;
-    mimeType = optimized.mimeType;
-    extension = optimized.extension;
+    dataUrl = await fileToDataUrl(preparedBlob);
   } else {
-    const optimized = await optimizeRasterImage(file, 640, 240, 'image/webp');
-    preparedBlob = optimized.blob;
-    mimeType = optimized.mimeType;
-    extension = optimized.extension;
+    const compressed = await compressImageForUpload(file, kind === 'favicon' ? 'favicon' : 'logo');
+    preparedBlob = compressed.blob;
+    mimeType = compressed.mimeType;
+    extension = compressed.extension;
+    dataUrl = compressed.dataUrl;
+    beforeBytes = compressed.beforeBytes;
+    afterBytes = compressed.afterBytes;
+    savedPct = compressed.savedPct;
   }
-
-  const dataUrl = await fileToDataUrl(preparedBlob);
 
   // 1) Try Express Backend Upload Endpoint (/api/branding/upload)
   if (idToken) {
@@ -548,6 +556,9 @@ export async function optimizeAndUploadBrandingAsset(params: {
             url: json.url,
             mimeType,
             storageProvider: 'backend',
+            beforeBytes,
+            afterBytes,
+            savedPct,
           };
         }
       }
@@ -566,6 +577,9 @@ export async function optimizeAndUploadBrandingAsset(params: {
       url: downloadUrl,
       mimeType,
       storageProvider: 'firebase_storage',
+      beforeBytes,
+      afterBytes,
+      savedPct,
     };
   } catch {
     // Fall through to compact local cache
@@ -580,5 +594,8 @@ export async function optimizeAndUploadBrandingAsset(params: {
     url: localRef,
     mimeType,
     storageProvider: 'local_cache',
+    beforeBytes,
+    afterBytes,
+    savedPct,
   };
 }

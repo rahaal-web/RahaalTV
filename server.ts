@@ -5947,6 +5947,88 @@ async function startServer() {
     }
   });
 
+  app.post('/api/images/upload', async (req, res) => {
+    try {
+      const authCtx = await verifyBrandingAuthHeader(req.headers.authorization || '');
+      if (!authCtx) {
+        return res.status(401).json({ ok: false, error: 'مطلوب تسجيل الدخول لرفع الصور.' });
+      }
+      const body = (req.body || {}) as {
+        slot?: unknown;
+        dataUrl?: unknown;
+      };
+      const allowedSlots = new Set([
+        'poster',
+        'backdrop',
+        'cast',
+        'placeholder',
+        'fallback',
+        'logo',
+        'favicon',
+      ]);
+      const rawSlot = typeof body.slot === 'string' ? body.slot.trim() : 'poster';
+      const slot = allowedSlots.has(rawSlot) ? rawSlot : 'poster';
+
+      const dataUrl = typeof body.dataUrl === 'string' ? body.dataUrl.trim() : '';
+      const match = dataUrl.match(/^data:([a-zA-Z0-9.+/-]+);base64,([A-Za-z0-9+/=]+)$/);
+      if (!match) {
+        return res.status(400).json({ ok: false, error: 'صيغة بيانات الصورة غير صالحة.' });
+      }
+
+      const mime = match[1].toLowerCase();
+      const buffer = Buffer.from(match[2], 'base64');
+      if (buffer.length === 0 || buffer.length > 2 * 1024 * 1024) {
+        return res.status(400).json({ ok: false, error: 'حجم الصورة يجب ألا يتجاوز 2 ميغابايت.' });
+      }
+
+      const allowedExts: Record<string, string> = {
+        'image/avif': 'avif',
+        'image/webp': 'webp',
+        'image/png': 'png',
+        'image/jpeg': 'jpg',
+        'image/svg+xml': 'svg',
+        'image/x-icon': 'ico',
+        'image/vnd.microsoft.icon': 'ico',
+      };
+      const ext = allowedExts[mime];
+      if (!ext) {
+        return res.status(400).json({ ok: false, error: 'صيغة الصورة غير مدعومة.' });
+      }
+
+      let writeBuf = buffer;
+      if (ext === 'svg') {
+        const cleanSvg = buffer
+          .toString('utf8')
+          .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+          .replace(/<foreignObject[\s\S]*?>[\s\S]*?<\/foreignObject>/gi, '')
+          .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+          .replace(/javascript\s*:/gi, '');
+        if (!/<svg[\s>]/i.test(cleanSvg)) {
+          return res.status(400).json({ ok: false, error: 'ملف SVG غير صالح.' });
+        }
+        writeBuf = Buffer.from(cleanSvg, 'utf8');
+      }
+
+      const imagesUploadsDir = path.join(uploadsDir, 'images');
+      fs.mkdirSync(imagesUploadsDir, { recursive: true });
+      const fileName = `${slot}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
+      const targetPath = path.join(imagesUploadsDir, fileName);
+      fs.writeFileSync(targetPath, writeBuf);
+
+      return res.json({
+        ok: true,
+        url: `/uploads/images/${fileName}`,
+        bytes: writeBuf.length,
+        mimeType: mime,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: err instanceof Error ? err.message : 'تعذر حفظ الصورة المضغوطة.',
+      });
+    }
+  });
+
   const httpServer = http.createServer(app);
 
   if (process.env.NODE_ENV !== 'production') {

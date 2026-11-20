@@ -22,10 +22,11 @@ import {
 } from 'lucide-react';
 import { isLikelyNonVideoWebsiteUrl } from '../lib/clientScraper';
 import {
-  handleBackdropError,
-  handlePosterError,
+  FALLBACK_BACKDROP,
+  FALLBACK_POSTER,
 } from '../lib/mediaFilters';
 import { getBackdropUrl, getPosterUrl } from '../lib/mediaImages';
+import { OptimizedImage } from './OptimizedImage';
 import { resolveDisplayShortUrl } from '../lib/permalink';
 import {
   buildPlayerThemeVars,
@@ -218,17 +219,17 @@ export function MediaPreviewModal({
             <div className="pb-6">
               {/* Hero Head Preview */}
               <div className="relative min-h-[250px] overflow-hidden border-b border-white/[0.08] bg-[#0c1821]">
-                <img
-                  src={getBackdropUrl(item)}
+                <OptimizedImage
+                  src={getBackdropUrl(item, 'backdrop_card')}
+                  fallbackSrc={FALLBACK_BACKDROP}
                   alt={item.title}
-                  loading="lazy"
-                  decoding="async"
-                  referrerPolicy="no-referrer"
-                  onError={handleBackdropError}
-                  className="absolute inset-0 h-full w-full object-cover object-center opacity-90"
+                  slot="backdrop_card"
+                  loading="eager"
+                  className="!absolute inset-0 h-full w-full opacity-90"
+                  imgClassName="object-cover object-center"
                 />
-                <div className="absolute inset-0 bg-gradient-to-t from-[#06131c] via-[#06131c]/30 to-black/15" />
-                <div className="absolute inset-0 bg-gradient-to-l from-[#06131c]/70 via-[#06131c]/20 to-transparent" />
+                <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-t from-[#06131c] via-[#06131c]/30 to-black/15" />
+                <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-l from-[#06131c]/70 via-[#06131c]/20 to-transparent" />
 
                 <div className="relative z-10 flex flex-col md:flex-row md:items-end justify-between gap-4 p-6 pt-16 min-h-[250px]">
                   <div className="space-y-2 max-w-2xl drop-shadow-[0_2px_10px_rgba(0,0,0,0.9)]">
@@ -288,14 +289,14 @@ export function MediaPreviewModal({
                     <div className="moov-ribbon bg-[#D92321] py-1 text-[11px] font-black tracking-wider text-white font-latin uppercase">
                       {item.quality}
                     </div>
-                    <img
-                      src={getPosterUrl(item)}
+                    <OptimizedImage
+                      src={getPosterUrl(item, 'detail_poster')}
+                      fallbackSrc={FALLBACK_POSTER}
                       alt={item.title}
-                      loading="lazy"
-                      decoding="async"
-                      referrerPolicy="no-referrer"
-                      onError={handlePosterError}
-                      className="h-full w-full object-cover object-top"
+                      slot="detail_poster"
+                      loading="eager"
+                      className="h-full w-full"
+                      imgClassName="object-cover object-top"
                     />
                   </div>
                 </div>

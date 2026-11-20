@@ -810,6 +810,43 @@ html[data-rtv-low-spec="true"] .rtv-fade-in,
 html[data-rtv-low-spec="true"] .moov-server-enter,
 html[data-rtv-low-spec="true"] .rtv-hero-cinematic-in,
 html[data-rtv-low-spec="true"] .rtv-hero-contain-in,
-html[data-rtv-low-spec="true"] .rtv-hero-content-in {
+html[data-rtv-low-spec="true"] .rtv-hero-content-in,
+html[data-rtv-low-spec="true"] .rtv-placeholder-shimmer {
   animation: none !important;
 }
+
+@keyframes rtvPlaceholderShimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.rtv-placeholder-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.rtv-placeholder-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.08) 50%,
+    transparent 100%
+  );
+  animation: rtvPlaceholderShimmer var(--rtv-shimmer-duration, 1.6s) ease-in-out infinite;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rtv-placeholder-shimmer::after {
+    animation: none !important;
+    display: none;
+  }
+}
+

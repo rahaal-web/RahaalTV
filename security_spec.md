@@ -11,6 +11,8 @@
 7. **Rating Ownership & Bounded Range**: Users may only create or update `/ratings/{mediaId}__{uid}` documents matching their own `request.auth.uid`, with integer `stars` strictly between `1` and `5`, and immutable `mediaId`, `userId`, and `createdAt`.
 8. **Scraper Adapters RBAC & Schema Integrity**: Only verified staff (`isStaffAdmin()`) may read, create, update, or delete `/scraper_adapters/{adapterId}` or append immutable version snapshots to `/scraper_adapters/{adapterId}/versions/{versionId}`. All adapter fields and nested rule maps enforce strict key whitelisting (`hasAll`/`hasOnly`) and bounded lengths/counts.
 9. **Admin Workspace Appearance & Nav Layout Isolation**: Only verified owner admins (`isOwnerAdmin()`) may read, create, update, or delete `/admin_workspace/appearance` and `/admin_workspace/nav_layout`, with strict key whitelisting (`kind`, `config`, `updatedBy`, `updatedAt`).
+10. **Image Placeholder Settings Integrity**: Public visitors have read-only (`get`) access to `/settings/image_placeholders`, while only verified owner admins (`isOwnerAdmin()`) may list or write validated hex colors, shimmer presets, and per-slot overrides (`poster`, `backdrop`, `cast`, `episode`).
+11. **Recently Watched Ownership & Privacy**: `/recently_watched/{uid}__{mediaId}` documents are strictly owner-only (`request.auth.uid == userId`) across `get`, `list`, `create`, `update`, and `delete`, with immutable `id`, `userId`, `mediaId`, and `createdAt`, preventing cross-user history leakage or enumeration.
 
 ## 2. The "Dirty Dozen" Attack Payloads
 1. Unauthenticated write to `/media/fake-movie` -> DENIED.
@@ -31,4 +33,7 @@
 16. Unauthenticated or regular member reading/writing `/scraper_adapters/evil` -> DENIED.
 17. Staff creating `/scraper_adapters/bad` with `episodeRules.maxEpisodes: 99999` or shadow key `evalJs: "..."` -> DENIED.
 18. Staff mutating immutable version snapshot in `/scraper_adapters/{id}/versions/{versionId}` (`update`) -> DENIED.
+19. Signed-in User A attempting to read, write, or delete User B's `/recently_watched/userB__movie` -> DENIED.
+20. Non-owner moderator attempting to write `/settings/image_placeholders` with invalid hex color -> DENIED.
+
 

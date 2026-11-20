@@ -536,7 +536,7 @@ export function AdminCatalogPanel({
                           <div className="flex items-center gap-3">
                             {cols.poster && (
                               <img
-                                src={getPosterUrl(item)}
+                                src={getPosterUrl(item, 'admin_thumb')}
                                 alt={item.title}
                                 loading="lazy"
                                 decoding="async"

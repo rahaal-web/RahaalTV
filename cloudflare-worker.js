@@ -376,6 +376,7 @@ export default {
 
       const body = request.method === 'HEAD' ? null : await upstream.arrayBuffer();
       const contentType = upstream.headers.get('content-type') || 'text/html; charset=utf-8';
+      const isImageResponse = /^image\//i.test(contentType);
       const xFrame = upstream.headers.get('x-frame-options') || '';
       const csp = upstream.headers.get('content-security-policy') || '';
       return new Response(body, {
@@ -384,7 +385,9 @@ export default {
           ...CORS_HEADERS,
           'Content-Type': contentType,
           'X-Content-Type-Options': 'nosniff',
-          'Cache-Control': 'public, max-age=120, stale-while-revalidate=300',
+          'Cache-Control': isImageResponse && upstream.ok
+            ? 'public, max-age=86400, stale-while-revalidate=604800'
+            : 'public, max-age=120, stale-while-revalidate=300',
           'X-Final-Url': upstream.url || parsedTarget.toString(),
           'X-Upstream-Status': String(upstream.status),
           ...(xFrame ? { 'X-Upstream-X-Frame-Options': xFrame } : {}),

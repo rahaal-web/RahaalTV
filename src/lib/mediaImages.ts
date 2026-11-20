@@ -1,4 +1,4 @@
-import { ImageQualityStatus, MediaItem, MediaKind } from '../types/media';
+import { ImageQualityStatus, ImageSlotType, MediaItem, MediaKind } from '../types/media';
 import {
   fetchViaBrowserOrCorsRelay,
   resolveApiEndpoint,
@@ -11,6 +11,12 @@ import {
   isLowTrustScrapedPosterUrl,
   scoreExternalTitleMatch,
 } from './imageMatching';
+import {
+  buildSlotSrcSet,
+  normalizeTmdbUrl,
+  resolveImageForSlot,
+  type TmdbDisplaySize,
+} from './imageOptimizer';
 import { FALLBACK_BACKDROP, FALLBACK_POSTER, resolveMediaAssetUrl } from './mediaFilters';
 import { createTimeoutSignal } from './browserCompat';
 
@@ -56,13 +62,14 @@ export function isLocalBuiltinAsset(url?: string | null): boolean {
 }
 
 /**
- * Upgrades known CDN URL patterns to full/higher resolution variants without guessing random hosts.
+ * Admin-only utility: upgrades known CDN URL patterns for server-side dimension probing / backfill.
+ * NEVER call during frontend card/slider/detail rendering.
  */
 export function upgradeKnownImageUrl(rawUrl?: string | null): string {
   const clean = String(rawUrl || '').trim();
   if (!clean || !/^https?:\/\//i.test(clean)) return clean;
 
-  // 1. TMDB CDN -> /original (highest resolution)
+  // 1. TMDB CDN -> /original (only for server-side probing)
   if (/image\.tmdb\.org\/t\/p\//i.test(clean)) {
     return clean.replace(
       /\/t\/p\/(?:w\d+|h\d+|original)\//i,
@@ -103,23 +110,23 @@ export function upgradeKnownImageUrl(rawUrl?: string | null): string {
  */
 export function optimizeTmdbUrl(
   url: string,
-  size: 'w342' | 'w500' | 'w780' | 'w1280' | 'original'
+  size: TmdbDisplaySize = 'w342'
 ): string {
-  const clean = String(url || '').trim();
-  if (!/image\.tmdb\.org\/t\/p\//i.test(clean)) return clean;
-  return clean.replace(/\/t\/p\/(?:w\d+|h\d+|original)\//i, `/t/p/${size}/`);
+  return normalizeTmdbUrl(url, size);
 }
 
-export function buildPosterSrcSet(url?: string | null): string | undefined {
-  const clean = String(url || '').trim();
-  if (!/image\.tmdb\.org\/t\/p\//i.test(clean)) return undefined;
-  return `${optimizeTmdbUrl(clean, 'w342')} 342w, ${optimizeTmdbUrl(clean, 'w500')} 500w, ${optimizeTmdbUrl(clean, 'w780')} 780w, ${optimizeTmdbUrl(clean, 'original')} 1200w`;
+export function buildPosterSrcSet(
+  url?: string | null,
+  slot: ImageSlotType = 'card_grid'
+): string | undefined {
+  return buildSlotSrcSet(url, slot);
 }
 
-export function buildBackdropSrcSet(url?: string | null): string | undefined {
-  const clean = String(url || '').trim();
-  if (!/image\.tmdb\.org\/t\/p\//i.test(clean)) return undefined;
-  return `${optimizeTmdbUrl(clean, 'w780')} 780w, ${optimizeTmdbUrl(clean, 'w1280')} 1280w, ${optimizeTmdbUrl(clean, 'original')} 1920w`;
+export function buildBackdropSrcSet(
+  url?: string | null,
+  slot: ImageSlotType = 'slider_backdrop'
+): string | undefined {
+  return buildSlotSrcSet(url, slot);
 }
 
 export function isObviouslyLowResUrl(url?: string | null): boolean {
@@ -136,22 +143,23 @@ export function isObviouslyLowResUrl(url?: string | null): boolean {
 
 /**
  * Strictly returns Portrait Poster URL for movie cards, archive tiles, and detail poster card.
+ * Automatically right-sizes TMDB URLs when a display slot is specified.
  */
-export function getPosterUrl(item?: Partial<MediaItem> | null): string {
+export function getPosterUrl(
+  item?: Partial<MediaItem> | null,
+  slot?: ImageSlotType
+): string {
   if (!item) return FALLBACK_POSTER;
   const candidate = item.poster_url || item.poster;
-  return resolveMediaAssetUrl(candidate, FALLBACK_POSTER);
+  const resolved = resolveMediaAssetUrl(candidate, FALLBACK_POSTER);
+  return slot ? resolveImageForSlot(resolved, slot) : resolved;
 }
 
 /**
- * Returns Square Thumbnail URL derived cleanly from the Poster URL (for the 8-item 1:1 Hero Strip).
+ * Returns Square Thumbnail URL derived cleanly from the Poster URL (for the 1:1 Hero Strip).
  */
 export function getHeroThumbUrl(item?: Partial<MediaItem> | null): string {
-  const poster = getPosterUrl(item);
-  if (/image\.tmdb\.org\/t\/p\//i.test(poster)) {
-    return optimizeTmdbUrl(poster, 'w342');
-  }
-  return poster;
+  return getPosterUrl(item, 'hero_thumb');
 }
 
 /**
@@ -228,9 +236,13 @@ export function getBackdropInfo(item?: Partial<MediaItem> | null): {
   };
 }
 
-export function getBackdropUrl(item?: Partial<MediaItem> | null): string {
+export function getBackdropUrl(
+  item?: Partial<MediaItem> | null,
+  slot?: ImageSlotType
+): string {
   const info = getBackdropInfo(item);
-  return info.hasDedicatedBackdrop ? info.url : FALLBACK_BACKDROP;
+  const url = info.hasDedicatedBackdrop ? info.url : FALLBACK_BACKDROP;
+  return slot ? resolveImageForSlot(url, slot) : url;
 }
 
 /**
