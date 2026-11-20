@@ -1,11 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Loader2, Search, Star, User as UserIcon, X } from 'lucide-react';
-import {
-  buildSearchSuggestions,
-  handlePosterError,
-  matchesCategoryFilter,
-  normalizeArabicText,
-} from '../lib/mediaFilters';
+import { ArrowLeft, Loader2, Search, Star, X } from 'lucide-react';
+import { handlePosterError, matchesCategoryFilter, normalizeArabicText } from '../lib/mediaFilters';
 import { getPosterUrl } from '../lib/mediaImages';
 import { MediaItem } from '../types/media';
 
@@ -68,11 +63,6 @@ export function SearchDrawer({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isOpen, onClose]);
 
-  const suggestions = useMemo(
-    () => buildSearchSuggestions(catalog, query, 8),
-    [catalog, query]
-  );
-
   const results = useMemo(() => {
     const q = normalizeArabicText(debouncedQuery);
     return catalog.filter((item) => {
@@ -81,9 +71,6 @@ export function SearchDrawer({
       return (
         normalizeArabicText(item.title).includes(q) ||
         normalizeArabicText(item.englishTitle).includes(q) ||
-        normalizeArabicText(item.director || '').includes(q) ||
-        normalizeArabicText(item.writer || '').includes(q) ||
-        (item.cast || []).some((c) => normalizeArabicText(c.name).includes(q)) ||
         (item.genres || []).some((g) => normalizeArabicText(g).includes(q)) ||
         normalizeArabicText(item.country).includes(q) ||
         String(item.year || '').includes(q)
@@ -114,7 +101,7 @@ export function SearchDrawer({
           <div className="flex items-center justify-between gap-3 mb-3.5 sm:mb-4">
             <div className="min-w-0">
               <h2 className="font-display text-base sm:text-lg font-extrabold text-white truncate">البحث السريع في RahaL TV</h2>
-              <p className="text-[11px] sm:text-xs text-[#b7c9ef]">ابحث باسم الفيلم أو المسلسل أو الممثل أو المخرج أو السنة</p>
+              <p className="text-[11px] sm:text-xs text-[#b7c9ef]">ابحث باسم الفيلم أو المسلسل أو التصنيف أو السنة</p>
             </div>
             <button
               type="button"
@@ -134,7 +121,7 @@ export function SearchDrawer({
                 autoFocus
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="أبحث عن فيلم أو مسلسل أو مخرج أو ممثل..."
+                placeholder="أبحث عن فيلم او مسلسل..."
                 className="w-full min-h-[46px] rounded-xl bg-[#06131c] border border-white/10 pr-11 pl-4 py-3 text-sm font-semibold text-white placeholder:text-[#b7c9ef]/50 focus:border-[#D92321] focus:outline-none"
               />
             </div>
@@ -152,37 +139,6 @@ export function SearchDrawer({
               ))}
             </select>
           </div>
-
-          {suggestions.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {suggestions.map((sug, idx) => (
-                <button
-                  key={`${sug.type}-${sug.label}-${idx}`}
-                  type="button"
-                  onClick={() => {
-                    if (sug.type === 'media' && sug.mediaId) {
-                      const target = catalog.find((m) => m.id === sug.mediaId);
-                      if (target) {
-                        onSelectMedia(target);
-                        onClose();
-                        return;
-                      }
-                    }
-                    setQuery(sug.label);
-                  }}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#06131c] border border-white/10 hover:border-[#D92321] px-2.5 py-1 text-[11px] font-bold text-white transition-colors cursor-pointer"
-                >
-                  {sug.type === 'person' ? (
-                    <UserIcon className="w-3 h-3 text-[#f9c400]" />
-                  ) : (
-                    <Search className="w-3 h-3 text-[#D92321]" />
-                  )}
-                  <span className="truncate max-w-[180px]">{sug.label}</span>
-                  <span className="text-[10px] text-[#b7c9ef] truncate max-w-[100px]">• {sug.sublabel}</span>
-                </button>
-              ))}
-            </div>
-          )}
         </div>
 
         {/* Results Grid */}

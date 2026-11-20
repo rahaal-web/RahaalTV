@@ -109,17 +109,6 @@ const VALID_SOURCES: HomeSectionSource[] = [
   'wrestling',
   'category',
   'custom',
-  'top_viewed',
-  'most_popular',
-  'recent_movies',
-  'recent_series',
-  'family',
-  'coming_soon',
-  'worth_watching',
-  'admin_picks',
-  'genre_action',
-  'genre_horror',
-  'genre_comedy',
 ];
 
 export function normalizeHomeSection(
@@ -350,74 +339,24 @@ export function resolveSectionMediaItems(
   section: HomeSectionConfig
 ): MediaItem[] {
   const limit = Math.max(1, section.limit || 10);
-  const sortNewest = (list: MediaItem[]) =>
-    [...list].sort(
-      (a, b) =>
-        (b.updatedAtMs || b.createdAtMs || 0) - (a.updatedAtMs || a.createdAtMs || 0) ||
-        (parseInt(b.year, 10) || 0) - (parseInt(a.year, 10) || 0)
-    );
 
   switch (section.source) {
     case 'movies':
-    case 'recent_movies':
-      return sortNewest(
-        catalog.filter((i) => !i.comingSoon && (matchesCategoryFilter(i, 'افلام') || i.kind === 'movie'))
-      ).slice(0, limit);
+      return catalog.filter((i) => matchesCategoryFilter(i, 'افلام') || i.kind === 'movie').slice(0, limit);
     case 'series':
-    case 'recent_series':
-      return sortNewest(
-        catalog.filter(
-          (i) => !i.comingSoon && (matchesCategoryFilter(i, 'مسلسلات') || i.kind === 'series' || i.kind === 'tv')
-        )
-      ).slice(0, limit);
+      return catalog
+        .filter((i) => matchesCategoryFilter(i, 'مسلسلات') || i.kind === 'series' || i.kind === 'tv')
+        .slice(0, limit);
     case 'top_rated':
       return [...catalog]
-        .filter((i) => !i.comingSoon)
         .sort((a, b) => {
-          const avgDiff =
-            (b.reviewSummary?.average10 || b.imdb || 0) - (a.reviewSummary?.average10 || a.imdb || 0);
+          const avgDiff = (b.communityRating?.average || 0) - (a.communityRating?.average || 0);
           if (avgDiff !== 0) return avgDiff;
-          return (b.reviewSummary?.count || b.communityRating?.count || 0) - (a.reviewSummary?.count || a.communityRating?.count || 0);
+          return (b.communityRating?.count || 0) - (a.communityRating?.count || 0);
         })
         .slice(0, limit);
     case 'trending':
-    case 'top_viewed':
       return [...catalog].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, limit);
-    case 'most_popular':
-      return [...catalog]
-        .sort((a, b) => ((b.likes || 0) * 3 + (b.views || 0)) - ((a.likes || 0) * 3 + (a.views || 0)))
-        .slice(0, limit);
-    case 'worth_watching':
-      return [...catalog]
-        .filter((i) => !i.comingSoon && ((i.imdb || 0) >= 7.0 || (i.reviewSummary?.average10 || 0) >= 7.5))
-        .sort((a, b) => ((b.reviewSummary?.average10 || b.imdb || 0) + (b.pinned ? 0.5 : 0)) - ((a.reviewSummary?.average10 || a.imdb || 0) + (a.pinned ? 0.5 : 0)))
-        .slice(0, limit);
-    case 'admin_picks':
-      return catalog.filter((i) => i.pinned).slice(0, limit);
-    case 'family':
-      return catalog
-        .filter(
-          (i) =>
-            matchesCategoryFilter(i, 'أطفال') ||
-            matchesCategoryFilter(i, 'انمي') ||
-            (i.genres || []).some((g) => /عائلي|كوميديا|مغامرات|انيميشن|أطفال/i.test(g)) ||
-            /^(G|PG|TV-G|TV-Y)$/i.test(i.ageRating || '')
-        )
-        .slice(0, limit);
-    case 'coming_soon':
-      return catalog.filter((i) => i.comingSoon).slice(0, limit);
-    case 'genre_action':
-      return catalog
-        .filter((i) => (i.genres || []).some((g) => /أكشن|اكشن|Action|مغامرة/i.test(g)))
-        .slice(0, limit);
-    case 'genre_horror':
-      return catalog
-        .filter((i) => (i.genres || []).some((g) => /رعب|Horror|إثارة|غموض/i.test(g)))
-        .slice(0, limit);
-    case 'genre_comedy':
-      return catalog
-        .filter((i) => (i.genres || []).some((g) => /كوميديا|Comedy/i.test(g)))
-        .slice(0, limit);
     case 'ramadan':
       return catalog.filter((i) => matchesCategoryFilter(i, 'رمضان 2026')).slice(0, limit);
     case 'wrestling':

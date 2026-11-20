@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { User } from 'firebase/auth';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import {
@@ -12,19 +12,14 @@ import {
   Copy,
   Download,
   Film,
-  Flag,
   Globe,
   Languages,
   Layers,
   LogIn,
-  MessageSquare,
   Play,
-  RotateCcw,
   Server,
   Share2,
-  ShieldAlert,
   Star,
-  ThumbsUp,
   Trash2,
   Tv,
   Users,
@@ -32,16 +27,11 @@ import {
 import { subscribeActiveDatabaseChange } from '../lib/dbConnectionManager';
 import {
   deleteMediaRatingFromFirestore,
-  deleteMediaReviewFromFirestore,
   getActiveDatabase,
   handleFirestoreError,
   OperationType,
-  reportMediaReviewInFirestore,
   sanitizeRatingMediaId,
-  saveMediaReviewToFirestore,
-  subscribeMediaReviews,
   submitMediaRatingToFirestore,
-  toggleReviewHelpfulInFirestore,
 } from '../lib/firebase';
 import { FALLBACK_BACKDROP, FALLBACK_POSTER, handleBackdropError, handlePosterError } from '../lib/mediaFilters';
 import {
@@ -52,19 +42,7 @@ import {
 } from '../lib/mediaImages';
 import { resolveDisplayShortUrl } from '../lib/permalink';
 import { formatShortServerName } from '../lib/playerTheme';
-import { computeSimilarMedia } from '../lib/recommendations';
-import {
-  findLatestProgressForMedia,
-  findProgressForEpisode,
-  formatPlaybackSeconds,
-} from '../lib/watchProgress';
-import {
-  CatalogFilterState,
-  MediaItem,
-  MediaRatingRecord,
-  MediaReviewRecord,
-  WatchProgressRecord,
-} from '../types/media';
+import { MediaItem, CatalogFilterState, MediaRatingRecord } from '../types/media';
 import { MovieCard } from './MovieCard';
 
 interface SingleDetailViewProps {
@@ -79,18 +57,11 @@ interface SingleDetailViewProps {
   onApplyFilter: (partial: Partial<CatalogFilterState>) => void;
   onNavigateHome: () => void;
   onOpenTrailer: (item: MediaItem) => void;
-  onOpenPlayer: (
-    item: MediaItem,
-    episodeNumber?: number,
-    serverIndex?: number,
-    initialPositionSec?: number
-  ) => void;
+  onOpenPlayer: (item: MediaItem, episodeNumber?: number, serverIndex?: number) => void;
   isInWatchlist: boolean;
   onToggleWatchlist: (item: MediaItem) => void;
   onNotify: (message: string) => void;
   watchlistIds: string[];
-  watchProgressRecords?: WatchProgressRecord[];
-  activeProfileId?: string;
 }
 
 type DetailTab = 'watch' | 'seasons' | 'franchise' | 'cast';
@@ -120,8 +91,6 @@ export function SingleDetailView({
   onToggleWatchlist,
   onNotify,
   watchlistIds,
-  watchProgressRecords = [],
-  activeProfileId = 'main',
 }: SingleDetailViewProps) {
   const [activeTab, setActiveTab] = useState<DetailTab>('watch');
   const [showDownloads, setShowDownloads] = useState(initialOpenDownloads);
@@ -138,15 +107,6 @@ export function SingleDetailView({
   const [ratingsPermissionError, setRatingsPermissionError] = useState(false);
   const [hoverStar, setHoverStar] = useState<number | null>(null);
   const [savingRating, setSavingRating] = useState(false);
-
-  // Community Reviews (1-10) State
-  const [reviews, setReviews] = useState<MediaReviewRecord[]>([]);
-  const [reviewSort, setReviewSort] = useState<'newest' | 'helpful'>('newest');
-  const [reviewRating10, setReviewRating10] = useState<number>(8);
-  const [reviewComment, setReviewComment] = useState<string>('');
-  const [savingReview, setSavingReview] = useState(false);
-  const [reportingReview, setReportingReview] = useState<MediaReviewRecord | null>(null);
-  const [reportReason, setReportReason] = useState('حرق للأحداث بدون تحذير');
 
   const cleanMediaId = sanitizeRatingMediaId(item.id);
 
@@ -224,19 +184,6 @@ export function SingleDetailView({
     return () => unsubscribe();
   }, [cleanMediaId, dbRevision]);
 
-  // Real-time Firestore listener for Community Reviews (1-10)
-  useEffect(() => {
-    const unsub = subscribeMediaReviews(cleanMediaId, (list) => {
-      setReviews(list);
-      const mine = currentUser ? list.find((r) => r.userId === currentUser.uid) : undefined;
-      if (mine) {
-        setReviewRating10(mine.rating10);
-        setReviewComment(mine.comment);
-      }
-    });
-    return () => unsub();
-  }, [cleanMediaId, currentUser, dbRevision]);
-
   const ratingCount =
     ratingsList.length > 0 ? ratingsList.length : ratingsLoading ? item.communityRating?.count || 0 : 0;
   const averageStars =
@@ -272,130 +219,13 @@ export function SingleDetailView({
     .map((id) => catalog.find((c) => c.id === id))
     .filter((c): c is MediaItem => Boolean(c));
 
-  const relatedItems = useMemo(() => {
-    const similar = computeSimilarMedia(item, catalog, 6);
-    if (similar.length > 0) return similar;
-    return catalog
-      .filter((c) => c.id !== item.id && c.kind === item.kind)
-      .slice(0, 6);
-  }, [item, catalog]);
-
-  const latestItemProgress = useMemo(
-    () => findLatestProgressForMedia(item.id, watchProgressRecords),
-    [item.id, watchProgressRecords]
-  );
-
-  const selectedEpProgress = useMemo(
-    () =>
-      findProgressForEpisode(
-        item.id,
-        activeSeason?.seasonNumber,
-        selectedEpisodeNumber,
-        watchProgressRecords
-      ),
-    [item.id, activeSeason?.seasonNumber, selectedEpisodeNumber, watchProgressRecords]
-  );
-
-  const resumeProgress =
-    allEpisodes.length > 0
-      ? selectedEpProgress && !selectedEpProgress.completed && selectedEpProgress.positionSec > 10
-        ? selectedEpProgress
-        : latestItemProgress && !latestItemProgress.completed && latestItemProgress.positionSec > 10
-          ? latestItemProgress
-          : null
-      : latestItemProgress && !latestItemProgress.completed && latestItemProgress.positionSec > 10
-        ? latestItemProgress
-        : null;
-
-  const sortedReviews = useMemo(() => {
-    const list = [...reviews];
-    if (reviewSort === 'helpful') {
-      return list.sort(
-        (a, b) =>
-          (b.helpfulCount || b.helpfulUids?.length || 0) -
-            (a.helpfulCount || a.helpfulUids?.length || 0) ||
-          (b.createdAtMs || 0) - (a.createdAtMs || 0)
-      );
-    }
-    return list.sort((a, b) => (b.updatedAtMs || b.createdAtMs || 0) - (a.updatedAtMs || a.createdAtMs || 0));
-  }, [reviews, reviewSort]);
-
-  const communityReviewAvg10 = useMemo(() => {
-    if (reviews.length === 0) return null;
-    const sum = reviews.reduce((acc, r) => acc + (r.rating10 || 0), 0);
-    return sum / reviews.length;
-  }, [reviews]);
-
-  const myReview = currentUser ? reviews.find((r) => r.userId === currentUser.uid) : undefined;
-
-  const handleSaveReview = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!currentUser) {
-      onNotify('يرجى تسجيل الدخول لنشر مراجعتك وتقييمك من 10');
-      onOpenLogin();
-      return;
-    }
-    if (!reviewComment.trim() || savingReview) {
-      onNotify('يرجى كتابة رأيك قبل الإرسال');
-      return;
-    }
-    setSavingReview(true);
-    try {
-      await saveMediaReviewToFirestore({
-        mediaId: item.id,
-        userId: currentUser.uid,
-        profileId: activeProfileId,
-        authorName: currentUser.displayName || currentUser.email || 'عضو RahaL TV',
-        authorPhoto: currentUser.photoURL || undefined,
-        rating10: reviewRating10,
-        comment: reviewComment.trim(),
-      });
-      onNotify(myReview ? 'تم تحديث مراجعتك بنجاح' : 'تم نشر مراجعتك بنجاح');
-    } catch {
-      onNotify('تعذر حفظ المراجعة حالياً، تأكد من الصلاحيات وحاول مجدداً');
-    } finally {
-      setSavingReview(false);
-    }
-  };
-
-  const handleDeleteMyReview = async () => {
-    if (!myReview || savingReview) return;
-    setSavingReview(true);
-    try {
-      await deleteMediaReviewFromFirestore(myReview.id);
-      setReviewComment('');
-      onNotify('تم حذف مراجعتك');
-    } catch {
-      onNotify('تعذر حذف المراجعة حالياً');
-    } finally {
-      setSavingReview(false);
-    }
-  };
-
-  const handleToggleHelpful = async (rev: MediaReviewRecord) => {
-    if (!currentUser) {
-      onNotify('سجل الدخول للتصويت على فائدة المراجعة');
-      onOpenLogin();
-      return;
-    }
-    const ok = await toggleReviewHelpfulInFirestore(rev, currentUser.uid);
-    if (!ok) {
-      onNotify('تعذر تسجيل التصويت حالياً');
-    }
-  };
-
-  const handleSubmitReviewReport = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!reportingReview) return;
-    if (!currentUser) {
-      onNotify('سجل الدخول لإرسال بلاغ عن المراجعة');
-      onOpenLogin();
-      return;
-    }
-    const ok = await reportMediaReviewInFirestore(reportingReview, currentUser.uid, reportReason);
-    setReportingReview(null);
-    onNotify(ok ? 'تم إرسال البلاغ لفريق الإشراف لمراجعته' : 'تعذر إرسال البلاغ حالياً');
-  };
+  const relatedItems = catalog
+    .filter(
+      (c) =>
+        c.id !== item.id &&
+        (c.kind === item.kind || (c.genres || []).some((g) => itemGenres.includes(g)))
+    )
+    .slice(0, 6);
 
   const handleCopyShortUrl = async () => {
     try {
@@ -794,54 +624,6 @@ export function SingleDetailView({
                       )}
                     </span>
                   </button>
-
-                  {item.imdb > 0 && (
-                    <div className="flex items-center justify-between gap-2 rounded-2xl bg-[#15222d]/85 border border-white/[0.05] px-3.5 py-3">
-                      <span className="flex items-center gap-2 text-xs text-[#b7c9ef] shrink-0">
-                        <Star className="w-4 h-4 text-[#f9c400]" />
-                        تقييم IMDb
-                      </span>
-                      <span dir="ltr" className="font-latin font-black text-xs sm:text-sm text-[#f9c400]">
-                        {item.imdb.toFixed(1)} / 10
-                      </span>
-                    </div>
-                  )}
-
-                  {item.ageRating && (
-                    <div className="flex items-center justify-between gap-2 rounded-2xl bg-[#15222d]/85 border border-white/[0.05] px-3.5 py-3">
-                      <span className="flex items-center gap-2 text-xs text-[#b7c9ef] shrink-0">
-                        <ShieldAlert className="w-4 h-4 text-[#D92321]" />
-                        التصنيف العمري
-                      </span>
-                      <span dir="ltr" className="font-latin font-extrabold text-xs text-white">
-                        {item.ageRating}
-                      </span>
-                    </div>
-                  )}
-
-                  {item.director && (
-                    <div className="flex items-center justify-between gap-2 rounded-2xl bg-[#15222d]/85 border border-white/[0.05] px-3.5 py-3">
-                      <span className="flex items-center gap-2 text-xs text-[#b7c9ef] shrink-0">
-                        <Users className="w-4 h-4 text-[#D92321]" />
-                        المخرج
-                      </span>
-                      <span className="font-bold text-xs sm:text-sm text-white truncate">
-                        {item.director}
-                      </span>
-                    </div>
-                  )}
-
-                  {item.writer && (
-                    <div className="flex items-center justify-between gap-2 rounded-2xl bg-[#15222d]/85 border border-white/[0.05] px-3.5 py-3">
-                      <span className="flex items-center gap-2 text-xs text-[#b7c9ef] shrink-0">
-                        <Users className="w-4 h-4 text-[#f9c400]" />
-                        المؤلف
-                      </span>
-                      <span className="font-bold text-xs sm:text-sm text-white truncate">
-                        {item.writer}
-                      </span>
-                    </div>
-                  )}
                 </div>
               </div>
 
@@ -850,7 +632,7 @@ export function SingleDetailView({
                 <span className="font-latin font-bold text-white/80 truncate">{item.englishTitle}</span>
                 <span className="inline-flex items-center gap-1.5 text-[11px] font-bold">
                   <span className="h-2 w-2 rounded-full bg-[#4CAF50]" />
-                  <span>{item.comingSoon ? 'قريباً في Rahal TV' : 'متوفر للمشاهدة المباشرة والتحميل'}</span>
+                  <span>متوفر للمشاهدة المباشرة والتحميل</span>
                 </span>
               </div>
             </div>
@@ -874,78 +656,28 @@ export function SingleDetailView({
 
               {/* Polished Primary Watch & Download Buttons */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-2.5">
-                {resumeProgress ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onOpenPlayer(
-                          item,
-                          resumeProgress.episodeNumber || selectedEpisodeNumber,
-                          0,
-                          resumeProgress.positionSec
-                        )
-                      }
-                      className="group relative flex w-full items-center justify-between gap-3 rounded-2xl bg-gradient-to-l from-[#E50914] via-[#d91e23] to-[#b30c14] border border-white/20 px-3.5 py-3 text-right text-white shadow-[0_12px_28px_rgba(229,9,20,0.35)] hover:shadow-[0_14px_34px_rgba(229,9,20,0.5)] hover:-translate-y-0.5 transition-all cursor-pointer"
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/20 border border-white/20 shadow-inner group-hover:scale-105 transition-transform">
-                          <Play className="w-5 h-5 fill-current translate-x-0.5" />
-                        </span>
-                        <div className="min-w-0">
-                          <p className="text-sm font-black leading-tight truncate">
-                            {resumeProgress.episodeNumber
-                              ? `استكمال الحلقة ${String(resumeProgress.episodeNumber).padStart(2, '0')} (${formatPlaybackSeconds(resumeProgress.positionSec)})`
-                              : `استكمال المشاهدة (${formatPlaybackSeconds(resumeProgress.positionSec)})`}
-                          </p>
-                          <p className="text-[11px] font-bold text-white/85 truncate mt-0.5">
-                            تمت مشاهدة {resumeProgress.progressPct}% • تشغيل فوري
-                          </p>
-                        </div>
-                      </div>
-                      <ChevronLeft className="w-4 h-4 shrink-0 text-white/85 group-hover:-translate-x-0.5 transition-transform" />
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onOpenPlayer(
-                          item,
-                          resumeProgress.episodeNumber || selectedEpisodeNumber,
-                          0,
-                          0
-                        )
-                      }
-                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#15222d] border border-white/10 hover:border-white/30 px-3 py-2 text-xs font-extrabold text-[#b7c9ef] hover:text-white transition-colors cursor-pointer"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>البدء من البداية</span>
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => onOpenPlayer(item, selectedEpisodeNumber)}
-                    className="group relative flex w-full items-center justify-between gap-3 rounded-2xl bg-gradient-to-l from-[#E50914] via-[#d91e23] to-[#b30c14] border border-white/20 px-3.5 py-3 text-right text-white shadow-[0_12px_28px_rgba(229,9,20,0.35)] hover:shadow-[0_14px_34px_rgba(229,9,20,0.5)] hover:-translate-y-0.5 transition-all cursor-pointer"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/20 border border-white/20 shadow-inner group-hover:scale-105 transition-transform">
-                        <Play className="w-5 h-5 fill-current translate-x-0.5" />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-black leading-tight truncate">
-                          {allEpisodes.length > 0
-                            ? `مشاهدة الحلقة ${String(selectedEpisodeNumber).padStart(2, '0')}`
-                            : 'مشاهدة الآن'}
-                        </p>
-                        <p className="text-[11px] font-bold text-white/85 truncate mt-0.5">
-                          سيرفرات متعددة • تشغيل فوري
-                        </p>
-                      </div>
+                <button
+                  type="button"
+                  onClick={() => onOpenPlayer(item, selectedEpisodeNumber)}
+                  className="group relative flex w-full items-center justify-between gap-3 rounded-2xl bg-gradient-to-l from-[#E50914] via-[#d91e23] to-[#b30c14] border border-white/20 px-3.5 py-3 text-right text-white shadow-[0_12px_28px_rgba(229,9,20,0.35)] hover:shadow-[0_14px_34px_rgba(229,9,20,0.5)] hover:-translate-y-0.5 transition-all cursor-pointer"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/20 border border-white/20 shadow-inner group-hover:scale-105 transition-transform">
+                      <Play className="w-5 h-5 fill-current translate-x-0.5" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-black leading-tight truncate">
+                        {allEpisodes.length > 0
+                          ? `مشاهدة الحلقة ${String(selectedEpisodeNumber).padStart(2, '0')}`
+                          : 'مشاهدة الآن'}
+                      </p>
+                      <p className="text-[11px] font-bold text-white/85 truncate mt-0.5">
+                        سيرفرات متعددة • تشغيل فوري
+                      </p>
                     </div>
-                    <ChevronLeft className="w-4 h-4 shrink-0 text-white/85 group-hover:-translate-x-0.5 transition-transform" />
-                  </button>
-                )}
+                  </div>
+                  <ChevronLeft className="w-4 h-4 shrink-0 text-white/85 group-hover:-translate-x-0.5 transition-transform" />
+                </button>
 
                 <button
                   type="button"
@@ -1494,21 +1226,15 @@ export function SingleDetailView({
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                   {activeSeason.episodes.map((ep) => {
                     const epSrvCount = ep.servers?.length || 0;
-                    const epProg = findProgressForEpisode(
-                      item.id,
-                      activeSeason.seasonNumber,
-                      ep.number,
-                      watchProgressRecords
-                    );
                     return (
                       <button
                         key={ep.number}
                         type="button"
                         onClick={() => {
                           setSelectedEpisodeNumber(ep.number);
-                          onOpenPlayer(item, ep.number, 0, epProg && !epProg.completed ? epProg.positionSec : 0);
+                          onOpenPlayer(item, ep.number, 0);
                         }}
-                        className="group relative overflow-hidden flex items-center justify-between rounded-2xl bg-[#1a242e] border border-white/[0.08] p-4 text-right hover:border-[#D92321] transition-all cursor-pointer"
+                        className="group flex items-center justify-between rounded-2xl bg-[#1a242e] border border-white/[0.08] p-4 text-right hover:border-[#D92321] transition-all cursor-pointer"
                       >
                         <div>
                           <p className="text-sm font-extrabold text-white group-hover:text-[#D92321]">
@@ -1522,14 +1248,6 @@ export function SingleDetailView({
                         <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#0c1821] text-[#D92321] group-hover:bg-[#D92321] group-hover:text-white transition-colors">
                           <Play className="w-4 h-4 fill-current" />
                         </span>
-                        {epProg && epProg.progressPct > 0 && (
-                          <div className="absolute inset-x-0 bottom-0 h-1 bg-white/10">
-                            <div
-                              className="h-full bg-[#E50914]"
-                              style={{ width: `${Math.min(100, epProg.progressPct)}%` }}
-                            />
-                          </div>
-                        )}
                       </button>
                     );
                   })}
@@ -1568,209 +1286,6 @@ export function SingleDetailView({
               </div>
             )}
           </div>
-        </div>
-      </section>
-
-      {/* 3b. Community Reviews (1-10) & Ratings Separation */}
-      <section className="mx-auto max-w-[1440px] px-3.5 sm:px-6 lg:px-8 mt-8 sm:mt-10">
-        <div className="rounded-2xl sm:rounded-3xl bg-[#0c1821] border border-white/[0.08] p-4 sm:p-6 space-y-5">
-          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/[0.08] pb-4">
-            <div className="space-y-1">
-              <h2 className="font-display text-lg sm:text-xl font-extrabold text-white flex items-center gap-2">
-                <MessageSquare className="w-5 h-5 text-[#E50914]" />
-                <span>تقييمات ومراجعات مجتمع Rahal TV</span>
-              </h2>
-              <p className="text-xs text-[#b7c9ef]">
-                مراجعة واحدة لكل عضو (من 1 إلى 10) منفصلة تماماً عن تقييم IMDb الرسمي
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              {item.imdb > 0 && (
-                <div className="rounded-xl bg-[#15222d] border border-white/10 px-3.5 py-2 text-center">
-                  <p className="text-[10px] font-bold text-[#b7c9ef]">IMDb</p>
-                  <p dir="ltr" className="font-latin text-sm font-black text-[#f9c400]">
-                    {item.imdb.toFixed(1)} / 10
-                  </p>
-                </div>
-              )}
-              <div className="rounded-xl bg-[#15222d] border border-[#4CAF50]/35 px-3.5 py-2 text-center">
-                <p className="text-[10px] font-bold text-[#b7c9ef]">تقييم المجتمع ({reviews.length})</p>
-                <p dir="ltr" className="font-latin text-sm font-black text-[#4CAF50]">
-                  {communityReviewAvg10 !== null ? `${communityReviewAvg10.toFixed(1)} / 10` : '—'}
-                </p>
-              </div>
-              <select
-                value={reviewSort}
-                onChange={(e) => setReviewSort(e.target.value as 'newest' | 'helpful')}
-                aria-label="ترتيب المراجعات"
-                className="rounded-xl bg-[#15222d] border border-white/10 px-3 py-2 text-xs font-bold text-white"
-              >
-                <option value="newest">الأحدث</option>
-                <option value="helpful">الأكثر فائدة</option>
-              </select>
-            </div>
-          </div>
-
-          <form onSubmit={handleSaveReview} className="rounded-2xl bg-[#111e29] border border-white/[0.07] p-4 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="text-xs font-extrabold text-white">
-                {myReview ? 'تعديل مراجعتك المنشورة' : 'أضف مراجعتك لهذا العمل'}
-              </span>
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-bold text-[#b7c9ef]">التقييم (1–10):</span>
-                <select
-                  value={reviewRating10}
-                  onChange={(e) => setReviewRating10(Number(e.target.value))}
-                  aria-label="التقييم من 10"
-                  className="font-latin rounded-lg bg-[#0c1821] border border-white/15 px-2.5 py-1 text-xs font-black text-[#f9c400]"
-                >
-                  {[10, 9, 8, 7, 6, 5, 4, 3, 2, 1].map((n) => (
-                    <option key={n} value={n}>
-                      {n} / 10
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <textarea
-              rows={3}
-              value={reviewComment}
-              onChange={(e) => setReviewComment(e.target.value)}
-              maxLength={1500}
-              placeholder={
-                currentUser
-                  ? 'شاركنا رأيك في الإخراج، التمثيل، والقصة دون حرق للأحداث...'
-                  : 'سجّل الدخول بحسابك لكتابة مراجعة وتقييم العمل...'
-              }
-              className="w-full rounded-xl bg-[#0c1821] border border-white/10 px-3.5 py-2.5 text-xs sm:text-sm text-white placeholder:text-[#b7c9ef]/50 focus:border-[#E50914] focus:outline-none"
-            />
-
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              {myReview ? (
-                <button
-                  type="button"
-                  disabled={savingReview}
-                  onClick={() => void handleDeleteMyReview()}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321]/15 border border-[#D92321]/40 px-3.5 py-2 text-xs font-bold text-[#ff7676] hover:bg-[#D92321] hover:text-white cursor-pointer"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>حذف مراجعتي</span>
-                </button>
-              ) : (
-                <span className="text-[11px] text-[#b7c9ef]">
-                  مراجعة واحدة متاحة لكل حساب ويمكن تعديلها لاحقاً
-                </span>
-              )}
-
-              <button
-                type="submit"
-                disabled={savingReview}
-                className="inline-flex items-center gap-2 rounded-xl bg-[#E50914] hover:bg-[#f40612] px-5 py-2 text-xs font-extrabold text-white cursor-pointer disabled:opacity-60"
-              >
-                {currentUser ? <Check className="w-3.5 h-3.5" /> : <LogIn className="w-3.5 h-3.5" />}
-                <span>{savingReview ? 'جاري النشر...' : myReview ? 'تحديث المراجعة' : 'نشر المراجعة'}</span>
-              </button>
-            </div>
-          </form>
-
-          {sortedReviews.length === 0 ? (
-            <p className="text-center text-xs text-[#b7c9ef] py-6">
-              لا توجد مراجعات مكتوبة بعد — كن أول من يكتب مراجعته لهذا العمل!
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {sortedReviews.map((rev) => {
-                const isHelpfulByMe = currentUser ? (rev.helpfulUids || []).includes(currentUser.uid) : false;
-                const helpfulTotal = rev.helpfulCount ?? rev.helpfulUids?.length ?? 0;
-                return (
-                  <div
-                    key={rev.id}
-                    className="rounded-2xl bg-[#13202c] border border-white/[0.07] p-4 space-y-2"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2.5">
-                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#E50914]/20 border border-[#E50914]/40 text-xs font-black text-white">
-                          {rev.authorName.slice(0, 1).toUpperCase()}
-                        </span>
-                        <div>
-                          <p className="text-xs font-extrabold text-white">{rev.authorName}</p>
-                          <p className="font-latin text-[10px] text-[#b7c9ef]">
-                            {new Date(rev.updatedAtMs || rev.createdAtMs || Date.now()).toLocaleDateString('ar-EG')}
-                          </p>
-                        </div>
-                      </div>
-                      <span dir="ltr" className="font-latin rounded-lg bg-[#0c1821] border border-[#f9c400]/30 px-2.5 py-1 text-xs font-black text-[#f9c400]">
-                        {rev.rating10} / 10
-                      </span>
-                    </div>
-
-                    <p className="text-xs sm:text-sm text-[#dbe6ff] leading-relaxed">{rev.comment}</p>
-
-                    <div className="flex items-center justify-between pt-1 border-t border-white/[0.05]">
-                      <button
-                        type="button"
-                        onClick={() => void handleToggleHelpful(rev)}
-                        className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold transition-colors cursor-pointer ${
-                          isHelpfulByMe
-                            ? 'bg-[#4CAF50]/20 text-[#4CAF50] border border-[#4CAF50]/40'
-                            : 'bg-white/5 text-[#b7c9ef] hover:text-white'
-                        }`}
-                      >
-                        <ThumbsUp className="w-3 h-3" />
-                        <span>مفيد ({helpfulTotal})</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setReportingReview(rev)}
-                        className="inline-flex items-center gap-1 text-[11px] font-bold text-[#b7c9ef] hover:text-[#ff7676] cursor-pointer"
-                      >
-                        <Flag className="w-3 h-3" />
-                        <span>إبلاغ</span>
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {reportingReview && (
-            <form
-              onSubmit={handleSubmitReviewReport}
-              className="rounded-2xl bg-[#1a242e] border border-[#E50914]/45 p-4 space-y-3"
-            >
-              <p className="text-xs font-extrabold text-white">
-                إبلاغ عن مراجعة &quot;{reportingReview.authorName}&quot;
-              </p>
-              <select
-                value={reportReason}
-                onChange={(e) => setReportReason(e.target.value)}
-                className="w-full rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-xs text-white"
-              >
-                <option value="حرق للأحداث بدون تحذير">حرق للأحداث بدون تحذير</option>
-                <option value="ألفاظ غير لائقة أو إساءة">ألفاظ غير لائقة أو إساءة</option>
-                <option value="محتوى عشوائي أو إعلانات">محتوى عشوائي أو إعلانات</option>
-              </select>
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setReportingReview(null)}
-                  className="rounded-lg bg-white/5 px-3 py-1.5 text-xs font-bold text-[#b7c9ef] cursor-pointer"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  className="rounded-lg bg-[#E50914] px-4 py-1.5 text-xs font-extrabold text-white cursor-pointer"
-                >
-                  إرسال البلاغ
-                </button>
-              </div>
-            </form>
-          )}
         </div>
       </section>
 

@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react';
 import {
-  Baby,
-  Bell,
   Bookmark,
   ChevronDown,
   Clapperboard,
@@ -18,7 +16,7 @@ import {
 } from 'lucide-react';
 import { NAV_ITEMS } from '../data/catalog';
 import { matchesCategoryFilter, normalizeArabicText } from '../lib/mediaFilters';
-import { MediaItem, UserSubProfile, WebsiteBrandingConfig } from '../types/media';
+import { MediaItem, WebsiteBrandingConfig } from '../types/media';
 import { Logo } from './Logo';
 import { PWAInstallButton } from './PWAControls';
 
@@ -41,10 +39,6 @@ interface HeaderProps {
   currentView: 'home' | 'archive' | 'single' | 'admin';
   branding?: WebsiteBrandingConfig;
   siteName?: string;
-  activeProfile?: UserSubProfile;
-  onOpenProfiles?: () => void;
-  unreadNotificationsCount?: number;
-  onOpenNotifications?: () => void;
 }
 
 export function Header({
@@ -65,10 +59,6 @@ export function Header({
   currentView,
   branding,
   siteName,
-  activeProfile,
-  onOpenProfiles,
-  unreadNotificationsCount = 0,
-  onOpenNotifications,
 }: HeaderProps) {
   const [sectionsOpen, setSectionsOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -281,45 +271,6 @@ export function Header({
               )}
             </button>
 
-            {onOpenNotifications && (
-              <button
-                type="button"
-                onClick={onOpenNotifications}
-                aria-label="الإشعارات"
-                className="relative inline-flex h-10 w-10 items-center justify-center rounded-xl bg-[#181818] border border-white/10 text-[#e5e5e5] hover:border-[#f9c400]/60 hover:text-white transition-colors cursor-pointer shrink-0"
-              >
-                <Bell className="w-4 h-4 text-[#f9c400]" />
-                {unreadNotificationsCount > 0 && (
-                  <span className="font-latin absolute -top-1 -left-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#E50914] px-1 text-[9px] font-black text-white tabular-nums">
-                    {unreadNotificationsCount}
-                  </span>
-                )}
-              </button>
-            )}
-
-            {onOpenProfiles && activeProfile && (
-              <button
-                type="button"
-                onClick={onOpenProfiles}
-                aria-label={`تبديل الملف الشخصي (${activeProfile.name})`}
-                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl bg-[#181818] border border-white/10 px-2.5 text-xs font-bold text-white hover:border-[#4CAF50]/70 transition-colors cursor-pointer shrink-0"
-              >
-                <span
-                  style={{ backgroundColor: activeProfile.avatarColor || '#dc2626' }}
-                  className="flex h-6 w-6 items-center justify-center rounded-lg text-xs"
-                >
-                  {activeProfile.avatarEmoji || '🎬'}
-                </span>
-                <span className="hidden xl:inline max-w-[78px] truncate">{activeProfile.name}</span>
-                {activeProfile.isKids && (
-                  <span className="inline-flex items-center gap-0.5 rounded bg-[#4CAF50]/20 px-1.5 py-0.5 text-[9px] font-black text-[#4CAF50]">
-                    <Baby className="w-3 h-3" />
-                    أطفال
-                  </span>
-                )}
-              </button>
-            )}
-
             {isAdmin && (
               <button
                 type="button"
@@ -417,30 +368,6 @@ export function Header({
                 {isGuest ? 'إدارة' : username ? 'حسابي' : 'دخول'}
               </span>
             </button>
-
-            {onOpenProfiles && activeProfile && (
-              <button
-                type="button"
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  onOpenProfiles();
-                }}
-                className="mb-3 flex min-h-11 w-full items-center justify-between gap-2 rounded-xl bg-[#1c1c1c] border border-white/10 px-3.5 py-2 text-xs font-bold text-white hover:border-[#4CAF50]/60 cursor-pointer"
-              >
-                <span className="inline-flex items-center gap-2 truncate">
-                  <span
-                    style={{ backgroundColor: activeProfile.avatarColor || '#dc2626' }}
-                    className="flex h-6 w-6 items-center justify-center rounded-lg text-xs"
-                  >
-                    {activeProfile.avatarEmoji || '🎬'}
-                  </span>
-                  <span className="truncate">الملف: {activeProfile.name}</span>
-                </span>
-                <span className="rounded-md bg-white/10 px-2 py-0.5 text-[10px] text-[#4CAF50] shrink-0">
-                  {activeProfile.isKids ? 'وضع الأطفال' : 'تبديل'}
-                </span>
-              </button>
-            )}
 
             {/* Quick Mobile Search Trigger */}
             <button

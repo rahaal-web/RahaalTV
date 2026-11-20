@@ -21,11 +21,9 @@ import {
   Tags,
   Trophy,
   Tv,
-  X,
   Zap,
 } from 'lucide-react';
 import { CATEGORY_TAGS } from '../data/catalog';
-import { sanitizeRatingMediaId } from '../lib/firebase';
 import { normalizeHomeConfig, resolveSectionMediaItems } from '../lib/homeConfig';
 import {
   FALLBACK_BACKDROP,
@@ -40,18 +38,12 @@ import {
   getHeroThumbUrl,
   getPosterUrl,
 } from '../lib/mediaImages';
-import { buildPersonalizedShelves } from '../lib/recommendations';
-import {
-  buildContinueWatchingEntries,
-  formatPlaybackSeconds,
-} from '../lib/watchProgress';
 import {
   CatalogFilterState,
   HomeSectionConfig,
   HomeSectionSource,
   MediaItem,
   SiteSettings,
-  WatchProgressRecord,
 } from '../types/media';
 import { MovieCard, MovieCardSkeleton } from './MovieCard';
 
@@ -67,10 +59,6 @@ interface HomeViewProps {
   onOpenHomeBuilder?: () => void;
   watchlistIds: string[];
   onToggleWatchlist: (item: MediaItem) => void;
-  watchProgressRecords?: WatchProgressRecord[];
-  userId?: string | null;
-  onResumePlay?: (item: MediaItem, episodeNumber?: number, positionSec?: number) => void;
-  onRemoveContinueWatching?: (progressId: string) => void;
 }
 
 const QUICK_FILTER_TABS: Array<{
@@ -91,33 +79,19 @@ const QUICK_FILTER_TABS: Array<{
 function getSectionIcon(source: HomeSectionSource) {
   switch (source) {
     case 'movies':
-    case 'recent_movies':
       return <Film className="w-5 h-5 text-[#E50914]" />;
     case 'series':
-    case 'recent_series':
-    case 'new_episodes':
       return <Tv className="w-5 h-5 text-[#E50914]" />;
     case 'top_rated':
-    case 'worth_watching':
-    case 'award_winners':
-    case 'hidden_gems':
       return <Star className="w-5 h-5 text-[#f9c400]" />;
     case 'trending':
-    case 'top_viewed':
-    case 'most_popular':
-    case 'watching_now':
       return <Flame className="w-5 h-5 text-[#E50914]" />;
     case 'wrestling':
       return <Trophy className="w-5 h-5 text-[#f9c400]" />;
     case 'ramadan':
-    case 'for_you':
-    case 'because_you_watched':
-    case 'admin_picks':
       return <Sparkles className="w-5 h-5 text-[#f9c400]" />;
     case 'category':
     case 'custom':
-    case 'family':
-    case 'coming_soon':
       return <Layers className="w-5 h-5 text-[#E50914]" />;
     case 'latest':
     default:
@@ -128,39 +102,17 @@ function getSectionIcon(source: HomeSectionSource) {
 function getSectionViewAllFilter(section: HomeSectionConfig): Partial<CatalogFilterState> {
   switch (section.source) {
     case 'movies':
-    case 'recent_movies':
       return { category: 'افلام' };
     case 'series':
-    case 'recent_series':
-    case 'new_episodes':
       return { category: 'مسلسلات' };
     case 'top_rated':
-    case 'worth_watching':
-    case 'award_winners':
       return { preset: 'rating' };
     case 'trending':
-    case 'top_viewed':
-    case 'most_popular':
-    case 'watching_now':
       return { preset: 'views' };
-    case 'admin_picks':
-      return { preset: 'pinned' };
-    case 'coming_soon':
-      return { releaseStatus: 'comingSoon' };
     case 'ramadan':
       return { category: 'رمضان 2026' };
     case 'wrestling':
       return { category: 'مصارعة حرة' };
-    case 'genre_action':
-      return { genre: 'أكشن' };
-    case 'genre_horror':
-      return { genre: 'رعب' };
-    case 'genre_comedy':
-      return { genre: 'كوميديا' };
-    case 'arab_productions':
-      return { category: 'افلام عربية' };
-    case 'turkish_works':
-      return { country: 'تركيا' };
     case 'category':
       return section.categoryFilter ? { category: section.categoryFilter } : {};
     case 'latest':
@@ -232,14 +184,12 @@ function SectionHorizontalRow({
   items,
   cardStyle,
   watchlistIds,
-  watchProgressMap,
   onSelectMedia,
   onToggleWatchlist,
 }: {
   items: MediaItem[];
   cardStyle: 'clean' | 'classic';
   watchlistIds: string[];
-  watchProgressMap?: Record<string, WatchProgressRecord>;
   onSelectMedia: (item: MediaItem, openDownloads?: boolean) => void;
   onToggleWatchlist: (item: MediaItem) => void;
 }) {
@@ -282,7 +232,6 @@ function SectionHorizontalRow({
               isInWatchlist={watchlistIds.includes(item.id)}
               onToggleWatchlist={onToggleWatchlist}
               variant={cardStyle}
-              watchProgress={watchProgressMap?.[sanitizeRatingMediaId(item.id)]}
             />
           </div>
         ))}
@@ -312,42 +261,10 @@ export function HomeView({
   onOpenHomeBuilder,
   watchlistIds,
   onToggleWatchlist,
-  watchProgressRecords = [],
-  userId = null,
-  onResumePlay,
-  onRemoveContinueWatching,
 }: HomeViewProps) {
   const homeConfig = useMemo(
     () => normalizeHomeConfig(siteSettings.homeConfig),
     [siteSettings.homeConfig]
-  );
-
-  const watchProgressMap = useMemo(() => {
-    const map: Record<string, WatchProgressRecord> = {};
-    for (const rec of watchProgressRecords) {
-      const key = sanitizeRatingMediaId(rec.mediaId);
-      const existing = map[key];
-      if (!existing || (rec.updatedAtMs || 0) > (existing.updatedAtMs || 0)) {
-        map[key] = rec;
-      }
-    }
-    return map;
-  }, [watchProgressRecords]);
-
-  const continueWatchingEntries = useMemo(
-    () => buildContinueWatchingEntries(catalog, watchProgressRecords, 14),
-    [catalog, watchProgressRecords]
-  );
-
-  const personalizedShelves = useMemo(
-    () =>
-      buildPersonalizedShelves({
-        catalog,
-        watchProgress: watchProgressRecords,
-        watchlistIds,
-        userId,
-      }),
-    [catalog, watchProgressRecords, watchlistIds, userId]
   );
 
   const pinnedList = useMemo(() => catalog.filter((i) => i.pinned), [catalog]);
@@ -1282,106 +1199,6 @@ export function HomeView({
         </section>
       )}
 
-      {/* 2b. Continue Watching Shelf */}
-      {continueWatchingEntries.length > 0 && (
-        <RevealSection className="mx-auto max-w-[1440px] px-3.5 sm:px-6 lg:px-8 space-y-3.5 sm:space-y-4">
-          <div className="flex items-center justify-between gap-3">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <Clock className="w-5 h-5 text-[#E50914]" />
-                <h2
-                  style={{ fontSize: 'var(--rtv-section-title-size, 22px)' }}
-                  className="font-display font-extrabold text-white leading-snug"
-                >
-                  أكمل المشاهدة
-                </h2>
-              </div>
-              <p className="text-xs sm:text-sm text-[#a3a3a3]">استأنف التشغيل من آخر نقطة توقفت عندها</p>
-            </div>
-          </div>
-
-          <div className="flex gap-3 sm:gap-4 overflow-x-auto no-scrollbar pb-2 snap-x snap-mandatory">
-            {continueWatchingEntries.map(({ media, progress }) => {
-              const pct = Math.min(100, Math.max(4, progress.progressPct || 0));
-              const remainingSec =
-                progress.durationSec > progress.positionSec
-                  ? progress.durationSec - progress.positionSec
-                  : 0;
-              return (
-                <div
-                  key={progress.id}
-                  className="group relative w-[64%] sm:w-[34%] md:w-[24%] lg:w-[20%] shrink-0 snap-start rounded-2xl bg-[#181818] border border-white/[0.08] overflow-hidden shadow-lg hover:border-[#E50914]/60 transition-all"
-                >
-                  <div
-                    onClick={() =>
-                      onResumePlay
-                        ? onResumePlay(media, progress.episodeNumber || 1, progress.positionSec)
-                        : onSelectMedia(media)
-                    }
-                    className="relative aspect-video w-full overflow-hidden bg-[#101010] cursor-pointer"
-                  >
-                    <img
-                      src={getPosterUrl(media)}
-                      alt={media.title}
-                      loading="lazy"
-                      referrerPolicy="no-referrer"
-                      onError={handlePosterError}
-                      className="h-full w-full object-cover object-center transition-transform duration-500 group-hover:scale-105"
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-[#181818] via-black/25 to-black/40" />
-
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#E50914]/95 text-white shadow-xl group-hover:scale-110 transition-transform">
-                        <Play className="w-5 h-5 fill-current mr-[-2px]" />
-                      </span>
-                    </div>
-
-                    {progress.episodeNumber && (
-                      <span className="absolute top-2 right-2 rounded-md bg-black/75 border border-white/15 px-2 py-0.5 text-[10px] font-extrabold text-[#f9c400]">
-                        الحلقة {progress.episodeNumber}
-                      </span>
-                    )}
-
-                    <div className="absolute inset-x-0 bottom-0 h-1.5 bg-white/15">
-                      <div className="h-full bg-[#E50914]" style={{ width: `${pct}%` }} />
-                    </div>
-                  </div>
-
-                  {onRemoveContinueWatching && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onRemoveContinueWatching(progress.id);
-                      }}
-                      aria-label={`إزالة ${media.title} من أكمل المشاهدة`}
-                      className="absolute top-2 left-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-lg bg-black/70 text-white/80 hover:bg-[#E50914] hover:text-white transition-colors cursor-pointer"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-
-                  <div className="p-2.5 text-right flex items-center justify-between gap-2">
-                    <div
-                      onClick={() => onSelectMedia(media)}
-                      className="min-w-0 flex-1 cursor-pointer"
-                    >
-                      <h3 className="text-xs font-extrabold text-white truncate hover:text-[#E50914]">
-                        {media.title}
-                      </h3>
-                      <p className="font-latin text-[10px] text-[#a3a3a3] mt-0.5 truncate">
-                        {formatPlaybackSeconds(progress.positionSec)}
-                        {remainingSec > 0 ? ` • متبقي ${formatPlaybackSeconds(remainingSec)}` : ` • ${pct}%`}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </RevealSection>
-      )}
-
       {/* 3. Dynamic Admin-Controlled Content Sections */}
       {enabledSections.map((section) => {
         const items = resolveSectionMediaItems(catalog, section);
@@ -1423,7 +1240,6 @@ export function HomeView({
                 items={items}
                 cardStyle={homeConfig.cardStyle}
                 watchlistIds={watchlistIds}
-                watchProgressMap={watchProgressMap}
                 onSelectMedia={onSelectMedia}
                 onToggleWatchlist={onToggleWatchlist}
               />
@@ -1437,7 +1253,6 @@ export function HomeView({
                     isInWatchlist={watchlistIds.includes(item.id)}
                     onToggleWatchlist={onToggleWatchlist}
                     variant={homeConfig.cardStyle}
-                    watchProgress={watchProgressMap[sanitizeRatingMediaId(item.id)]}
                   />
                 ))}
               </div>
@@ -1445,36 +1260,6 @@ export function HomeView({
           </RevealSection>
         );
       })}
-
-      {/* 3b. Personalized Recommendation Shelves */}
-      {personalizedShelves.map((shelf) => (
-        <RevealSection
-          key={shelf.id}
-          className="mx-auto max-w-[1440px] px-3.5 sm:px-6 lg:px-8 space-y-3.5 sm:space-y-4"
-        >
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-5 h-5 text-[#f9c400]" />
-              <h2
-                style={{ fontSize: 'var(--rtv-section-title-size, 22px)' }}
-                className="font-display font-extrabold text-white leading-snug truncate"
-              >
-                {shelf.title}
-              </h2>
-            </div>
-            <p className="text-xs sm:text-sm text-[#a3a3a3] line-clamp-1">{shelf.subtitle}</p>
-          </div>
-
-          <SectionHorizontalRow
-            items={shelf.items}
-            cardStyle={homeConfig.cardStyle}
-            watchlistIds={watchlistIds}
-            watchProgressMap={watchProgressMap}
-            onSelectMedia={onSelectMedia}
-            onToggleWatchlist={onToggleWatchlist}
-          />
-        </RevealSection>
-      ))}
 
       {/* 4. Optional Category Tag Strip (Admin Toggleable) */}
       {homeConfig.showCategoryBar && (

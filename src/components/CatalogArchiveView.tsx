@@ -78,7 +78,6 @@ export function CatalogArchiveView({
     filters.language,
     filters.quality,
     filters.minImdb,
-    filters.releaseStatus,
     filters.preset,
     sortOverride,
     pageSize,
@@ -218,7 +217,7 @@ export function CatalogArchiveView({
 
       {/* Multi-Dropdown Filter Controls (dynamically enriched from live catalog) */}
       <div className="rounded-2xl sm:rounded-3xl bg-[#0c1821] border border-white/[0.08] p-3.5 sm:p-5">
-        <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-10 gap-2.5 sm:gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2.5 sm:gap-3">
           {/* Text Search */}
           <div className="relative col-span-2 xl:col-span-2">
             <Search className="w-4 h-4 text-[#D92321] absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -288,20 +287,6 @@ export function CatalogArchiveView({
           </select>
 
           <select
-            value={filters.language}
-            onChange={(e) => onUpdateFilters({ ...filters, language: e.target.value })}
-            aria-label="اللغة"
-            className="min-h-[44px] rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2.5 text-xs font-bold text-white focus:border-[#D92321] focus:outline-none"
-          >
-            <option value="">كل اللغات</option>
-            {dynamicOptions.languages.map((lang) => (
-              <option key={lang} value={lang}>
-                {lang}
-              </option>
-            ))}
-          </select>
-
-          <select
             value={filters.quality}
             onChange={(e) => onUpdateFilters({ ...filters, quality: e.target.value })}
             aria-label="الجودة"
@@ -313,34 +298,6 @@ export function CatalogArchiveView({
                 {q}
               </option>
             ))}
-          </select>
-
-          <select
-            value={filters.minImdb || 0}
-            onChange={(e) => onUpdateFilters({ ...filters, minImdb: Number(e.target.value) || 0 })}
-            aria-label="الحد الأدنى للتقييم"
-            className="min-h-[44px] rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2.5 text-xs font-bold text-white focus:border-[#D92321] focus:outline-none"
-          >
-            <option value={0}>كل التقييمات</option>
-            <option value={6}>تقييم +6.0</option>
-            <option value={7}>تقييم +7.0</option>
-            <option value={8}>تقييم +8.0</option>
-          </select>
-
-          <select
-            value={filters.releaseStatus || 'all'}
-            onChange={(e) =>
-              onUpdateFilters({
-                ...filters,
-                releaseStatus: e.target.value as CatalogFilterState['releaseStatus'],
-              })
-            }
-            aria-label="حالة الإصدار"
-            className="min-h-[44px] rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2.5 text-xs font-bold text-white focus:border-[#D92321] focus:outline-none"
-          >
-            <option value="all">حالة الإصدار: الكل</option>
-            <option value="released">متاح للمشاهدة الآن</option>
-            <option value="comingSoon">قريباً</option>
           </select>
 
           <select
@@ -358,7 +315,7 @@ export function CatalogArchiveView({
               }
             }}
             aria-label="الترتيب"
-            className="col-span-2 md:col-span-2 xl:col-span-2 min-h-[44px] rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2.5 text-xs font-bold text-white focus:border-[#D92321] focus:outline-none"
+            className="min-h-[44px] rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2.5 text-xs font-bold text-white focus:border-[#D92321] focus:outline-none"
           >
             <option value="latest">الترتيب: الأحدث إضافة</option>
             <option value="year">الأحدث سنة إنتاج</option>

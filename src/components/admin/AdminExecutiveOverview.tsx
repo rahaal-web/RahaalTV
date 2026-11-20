@@ -35,11 +35,6 @@ import {
 } from '../../lib/crawlTasksDb';
 import { getMediaImageQualityStatus, getPosterUrl } from '../../lib/mediaImages';
 import {
-  type AggregatedAnalyticsSummary,
-  type AnalyticsTimeframe,
-  loadMergedAnalyticsSummary,
-} from '../../lib/analytics';
-import {
   AdminRoleRecord,
   MediaItem,
   MediaKind,
@@ -88,9 +83,6 @@ export function AdminExecutiveOverview({
   onEditMedia,
 }: AdminExecutiveOverviewProps) {
   const [analyticsSort, setAnalyticsSort] = useState<'views' | 'rating' | 'likes'>('views');
-  const [analyticsTimeframe, setAnalyticsTimeframe] = useState<AnalyticsTimeframe>('weekly');
-  const [analyticsSummary, setAnalyticsSummary] = useState<AggregatedAnalyticsSummary | null>(null);
-  const [loadingAnalytics, setLoadingAnalytics] = useState(false);
   const [crawlTasks, setCrawlTasks] = useState<CrawlTaskRecord[]>(() => loadCrawlTasks());
   const [clientErrors, setClientErrors] = useState<ClientErrorRecord[]>(() => loadClientErrorLogs());
 
@@ -101,22 +93,6 @@ export function AdminExecutiveOverview({
       setCrawlTasks(loadCrawlTasks());
     });
   }, []);
-
-  useEffect(() => {
-    if (mode !== 'analytics') return;
-    let active = true;
-    setLoadingAnalytics(true);
-    void loadMergedAnalyticsSummary(analyticsTimeframe)
-      .then((res) => {
-        if (active) setAnalyticsSummary(res);
-      })
-      .finally(() => {
-        if (active) setLoadingAnalytics(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [mode, analyticsTimeframe]);
 
   const auditReport = useMemo(() => runCatalogContentAudit(catalog), [catalog]);
 
@@ -254,184 +230,28 @@ export function AdminExecutiveOverview({
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex flex-wrap gap-1 rounded-xl bg-[#1a242e] p-1 border border-white/10">
-              {(
-                [
-                  { id: 'daily', label: 'يومي' },
-                  { id: 'weekly', label: 'أسبوعي' },
-                  { id: 'monthly', label: 'شهري' },
-                ] as const
-              ).map((tf) => (
-                <button
-                  key={tf.id}
-                  type="button"
-                  onClick={() => setAnalyticsTimeframe(tf.id)}
-                  className={`rounded-lg px-2.5 py-1.5 text-xs font-extrabold cursor-pointer transition-colors ${
-                    analyticsTimeframe === tf.id
-                      ? 'bg-[#f9c400] text-[#06131c]'
-                      : 'text-[#b7c9ef] hover:text-white'
-                  }`}
-                >
-                  {tf.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex flex-wrap gap-1.5 rounded-xl bg-[#1a242e] p-1 border border-white/10">
-              {(
-                [
-                  { id: 'views', label: 'الأكثر مشاهدة' },
-                  { id: 'rating', label: 'الأعلى تقييماً' },
-                  { id: 'likes', label: 'الأكثر إعجاباً' },
-                ] as const
-              ).map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => setAnalyticsSort(opt.id)}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-extrabold cursor-pointer transition-colors ${
-                    analyticsSort === opt.id
-                      ? 'bg-[#D92321] text-white'
-                      : 'text-[#b7c9ef] hover:text-white'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
+          <div className="flex flex-wrap gap-1.5 rounded-xl bg-[#1a242e] p-1 border border-white/10">
+            {(
+              [
+                { id: 'views', label: 'الأكثر مشاهدة' },
+                { id: 'rating', label: 'الأعلى تقييماً' },
+                { id: 'likes', label: 'الأكثر إعجاباً' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setAnalyticsSort(opt.id)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-extrabold cursor-pointer transition-colors ${
+                  analyticsSort === opt.id
+                    ? 'bg-[#D92321] text-white'
+                    : 'text-[#b7c9ef] hover:text-white'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
           </div>
-        </div>
-
-        {/* Real Usage Events Summary (Non-fabricated) */}
-        <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="font-display text-sm font-extrabold text-white flex items-center gap-2">
-              <Activity className="w-4 h-4 text-[#4CAF50]" />
-              <span>
-                إحصاءات التشغيل الحقيقية (
-                {analyticsTimeframe === 'daily'
-                  ? 'اليوم'
-                  : analyticsTimeframe === 'weekly'
-                    ? 'آخر 7 أيام'
-                    : 'آخر 30 يوماً'}
-                )
-              </span>
-            </h3>
-            <span className="text-[11px] font-bold text-[#9fb2d4]">
-              {loadingAnalytics
-                ? 'جاري التحديث...'
-                : `تم احتساب ${analyticsSummary?.daysCount || 0} يوم مسجل`}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <div className="rounded-2xl bg-[#12202b] border border-white/[0.06] p-3.5">
-              <p className="text-[11px] font-bold text-[#b7c9ef]">مرات بدء التشغيل</p>
-              <p className="font-latin text-2xl font-black text-white mt-1 tabular-nums">
-                {(analyticsSummary?.playbackStarts || 0).toLocaleString('en-US')}
-              </p>
-            </div>
-            <div className="rounded-2xl bg-[#12202b] border border-white/[0.06] p-3.5">
-              <p className="text-[11px] font-bold text-[#b7c9ef]">إكمال المشاهدة (85%+)</p>
-              <p className="font-latin text-2xl font-black text-[#8cf091] mt-1 tabular-nums">
-                {(analyticsSummary?.playbackCompletes || 0).toLocaleString('en-US')}
-              </p>
-            </div>
-            <div className="rounded-2xl bg-[#12202b] border border-white/[0.06] p-3.5">
-              <p className="text-[11px] font-bold text-[#b7c9ef]">معدل الإكمال الحقيقي</p>
-              <p className="font-latin text-2xl font-black text-[#f9c400] mt-1 tabular-nums">
-                {analyticsSummary?.completionRatePct || 0}%
-              </p>
-            </div>
-            <div className="rounded-2xl bg-[#12202b] border border-white/[0.06] p-3.5">
-              <p className="text-[11px] font-bold text-[#b7c9ef]">إضافات قائمة المشاهدة</p>
-              <p className="font-latin text-2xl font-black text-sky-300 mt-1 tabular-nums">
-                {(analyticsSummary?.watchlistAdds || 0).toLocaleString('en-US')}
-              </p>
-            </div>
-          </div>
-
-          {analyticsSummary &&
-            (analyticsSummary.topMedia.length > 0 ||
-              analyticsSummary.topEpisodes.length > 0 ||
-              analyticsSummary.topGenres.length > 0) && (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
-                <div className="rounded-2xl bg-[#12202b]/80 border border-white/[0.06] p-3.5 space-y-2">
-                  <p className="text-xs font-extrabold text-white">الأعمال الأكثر تشغيلاً</p>
-                  {analyticsSummary.topMedia.length === 0 ? (
-                    <p className="text-[11px] text-[#9fb2d4]">لا توجد بيانات بعد.</p>
-                  ) : (
-                    <div className="space-y-1.5">
-                      {analyticsSummary.topMedia.slice(0, 5).map((entry) => {
-                        const found = catalog.find((m) => m.id === entry.mediaId);
-                        return (
-                          <div
-                            key={entry.mediaId}
-                            className="flex items-center justify-between gap-2 text-[11px]"
-                          >
-                            <span className="truncate text-white font-bold">
-                              {found?.title || entry.mediaId}
-                            </span>
-                            <span className="font-latin font-black text-[#f9c400] shrink-0 tabular-nums">
-                              {entry.count}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                <div className="rounded-2xl bg-[#12202b]/80 border border-white/[0.06] p-3.5 space-y-2">
-                  <p className="text-xs font-extrabold text-white">الحلقات الأكثر تشغيلاً</p>
-                  {analyticsSummary.topEpisodes.length === 0 ? (
-                    <p className="text-[11px] text-[#9fb2d4]">لا توجد بيانات حلقات بعد.</p>
-                  ) : (
-                    <div className="space-y-1.5">
-                      {analyticsSummary.topEpisodes.slice(0, 5).map((ep) => {
-                        const [mId, epTag] = ep.episodeKey.split('__');
-                        const found = catalog.find((m) => m.id === mId);
-                        return (
-                          <div
-                            key={ep.episodeKey}
-                            className="flex items-center justify-between gap-2 text-[11px]"
-                          >
-                            <span className="truncate text-white font-bold">
-                              {found ? `${found.title} (${epTag || ''})` : ep.episodeKey}
-                            </span>
-                            <span className="font-latin font-black text-sky-300 shrink-0 tabular-nums">
-                              {ep.count}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                <div className="rounded-2xl bg-[#12202b]/80 border border-white/[0.06] p-3.5 space-y-2">
-                  <p className="text-xs font-extrabold text-white">أكثر التصنيفات تفاعلاً</p>
-                  {analyticsSummary.topGenres.length === 0 ? (
-                    <p className="text-[11px] text-[#9fb2d4]">لا توجد بيانات تصنيفات بعد.</p>
-                  ) : (
-                    <div className="space-y-1.5">
-                      {analyticsSummary.topGenres.slice(0, 5).map((g) => (
-                        <div
-                          key={g.genre}
-                          className="flex items-center justify-between gap-2 text-[11px]"
-                        >
-                          <span className="truncate text-white font-bold">{g.genre}</span>
-                          <span className="font-latin font-black text-[#8cf091] shrink-0 tabular-nums">
-                            {g.count}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
         </div>
 
         {/* Summary KPI strip */}
