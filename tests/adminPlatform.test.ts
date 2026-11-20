@@ -17,7 +17,12 @@ import {
   normalizeWebsiteBranding,
   sanitizeBrandingForFirestore,
 } from '../src/lib/websiteBranding';
-import { DEFAULT_HOME_CONFIG, normalizeHomeConfig } from '../src/lib/homeConfig';
+import {
+  DEFAULT_HOME_CONFIG,
+  normalizeHomeConfig,
+  pickLegacyAutoplayHomeConfig,
+  pickLegacyCoreHomeConfig,
+} from '../src/lib/homeConfig';
 import { DEFAULT_TYPOGRAPHY_CONFIG, normalizeTypographyConfig } from '../src/lib/typographyConfig';
 import { DEFAULT_POPUP_SHIELD_CONFIG, normalizePopupShieldConfig } from '../src/lib/popupShield';
 import { DEFAULT_PLAYER_THEME, normalizePlayerTheme } from '../src/lib/playerTheme';
@@ -444,6 +449,28 @@ describe('Firestore Rules Schema Parity for SiteSettings', () => {
     assert.strictEqual(theme.showHeaderBar, true);
     assert.strictEqual(theme.showFooterBar, false);
   });
+
+  it('builds exact 15-key core and 23-key autoplay legacy homeConfig subsets matching isValidHomeConfig', () => {
+    const coreSubset = pickLegacyCoreHomeConfig(DEFAULT_HOME_CONFIG);
+    const autoplaySubset = pickLegacyAutoplayHomeConfig(DEFAULT_HOME_CONFIG);
+
+    assert.equal(Object.keys(coreSubset).length, 15);
+    assert.equal(Object.keys(autoplaySubset).length, 23);
+    assert.equal('heroAutoPlay' in coreSubset, false);
+    assert.equal('heroAutoPlay' in autoplaySubset, true);
+    assert.equal('heroImageFit' in autoplaySubset, false);
+
+    const rulesText = fs.readFileSync(path.resolve(process.cwd(), 'firestore.rules'), 'utf8');
+    const idx = rulesText.indexOf('function isValidHomeConfig(');
+    const slice = rulesText.slice(idx, idx + 2500);
+    const hasOnlyMatch = slice.match(/\.keys\(\)\.hasOnly\(\[([\s\S]*?)\]\)/);
+    assert.ok(hasOnlyMatch);
+    const allowedKeys = new Set(Array.from(hasOnlyMatch[1].matchAll(/'([^']+)'/g)).map((x) => x[1]));
+    for (const k of Object.keys(autoplaySubset)) {
+      assert.ok(allowedKeys.has(k), `Legacy subset key "${k}" missing from isValidHomeConfig.hasOnly`);
+    }
+  });
 });
+
 
 

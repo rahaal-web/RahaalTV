@@ -49,7 +49,13 @@ import {
   isDedicatedAppShortUrl,
 } from './permalink';
 import { DEFAULT_PLAYER_THEME, saveStoredPlayerTheme } from './playerTheme';
-import { DEFAULT_HOME_CONFIG, saveStoredHomeConfig } from './homeConfig';
+import {
+  DEFAULT_HOME_CONFIG,
+  normalizeHomeConfig,
+  pickLegacyAutoplayHomeConfig,
+  pickLegacyCoreHomeConfig,
+  saveStoredHomeConfig,
+} from './homeConfig';
 import {
   DEFAULT_TYPOGRAPHY_CONFIG,
   saveStoredTypographyConfig,
@@ -1129,13 +1135,15 @@ export async function saveSiteSettingsToFirestore(
   }
 }
 
-export async function diagnoseFirestoreSettingsRules(
-  settings: SiteSettings,
-  uid: string
-): Promise<
+export type HomeConfigRulesMode = 'full' | 'autoplay_only' | 'core_only' | 'rejected';
+
+export type RulesDiagnosticReport =
   | {
       ok: true;
       result: SaveSiteSettingsResult;
+      homeConfigMode: HomeConfigRulesMode;
+      outdatedRulesDetected: boolean;
+      payloadIssueDetected: boolean;
       userEmail: string | null;
       emailVerified: boolean;
     }
@@ -1146,21 +1154,171 @@ export async function diagnoseFirestoreSettingsRules(
       databaseId: string;
       userEmail: string | null;
       emailVerified: boolean;
-    }
-> {
+    };
+
+export async function diagnoseFirestoreSettingsRules(
+  settings: SiteSettings,
+  uid: string
+): Promise<RulesDiagnosticReport> {
+  const activeDb = getActiveDatabase();
   const activeCfg = getActiveFirebaseConfig();
+  const projectId = activeCfg.projectId;
+  const databaseId = activeCfg.firestoreDatabaseId || '(default)';
   const currentUser = getActiveAuth().currentUser;
   const userEmail = currentUser?.email ?? null;
   const emailVerified = Boolean(currentUser?.emailVerified);
+
+  const normalizedTheme = saveStoredPlayerTheme(settings.playerTheme || DEFAULT_PLAYER_THEME);
+  const normalizedHome = saveStoredHomeConfig(settings.homeConfig || DEFAULT_HOME_CONFIG);
+  const normalizedTypography = saveStoredTypographyConfig(
+    settings.typography || DEFAULT_TYPOGRAPHY_CONFIG
+  );
+  const normalizedShield = saveStoredPopupShieldConfig(
+    settings.popupShield || DEFAULT_POPUP_SHIELD_CONFIG
+  );
+  const normalizedBrandingLocal = saveStoredWebsiteBranding(
+    settings.branding || { ...DEFAULT_WEBSITE_BRANDING, siteName: settings.siteName },
+    settings.siteName
+  );
+  const firestoreBranding = sanitizeBrandingForFirestore(
+    normalizedBrandingLocal,
+    settings.siteName
+  );
+
+  const corePayload: Record<string, unknown> = {
+    siteName: settings.siteName.trim().slice(0, 80) || 'RahaL TV',
+    tagline: settings.tagline.trim().slice(0, 300) || 'منصة RahaL TV الترفيهية',
+    announcementText: settings.announcementText.trim().slice(0, 300),
+    tickerEnabled: Boolean(settings.tickerEnabled),
+    featuredLimit: Math.min(20, Math.max(1, Math.round(Number(settings.featuredLimit) || 5))),
+    maintenanceMode: Boolean(settings.maintenanceMode),
+    maintenanceMessage: (settings.maintenanceMessage || '').trim().slice(0, 500),
+    playerTheme: normalizedTheme,
+    updatedBy: uid,
+    updatedAt: serverTimestamp(),
+  };
+
+  // Probe non-destructively on settings/rules_diagnostic (same security rules as settings/general,
+  // without altering or stripping any live visitor fields in settings/general).
+  const probeRef = doc(activeDb, 'settings', 'rules_diagnostic');
+  const tryProbe = async (payload: Record<string, unknown>): Promise<boolean> => {
+    try {
+      await setDoc(probeRef, payload);
+      return true;
+    } catch (err) {
+      if (isPermissionDeniedError(err)) {
+        return false;
+      }
+      throw err;
+    }
+  };
+
   try {
-    const result = await saveSiteSettingsToFirestore(settings, uid);
-    return { ok: true, result, userEmail, emailVerified };
+    await setDoc(probeRef, corePayload);
+
+    const syncedTypographyToCloud = await tryProbe({
+      ...corePayload,
+      typography: normalizedTypography,
+    });
+
+    const syncedPopupShieldToCloud = await tryProbe({
+      ...corePayload,
+      popupShield: normalizedShield,
+    });
+
+    const syncedBrandingToCloud = await tryProbe({
+      ...corePayload,
+      branding: firestoreBranding,
+    });
+
+    let brandingDefaultOk = syncedBrandingToCloud;
+    if (!syncedBrandingToCloud) {
+      brandingDefaultOk = await tryProbe({
+        ...corePayload,
+        branding: sanitizeBrandingForFirestore(DEFAULT_WEBSITE_BRANDING, 'RahaL TV'),
+      });
+    }
+
+    const syncedHomeToCloud = await tryProbe({
+      ...corePayload,
+      homeConfig: normalizedHome,
+    });
+
+    let homeConfigMode: HomeConfigRulesMode = syncedHomeToCloud ? 'full' : 'rejected';
+    let homeDefaultFullOk = syncedHomeToCloud;
+
+    if (!syncedHomeToCloud) {
+      homeDefaultFullOk = await tryProbe({
+        ...corePayload,
+        homeConfig: normalizeHomeConfig(DEFAULT_HOME_CONFIG),
+      });
+
+      const autoplayOk = await tryProbe({
+        ...corePayload,
+        homeConfig: pickLegacyAutoplayHomeConfig(normalizedHome),
+      });
+      if (autoplayOk) {
+        homeConfigMode = 'autoplay_only';
+      } else {
+        const coreOnlyOk = await tryProbe({
+          ...corePayload,
+          homeConfig: pickLegacyCoreHomeConfig(normalizedHome),
+        });
+        if (coreOnlyOk) {
+          homeConfigMode = 'core_only';
+        }
+      }
+    }
+
+    const rejectedSections = (
+      ['homeConfig', 'typography', 'popupShield', 'branding'] as SettingsOptionalSection[]
+    ).filter((k) => {
+      if (k === 'homeConfig') return !syncedHomeToCloud;
+      if (k === 'typography') return !syncedTypographyToCloud;
+      if (k === 'popupShield') return !syncedPopupShieldToCloud;
+      return !syncedBrandingToCloud;
+    });
+
+    const payloadIssueDetected =
+      (!syncedHomeToCloud && homeDefaultFullOk) || (!syncedBrandingToCloud && brandingDefaultOk);
+
+    const outdatedRulesDetected =
+      !payloadIssueDetected &&
+      !syncedHomeToCloud &&
+      !syncedBrandingToCloud &&
+      (syncedTypographyToCloud ||
+        syncedPopupShieldToCloud ||
+        homeConfigMode === 'autoplay_only' ||
+        homeConfigMode === 'core_only');
+
+    if (rejectedSections.length === 0) {
+      // Also ensure settings/general is synced immediately when all rules pass
+      await saveSiteSettingsToFirestore(settings, uid);
+    }
+
+    return {
+      ok: true,
+      result: {
+        syncedHomeToCloud,
+        syncedTypographyToCloud,
+        syncedPopupShieldToCloud,
+        syncedBrandingToCloud,
+        rejectedSections,
+        projectId,
+        databaseId,
+      },
+      homeConfigMode,
+      outdatedRulesDetected,
+      payloadIssueDetected,
+      userEmail,
+      emailVerified,
+    };
   } catch (err) {
     return {
       ok: false,
       errorMessage: formatFirestoreWriteError(err, 'تعذر الكتابة إلى إعدادات Firestore'),
-      projectId: activeCfg.projectId,
-      databaseId: activeCfg.firestoreDatabaseId || '(default)',
+      projectId,
+      databaseId,
       userEmail,
       emailVerified,
     };

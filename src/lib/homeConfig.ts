@@ -373,3 +373,51 @@ export function resolveSectionMediaItems(
       return catalog.slice(0, limit);
   }
 }
+
+export const HOME_CONFIG_CORE_KEYS = [
+  'showHero',
+  'heroMode',
+  'heroMediaId',
+  'heroBadgeText',
+  'heroHeadline',
+  'heroDescription',
+  'heroPrimaryCta',
+  'heroShowHighlights',
+  'showQuickFilters',
+  'showCategoryBar',
+  'showFullLibrary',
+  'showRequestBanner',
+  'cardsPerRow',
+  'cardStyle',
+  'sections',
+] as const;
+
+export const HOME_CONFIG_AUTOPLAY_KEYS = [
+  'heroAutoPlay',
+  'heroSlideIntervalSec',
+  'heroShowProgressBar',
+  'heroShowThumbnails',
+  'heroShowArrows',
+  'heroPauseOnHover',
+  'heroMaxSlides',
+  'heroSlideIds',
+] as const;
+
+export function pickLegacyCoreHomeConfig(cfg: HomeLayoutConfig): Record<string, unknown> {
+  const normalized = normalizeHomeConfig(cfg);
+  const out: Record<string, unknown> = {};
+  for (const key of HOME_CONFIG_CORE_KEYS) {
+    out[key] = normalized[key];
+  }
+  return out;
+}
+
+export function pickLegacyAutoplayHomeConfig(cfg: HomeLayoutConfig): Record<string, unknown> {
+  const normalized = normalizeHomeConfig(cfg);
+  const out = pickLegacyCoreHomeConfig(normalized);
+  for (const key of HOME_CONFIG_AUTOPLAY_KEYS) {
+    out[key] = normalized[key];
+  }
+  return out;
+}
+

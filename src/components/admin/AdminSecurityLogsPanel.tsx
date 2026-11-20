@@ -4,6 +4,7 @@ import {
   Bug,
   CheckCircle2,
   Copy,
+  Download,
   ExternalLink,
   History,
   RefreshCw,
@@ -11,7 +12,10 @@ import {
   Trash2,
   XCircle,
 } from 'lucide-react';
-import { getActiveFirebaseConfig, SaveSiteSettingsResult } from '../../lib/firebase';
+import {
+  getActiveFirebaseConfig,
+  RulesDiagnosticReport,
+} from '../../lib/firebase';
 import firestoreRulesSource from '../../../firestore.rules?raw';
 import {
   AdminActivityLogEntry,
@@ -27,21 +31,7 @@ import {
 import { safeCopyToClipboard } from '../../lib/browserCompat';
 import { AdminActivityLog } from '../AdminActivityLog';
 
-export type RulesDiagnosticReport =
-  | {
-      ok: true;
-      result: SaveSiteSettingsResult;
-      userEmail: string | null;
-      emailVerified: boolean;
-    }
-  | {
-      ok: false;
-      errorMessage: string;
-      projectId: string;
-      databaseId: string;
-      userEmail: string | null;
-      emailVerified: boolean;
-    };
+export type { RulesDiagnosticReport };
 
 interface AdminSecurityLogsPanelProps {
   mode: 'security_rules' | 'audit_logs';
@@ -78,6 +68,7 @@ export function AdminSecurityLogsPanel({
   const activeFirebaseConfig = getActiveFirebaseConfig();
   const activeDbId = activeFirebaseConfig.firestoreDatabaseId || '(default)';
   const consoleDbSegment = activeDbId === '(default)' ? '-default-' : encodeURIComponent(activeDbId);
+  const rulesLineCount = firestoreRulesSource.split('\n').length;
 
   const handleTestRulesNow = async () => {
     if (!onRunRulesDiagnostic) return;
@@ -88,6 +79,10 @@ export function AdminSecurityLogsPanel({
       if (report.ok) {
         if (report.result.rejectedSections.length === 0) {
           onNotify('قواعد firestore.rules المنشورة مطابقة بالكامل لجميع أقسام الإعدادات!');
+        } else if (report.outdatedRulesDetected) {
+          onNotify(
+            `القواعد المنشورة على (${report.result.projectId}/${report.result.databaseId}) ما زالت قديمة — راجع تفاصيل التشخيص أدناه.`
+          );
         } else {
           onNotify(
             `بعض الأقسام مرفوضة من قواعد Firebase (${report.result.rejectedSections.join(', ')}) — راجع نتيجة الفحص أدناه.`
@@ -98,6 +93,23 @@ export function AdminSecurityLogsPanel({
       }
     } finally {
       setRunningDiagnostic(false);
+    }
+  };
+
+  const handleDownloadRulesFile = () => {
+    try {
+      const blob = new Blob([firestoreRulesSource], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'firestore.rules';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      onNotify(`تم تنزيل ملف firestore.rules (${rulesLineCount} سطراً)!`);
+    } catch {
+      onNotify('تعذر تنزيل الملف — استخدم زر النسخ أعلاه.');
     }
   };
 
@@ -119,7 +131,8 @@ export function AdminSecurityLogsPanel({
                 ) لمشروع{' '}
                 <span className="font-latin text-[#f9c400]">{activeFirebaseConfig.projectId}</span>{' '}
                 وقاعدة البيانات{' '}
-                <span className="font-latin text-[#f9c400]">{activeDbId}</span>.
+                <span className="font-latin text-[#f9c400]">{activeDbId}</span>{' '}
+                ({rulesLineCount} سطراً).
               </p>
             </div>
 
@@ -141,7 +154,7 @@ export function AdminSecurityLogsPanel({
                   const ok = await safeCopyToClipboard(firestoreRulesSource);
                   onNotify(
                     ok
-                      ? 'تم نسخ قواعد firestore.rules الكاملة إلى الحافظة!'
+                      ? `تم نسخ قواعد firestore.rules الكاملة (${rulesLineCount} سطراً) إلى الحافظة!`
                       : 'تعذر النسخ التلقائي — انسخ القواعد من الصندوق أدناه.'
                   );
                 }}
@@ -150,13 +163,21 @@ export function AdminSecurityLogsPanel({
                 <Copy className="w-3.5 h-3.5" />
                 <span>نسخ قواعد firestore.rules</span>
               </button>
+              <button
+                type="button"
+                onClick={handleDownloadRulesFile}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 px-3.5 py-2.5 text-xs font-extrabold text-white cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5 text-[#f9c400]" />
+                <span>تحميل الملف</span>
+              </button>
               <a
                 href={`https://console.firebase.google.com/project/${activeFirebaseConfig.projectId}/firestore/databases/${consoleDbSegment}/rules`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 px-4 py-2.5 text-xs font-extrabold text-white"
               >
-                <span>فتح محرر Rules في Firebase</span>
+                <span>فتح محرر Rules في {activeFirebaseConfig.projectId}</span>
                 <ExternalLink className="w-3.5 h-3.5 text-[#f9c400]" />
               </a>
             </div>
@@ -186,32 +207,132 @@ export function AdminSecurityLogsPanel({
               </div>
 
               {diagnosticReport.ok ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-                  {(
-                    [
-                      { key: 'homeConfig', label: 'تخطيط الرئيسية والسلايدر', ok: diagnosticReport.result.syncedHomeToCloud },
-                      { key: 'typography', label: 'الخطوط وأحجام النصوص', ok: diagnosticReport.result.syncedTypographyToCloud },
-                      { key: 'popupShield', label: 'درع النوافذ (Popup Shield)', ok: diagnosticReport.result.syncedPopupShieldToCloud },
-                      { key: 'branding', label: 'هوية الموقع (Branding)', ok: diagnosticReport.result.syncedBrandingToCloud },
-                    ] as const
-                  ).map((row) => (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
                     <div
-                      key={row.key}
                       className={`rounded-xl border px-3 py-2 flex items-center justify-between gap-2 ${
-                        row.ok
+                        diagnosticReport.result.syncedHomeToCloud
                           ? 'bg-[#4CAF50]/15 border-[#4CAF50]/40 text-white'
-                          : 'bg-[#D92321]/15 border-[#D92321]/45 text-[#ffb4b2]'
+                          : diagnosticReport.homeConfigMode === 'autoplay_only' ||
+                              diagnosticReport.homeConfigMode === 'core_only'
+                            ? 'bg-[#f9c400]/15 border-[#f9c400]/45 text-[#fde68a]'
+                            : 'bg-[#D92321]/15 border-[#D92321]/45 text-[#ffb4b2]'
                       }`}
                     >
-                      <span className="font-bold">{row.label}</span>
-                      {row.ok ? (
+                      <div className="space-y-0.5">
+                        <span className="font-bold block">تخطيط الرئيسية والسلايدر</span>
+                        {!diagnosticReport.result.syncedHomeToCloud &&
+                          (diagnosticReport.homeConfigMode === 'autoplay_only' ||
+                            diagnosticReport.homeConfigMode === 'core_only') && (
+                            <span className="text-[10px] opacity-90 block">
+                              {diagnosticReport.homeConfigMode === 'autoplay_only'
+                                ? 'يقبل 23 حقلاً قديماً فقط — يرفض 19 حقل السلايدر الجديدة'
+                                : 'يقبل 15 حقلاً أساسياً فقط — يرفض خصائص السلايدر'}
+                            </span>
+                          )}
+                      </div>
+                      {diagnosticReport.result.syncedHomeToCloud ? (
                         <CheckCircle2 className="w-4 h-4 text-[#4CAF50] shrink-0" />
+                      ) : diagnosticReport.homeConfigMode === 'autoplay_only' ||
+                        diagnosticReport.homeConfigMode === 'core_only' ? (
+                        <AlertTriangle className="w-4 h-4 text-[#f9c400] shrink-0" />
                       ) : (
                         <XCircle className="w-4 h-4 text-[#ff8a88] shrink-0" />
                       )}
                     </div>
-                  ))}
-                </div>
+
+                    {(
+                      [
+                        {
+                          key: 'typography',
+                          label: 'الخطوط وأحجام النصوص',
+                          ok: diagnosticReport.result.syncedTypographyToCloud,
+                        },
+                        {
+                          key: 'popupShield',
+                          label: 'درع النوافذ (Popup Shield)',
+                          ok: diagnosticReport.result.syncedPopupShieldToCloud,
+                        },
+                        {
+                          key: 'branding',
+                          label: 'هوية الموقع (Branding)',
+                          ok: diagnosticReport.result.syncedBrandingToCloud,
+                        },
+                      ] as const
+                    ).map((row) => (
+                      <div
+                        key={row.key}
+                        className={`rounded-xl border px-3 py-2 flex items-center justify-between gap-2 ${
+                          row.ok
+                            ? 'bg-[#4CAF50]/15 border-[#4CAF50]/40 text-white'
+                            : 'bg-[#D92321]/15 border-[#D92321]/45 text-[#ffb4b2]'
+                        }`}
+                      >
+                        <span className="font-bold">{row.label}</span>
+                        {row.ok ? (
+                          <CheckCircle2 className="w-4 h-4 text-[#4CAF50] shrink-0" />
+                        ) : (
+                          <XCircle className="w-4 h-4 text-[#ff8a88] shrink-0" />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  {diagnosticReport.outdatedRulesDetected && (
+                    <div className="rounded-xl bg-[#D92321]/15 border border-[#D92321]/45 p-3.5 space-y-2 text-[#ffd8d7]">
+                      <p className="font-extrabold text-white flex items-center gap-1.5">
+                        <AlertTriangle className="w-4 h-4 text-[#f9c400] shrink-0" />
+                        <span>
+                          التشخيص المؤكد: القواعد الفعالة على{' '}
+                          <span className="font-latin text-[#f9c400]">
+                            {diagnosticReport.result.projectId} / {diagnosticReport.result.databaseId}
+                          </span>{' '}
+                          ما زالت تعمل بنسخة سابقة!
+                        </span>
+                      </p>
+                      <p className="text-[11px] leading-relaxed">
+                        {diagnosticReport.homeConfigMode === 'autoplay_only' ||
+                        diagnosticReport.homeConfigMode === 'core_only'
+                          ? 'القاعدة قبلت الحقول القديمة من homeConfig لكنها رفضت خصائص السلايدر الجديدة وحقل branding — وهذا يثبت أن المحرر في Firebase لم ينشر آخر ملف قواعد بعد على هذه القاعدة.'
+                          : 'القاعدة قبلت الخطوط ودرع النوافذ لكنها رفضت homeConfig وbranding — وهذا يعني أن القواعد المنشورة على هذا المشروع أقدم من التحديث الحالي.'}
+                      </p>
+                      <ul className="list-disc list-inside space-y-1 text-[11px] text-white/90">
+                        <li>
+                          افتح الرابط المباشر عبر زر{' '}
+                          <strong className="text-[#f9c400]">
+                            فتح محرر Rules في {diagnosticReport.result.projectId}
+                          </strong>{' '}
+                          أعلاه (تأكد أن رابط Firebase Console يحتوي{' '}
+                          <span className="font-latin text-[#f9c400]">
+                            /project/{diagnosticReport.result.projectId}/firestore/databases/{consoleDbSegment}/rules
+                          </span>{' '}
+                          وليس مشروعاً آخر مثل{' '}
+                          <span className="font-latin">rahaal</span>).
+                        </li>
+                        <li>
+                          تأكد أنك في قسم <strong className="text-white">Firestore Database → Rules</strong>{' '}
+                          (وليس Realtime Database)، وأن القائمة العلوية للقاعدة مضبوطة على{' '}
+                          <span className="font-latin text-[#f9c400]">
+                            {diagnosticReport.result.databaseId}
+                          </span>.
+                        </li>
+                        <li>
+                          اضغط زر <strong className="text-white">نسخ قواعد firestore.rules</strong> أعلاه، ثم في المحرر اضغط{' '}
+                          <span className="font-latin">Ctrl+A</span> ثم{' '}
+                          <span className="font-latin">Ctrl+V</span> وتأكد أن نهاية النص تصل إلى السطر{' '}
+                          <span className="font-latin text-[#f9c400]">{rulesLineCount}</span>، ثم اضغط{' '}
+                          <strong className="text-white">Publish / نشر</strong>.
+                        </li>
+                      </ul>
+                    </div>
+                  )}
+
+                  {diagnosticReport.payloadIssueDetected && (
+                    <div className="rounded-xl bg-[#f9c400]/15 border border-[#f9c400]/45 p-3 text-[11px] text-[#fde68a]">
+                      القواعد نفسها تدعم جميع الحقول الافتراضية، لكن قيمة حالية في نموذج التخطيط أو الهوية تجاوزت أحد الحدود (مثل طول نص أو رابط طويل). جرّب إعادة ضبط الحقول الطويلة ثم الحفظ مجدداً.
+                    </div>
+                  )}
+                </>
               ) : (
                 <p className="text-[#ffb4b2] font-bold">{diagnosticReport.errorMessage}</p>
               )}
@@ -219,11 +340,13 @@ export function AdminSecurityLogsPanel({
           )}
 
           <ol className="list-decimal list-inside space-y-1.5 text-xs text-[#b7c9ef] bg-[#1a242e]/65 border border-white/5 rounded-2xl p-4">
-            <li>اضغط على زر &quot;نسخ قواعد firestore.rules&quot; أعلاه ثم حدد كل النص داخل محرر Firebase واستبدله بالكامل (Ctrl+A ثم Ctrl+V).</li>
+            <li>
+              اضغط على زر &quot;نسخ قواعد firestore.rules&quot; أعلاه ثم حدد كل النص داخل محرر Firebase واستبدله بالكامل (Ctrl+A ثم Ctrl+V).
+            </li>
             <li>
               تأكد أنك في مشروع{' '}
               <span className="font-latin text-[#f9c400]">{activeFirebaseConfig.projectId}</span>{' '}
-              وداخل قاعدة{' '}
+              وداخل قسم <strong className="text-white">Firestore Database</strong> وقاعدة{' '}
               <span className="font-latin text-[#f9c400]">{activeDbId}</span>{' '}
               وليس قاعدة أخرى أو مشروعاً آخر.
             </li>
