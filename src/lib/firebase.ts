@@ -51,6 +51,7 @@ import {
 import { DEFAULT_PLAYER_THEME, saveStoredPlayerTheme } from './playerTheme';
 import {
   DEFAULT_HOME_CONFIG,
+  HOME_CONFIG_SLIDER_STYLE_KEYS,
   normalizeHomeConfig,
   pickLegacyAutoplayHomeConfig,
   pickLegacyCoreHomeConfig,
@@ -1144,6 +1145,8 @@ export type RulesDiagnosticReport =
       homeConfigMode: HomeConfigRulesMode;
       outdatedRulesDetected: boolean;
       payloadIssueDetected: boolean;
+      rejectedHomeKeys: string[];
+      homeComplexityLimitDetected: boolean;
       userEmail: string | null;
       emailVerified: boolean;
     }
@@ -1246,23 +1249,75 @@ export async function diagnoseFirestoreSettingsRules(
 
     let homeConfigMode: HomeConfigRulesMode = syncedHomeToCloud ? 'full' : 'rejected';
     let homeDefaultFullOk = syncedHomeToCloud;
+    const rejectedHomeKeys: string[] = [];
+    let homeComplexityLimitDetected = false;
 
     if (!syncedHomeToCloud) {
+      const defaultHome = normalizeHomeConfig(DEFAULT_HOME_CONFIG);
       homeDefaultFullOk = await tryProbe({
         ...corePayload,
-        homeConfig: normalizeHomeConfig(DEFAULT_HOME_CONFIG),
+        homeConfig: defaultHome,
       });
 
+      const autoplayBase = pickLegacyAutoplayHomeConfig(defaultHome);
       const autoplayOk = await tryProbe({
         ...corePayload,
-        homeConfig: pickLegacyAutoplayHomeConfig(normalizedHome),
+        homeConfig: autoplayBase,
       });
       if (autoplayOk) {
         homeConfigMode = 'autoplay_only';
+        // Probe the 19 slider styling keys in 2 halves first; if both halves pass,
+        // Firestore hit a combined key/AST limit; otherwise isolate exact rejected key(s).
+        const halfSplit = Math.ceil(HOME_CONFIG_SLIDER_STYLE_KEYS.length / 2);
+        const firstHalfKeys = HOME_CONFIG_SLIDER_STYLE_KEYS.slice(0, halfSplit);
+        const secondHalfKeys = HOME_CONFIG_SLIDER_STYLE_KEYS.slice(halfSplit);
+
+        const buildWithKeys = (keys: readonly (typeof HOME_CONFIG_SLIDER_STYLE_KEYS)[number][]) => {
+          const obj: Record<string, unknown> = { ...autoplayBase };
+          for (const k of keys) {
+            obj[k] = defaultHome[k];
+          }
+          return obj;
+        };
+
+        const halfAOk = await tryProbe({
+          ...corePayload,
+          homeConfig: buildWithKeys(firstHalfKeys),
+        });
+        const halfBOk = await tryProbe({
+          ...corePayload,
+          homeConfig: buildWithKeys(secondHalfKeys),
+        });
+
+        if (halfAOk && halfBOk) {
+          homeComplexityLimitDetected = true;
+        } else {
+          if (!halfAOk) {
+            for (const key of firstHalfKeys) {
+              const ok = await tryProbe({
+                ...corePayload,
+                homeConfig: buildWithKeys([key]),
+              });
+              if (!ok) rejectedHomeKeys.push(key);
+            }
+          }
+          if (!halfBOk) {
+            for (const key of secondHalfKeys) {
+              const ok = await tryProbe({
+                ...corePayload,
+                homeConfig: buildWithKeys([key]),
+              });
+              if (!ok) rejectedHomeKeys.push(key);
+            }
+          }
+          if (rejectedHomeKeys.length === 0) {
+            homeComplexityLimitDetected = true;
+          }
+        }
       } else {
         const coreOnlyOk = await tryProbe({
           ...corePayload,
-          homeConfig: pickLegacyCoreHomeConfig(normalizedHome),
+          homeConfig: pickLegacyCoreHomeConfig(defaultHome),
         });
         if (coreOnlyOk) {
           homeConfigMode = 'core_only';
@@ -1284,8 +1339,8 @@ export async function diagnoseFirestoreSettingsRules(
 
     const outdatedRulesDetected =
       !payloadIssueDetected &&
-      !syncedHomeToCloud &&
-      !syncedBrandingToCloud &&
+      !homeComplexityLimitDetected &&
+      (!syncedHomeToCloud || !syncedBrandingToCloud) &&
       (syncedTypographyToCloud ||
         syncedPopupShieldToCloud ||
         homeConfigMode === 'autoplay_only' ||
@@ -1310,6 +1365,8 @@ export async function diagnoseFirestoreSettingsRules(
       homeConfigMode,
       outdatedRulesDetected,
       payloadIssueDetected,
+      rejectedHomeKeys,
+      homeComplexityLimitDetected,
       userEmail,
       emailVerified,
     };

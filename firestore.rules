@@ -199,6 +199,58 @@ service cloud.firestore {
         && theme.showBrandBadge is bool;
     }
 
+    function isValidHomeBaseFields(cfg) {
+      return cfg.showHero is bool
+        && cfg.heroMode in ['auto', 'manual', 'brand']
+        && cfg.heroMediaId is string && cfg.heroMediaId.size() <= 128
+        && cfg.heroBadgeText is string && cfg.heroBadgeText.size() <= 50
+        && cfg.heroHeadline is string && cfg.heroHeadline.size() <= 160
+        && cfg.heroDescription is string && cfg.heroDescription.size() <= 320
+        && cfg.heroPrimaryCta is string && cfg.heroPrimaryCta.size() >= 1 && cfg.heroPrimaryCta.size() <= 40
+        && cfg.heroShowHighlights is bool
+        && cfg.showQuickFilters is bool
+        && cfg.showCategoryBar is bool
+        && cfg.showFullLibrary is bool
+        && cfg.showRequestBanner is bool
+        && cfg.cardsPerRow in [4, 5, 6]
+        && cfg.cardStyle in ['clean', 'classic']
+        && cfg.sections is list && cfg.sections.size() >= 1 && cfg.sections.size() <= 12
+        && cfg.sections[0] is map;
+    }
+
+    function isValidHomeAutoplayFields(cfg) {
+      return (!('heroAutoPlay' in cfg) || cfg.heroAutoPlay is bool)
+        && (!('heroSlideIntervalSec' in cfg) || ((cfg.heroSlideIntervalSec is int || cfg.heroSlideIntervalSec is float) && cfg.heroSlideIntervalSec >= 2 && cfg.heroSlideIntervalSec <= 30))
+        && (!('heroShowProgressBar' in cfg) || cfg.heroShowProgressBar is bool)
+        && (!('heroShowThumbnails' in cfg) || cfg.heroShowThumbnails is bool)
+        && (!('heroShowArrows' in cfg) || cfg.heroShowArrows is bool)
+        && (!('heroPauseOnHover' in cfg) || cfg.heroPauseOnHover is bool)
+        && (!('heroMaxSlides' in cfg) || ((cfg.heroMaxSlides is int || cfg.heroMaxSlides is float) && cfg.heroMaxSlides >= 1 && cfg.heroMaxSlides <= 12))
+        && (!('heroSlideIds' in cfg) || (cfg.heroSlideIds is list && cfg.heroSlideIds.size() <= 12 && (cfg.heroSlideIds.size() == 0 || cfg.heroSlideIds[0] is string)));
+    }
+
+    function isValidHomeSliderStyleFields(cfg) {
+      return (!('heroShowDescription' in cfg) || cfg.heroShowDescription is bool)
+        && (!('heroTitleSizePx' in cfg) || ((cfg.heroTitleSizePx is int || cfg.heroTitleSizePx is float) && cfg.heroTitleSizePx >= 16 && cfg.heroTitleSizePx <= 54))
+        && (!('heroDescriptionSizePx' in cfg) || ((cfg.heroDescriptionSizePx is int || cfg.heroDescriptionSizePx is float) && cfg.heroDescriptionSizePx >= 11 && cfg.heroDescriptionSizePx <= 22))
+        && (!('heroDescriptionLines' in cfg) || ((cfg.heroDescriptionLines is int || cfg.heroDescriptionLines is float) && cfg.heroDescriptionLines >= 1 && cfg.heroDescriptionLines <= 5))
+        && (!('heroTextAlign' in cfg) || cfg.heroTextAlign in ['right', 'center', 'left'])
+        && (!('heroInfoPosition' in cfg) || cfg.heroInfoPosition in ['bottom-right', 'bottom-center', 'bottom-left', 'middle-right', 'middle-center', 'middle-left'])
+        && (!('heroTextMaxWidthPx' in cfg) || ((cfg.heroTextMaxWidthPx is int || cfg.heroTextMaxWidthPx is float) && cfg.heroTextMaxWidthPx >= 320 && cfg.heroTextMaxWidthPx <= 860))
+        && (!('heroImageFit' in cfg) || cfg.heroImageFit in ['contain', 'cover', 'contain_blur'])
+        && (!('heroBackdropBlurPx' in cfg) || ((cfg.heroBackdropBlurPx is int || cfg.heroBackdropBlurPx is float) && cfg.heroBackdropBlurPx >= 0 && cfg.heroBackdropBlurPx <= 48))
+        && (!('heroBackdropDimPct' in cfg) || ((cfg.heroBackdropDimPct is int || cfg.heroBackdropDimPct is float) && cfg.heroBackdropDimPct >= 0 && cfg.heroBackdropDimPct <= 85))
+        && (!('heroShowBadge' in cfg) || cfg.heroShowBadge is bool)
+        && (!('heroShowRating' in cfg) || cfg.heroShowRating is bool)
+        && (!('heroShowYear' in cfg) || cfg.heroShowYear is bool)
+        && (!('heroShowDuration' in cfg) || cfg.heroShowDuration is bool)
+        && (!('heroShowGenres' in cfg) || cfg.heroShowGenres is bool)
+        && (!('heroShowQuality' in cfg) || cfg.heroShowQuality is bool)
+        && (!('heroShowWatchBtn' in cfg) || cfg.heroShowWatchBtn is bool)
+        && (!('heroShowDetailsBtn' in cfg) || cfg.heroShowDetailsBtn is bool)
+        && (!('heroShowWatchlistBtn' in cfg) || cfg.heroShowWatchlistBtn is bool);
+    }
+
     function isValidHomeConfig(cfg) {
       return cfg is map
         && cfg.keys().hasAll([
@@ -223,49 +275,9 @@ service cloud.firestore {
           'showQuickFilters', 'showCategoryBar', 'showFullLibrary',
           'showRequestBanner', 'cardsPerRow', 'cardStyle', 'sections'
         ])
-        && cfg.showHero is bool
-        && cfg.heroMode in ['auto', 'manual', 'brand']
-        && cfg.heroMediaId is string && cfg.heroMediaId.size() <= 128
-        && cfg.heroBadgeText is string && cfg.heroBadgeText.size() <= 50
-        && cfg.heroHeadline is string && cfg.heroHeadline.size() <= 160
-        && cfg.heroDescription is string && cfg.heroDescription.size() <= 320
-        && cfg.heroPrimaryCta is string && cfg.heroPrimaryCta.size() >= 1 && cfg.heroPrimaryCta.size() <= 40
-        && cfg.heroShowHighlights is bool
-        && (!('heroAutoPlay' in cfg) || cfg.heroAutoPlay is bool)
-        && (!('heroSlideIntervalSec' in cfg) || ((cfg.heroSlideIntervalSec is int || cfg.heroSlideIntervalSec is float) && cfg.heroSlideIntervalSec >= 2 && cfg.heroSlideIntervalSec <= 30))
-        && (!('heroShowProgressBar' in cfg) || cfg.heroShowProgressBar is bool)
-        && (!('heroShowThumbnails' in cfg) || cfg.heroShowThumbnails is bool)
-        && (!('heroShowArrows' in cfg) || cfg.heroShowArrows is bool)
-        && (!('heroPauseOnHover' in cfg) || cfg.heroPauseOnHover is bool)
-        && (!('heroMaxSlides' in cfg) || ((cfg.heroMaxSlides is int || cfg.heroMaxSlides is float) && cfg.heroMaxSlides >= 1 && cfg.heroMaxSlides <= 12))
-        && (!('heroSlideIds' in cfg) || (cfg.heroSlideIds is list && cfg.heroSlideIds.size() <= 12 && (cfg.heroSlideIds.size() == 0 || cfg.heroSlideIds[0] is string)))
-        && (!('heroShowDescription' in cfg) || cfg.heroShowDescription is bool)
-        && (!('heroTitleSizePx' in cfg) || ((cfg.heroTitleSizePx is int || cfg.heroTitleSizePx is float) && cfg.heroTitleSizePx >= 16 && cfg.heroTitleSizePx <= 54))
-        && (!('heroDescriptionSizePx' in cfg) || ((cfg.heroDescriptionSizePx is int || cfg.heroDescriptionSizePx is float) && cfg.heroDescriptionSizePx >= 11 && cfg.heroDescriptionSizePx <= 22))
-        && (!('heroDescriptionLines' in cfg) || ((cfg.heroDescriptionLines is int || cfg.heroDescriptionLines is float) && cfg.heroDescriptionLines >= 1 && cfg.heroDescriptionLines <= 5))
-        && (!('heroTextAlign' in cfg) || cfg.heroTextAlign in ['right', 'center', 'left'])
-        && (!('heroInfoPosition' in cfg) || cfg.heroInfoPosition in ['bottom-right', 'bottom-center', 'bottom-left', 'middle-right', 'middle-center', 'middle-left'])
-        && (!('heroTextMaxWidthPx' in cfg) || ((cfg.heroTextMaxWidthPx is int || cfg.heroTextMaxWidthPx is float) && cfg.heroTextMaxWidthPx >= 320 && cfg.heroTextMaxWidthPx <= 860))
-        && (!('heroImageFit' in cfg) || cfg.heroImageFit in ['contain', 'cover', 'contain_blur'])
-        && (!('heroBackdropBlurPx' in cfg) || ((cfg.heroBackdropBlurPx is int || cfg.heroBackdropBlurPx is float) && cfg.heroBackdropBlurPx >= 0 && cfg.heroBackdropBlurPx <= 48))
-        && (!('heroBackdropDimPct' in cfg) || ((cfg.heroBackdropDimPct is int || cfg.heroBackdropDimPct is float) && cfg.heroBackdropDimPct >= 0 && cfg.heroBackdropDimPct <= 85))
-        && (!('heroShowBadge' in cfg) || cfg.heroShowBadge is bool)
-        && (!('heroShowRating' in cfg) || cfg.heroShowRating is bool)
-        && (!('heroShowYear' in cfg) || cfg.heroShowYear is bool)
-        && (!('heroShowDuration' in cfg) || cfg.heroShowDuration is bool)
-        && (!('heroShowGenres' in cfg) || cfg.heroShowGenres is bool)
-        && (!('heroShowQuality' in cfg) || cfg.heroShowQuality is bool)
-        && (!('heroShowWatchBtn' in cfg) || cfg.heroShowWatchBtn is bool)
-        && (!('heroShowDetailsBtn' in cfg) || cfg.heroShowDetailsBtn is bool)
-        && (!('heroShowWatchlistBtn' in cfg) || cfg.heroShowWatchlistBtn is bool)
-        && cfg.showQuickFilters is bool
-        && cfg.showCategoryBar is bool
-        && cfg.showFullLibrary is bool
-        && cfg.showRequestBanner is bool
-        && cfg.cardsPerRow in [4, 5, 6]
-        && cfg.cardStyle in ['clean', 'classic']
-        && cfg.sections is list && cfg.sections.size() >= 1 && cfg.sections.size() <= 12
-        && cfg.sections[0] is map;
+        && isValidHomeBaseFields(cfg)
+        && isValidHomeAutoplayFields(cfg)
+        && isValidHomeSliderStyleFields(cfg);
     }
 
     function isValidTypographyConfig(typo) {

@@ -278,6 +278,20 @@ export function AdminSecurityLogsPanel({
                     ))}
                   </div>
 
+                  {diagnosticReport.homeComplexityLimitDetected && (
+                    <div className="rounded-xl bg-[#D92321]/15 border border-[#D92321]/45 p-3.5 space-y-2 text-[#ffd8d7]">
+                      <p className="font-extrabold text-white flex items-center gap-1.5">
+                        <AlertTriangle className="w-4 h-4 text-[#f9c400] shrink-0" />
+                        <span>
+                          تم تحديد السبب بدقة: القاعدة المنشورة تقبل كل حقل من السلايدر منفرداً لكنها ترفض اجتماع الـ 42 حقلاً معاً!
+                        </span>
+                      </p>
+                      <p className="text-[11px] leading-relaxed">
+                        تم تقسيم دالة <span className="font-latin text-[#f9c400]">isValidHomeConfig</span> في ملف القواعد أدناه إلى 3 دوال فرعية مبسطة لتفادي حد التعقيد داخل محرك Firestore. انسخ النسخة الجديدة من <span className="font-latin">firestore.rules</span> ({rulesLineCount} سطراً) والصقها ثم اضغط <strong className="text-white">Publish / نشر</strong>.
+                      </p>
+                    </div>
+                  )}
+
                   {diagnosticReport.outdatedRulesDetected && (
                     <div className="rounded-xl bg-[#D92321]/15 border border-[#D92321]/45 p-3.5 space-y-2 text-[#ffd8d7]">
                       <p className="font-extrabold text-white flex items-center gap-1.5">
@@ -287,14 +301,27 @@ export function AdminSecurityLogsPanel({
                           <span className="font-latin text-[#f9c400]">
                             {diagnosticReport.result.projectId} / {diagnosticReport.result.databaseId}
                           </span>{' '}
-                          ما زالت تعمل بنسخة سابقة!
+                          لا تطابق أحدث <span className="font-latin">firestore.rules</span>!
                         </span>
                       </p>
+                      {diagnosticReport.rejectedHomeKeys.length > 0 && (
+                        <div className="rounded-lg bg-black/30 border border-white/10 p-2.5 space-y-1">
+                          <p className="text-[11px] font-bold text-[#fde68a]">
+                            الحقول المرفوضة تحديداً من القاعدة النشطة حالياً ({diagnosticReport.rejectedHomeKeys.length} حقل):
+                          </p>
+                          <p className="font-latin text-[11px] text-white break-words" dir="ltr">
+                            {diagnosticReport.rejectedHomeKeys.join(', ')}
+                          </p>
+                        </div>
+                      )}
                       <p className="text-[11px] leading-relaxed">
-                        {diagnosticReport.homeConfigMode === 'autoplay_only' ||
-                        diagnosticReport.homeConfigMode === 'core_only'
-                          ? 'القاعدة قبلت الحقول القديمة من homeConfig لكنها رفضت خصائص السلايدر الجديدة وحقل branding — وهذا يثبت أن المحرر في Firebase لم ينشر آخر ملف قواعد بعد على هذه القاعدة.'
-                          : 'القاعدة قبلت الخطوط ودرع النوافذ لكنها رفضت homeConfig وbranding — وهذا يعني أن القواعد المنشورة على هذا المشروع أقدم من التحديث الحالي.'}
+                        {diagnosticReport.rejectedHomeKeys.length > 0 &&
+                        diagnosticReport.rejectedHomeKeys.length <= 5
+                          ? 'القاعدة النشطة في Firebase قريبة من التحديث الأخير لكنها ما زالت تفتقد هذه الحقول من التحديث الأخير لـ homeConfig.'
+                          : diagnosticReport.homeConfigMode === 'autoplay_only' ||
+                              diagnosticReport.homeConfigMode === 'core_only'
+                            ? 'القاعدة قبلت الحقول القديمة من homeConfig لكنها رفضت خصائص السلايدر الجديدة — وهذا يثبت أن دالة isValidHomeConfig في Firebase ما زالت بنسخة أقدم من الملف الكامل.'
+                            : 'القاعدة قبلت الخطوط ودرع النوافذ لكنها رفضت homeConfig و/أو branding.'}
                       </p>
                       <ul className="list-disc list-inside space-y-1 text-[11px] text-white/90">
                         <li>
@@ -302,18 +329,9 @@ export function AdminSecurityLogsPanel({
                           <strong className="text-[#f9c400]">
                             فتح محرر Rules في {diagnosticReport.result.projectId}
                           </strong>{' '}
-                          أعلاه (تأكد أن رابط Firebase Console يحتوي{' '}
+                          أعلاه وتأكد أن رابط المتصفح هو{' '}
                           <span className="font-latin text-[#f9c400]">
                             /project/{diagnosticReport.result.projectId}/firestore/databases/{consoleDbSegment}/rules
-                          </span>{' '}
-                          وليس مشروعاً آخر مثل{' '}
-                          <span className="font-latin">rahaal</span>).
-                        </li>
-                        <li>
-                          تأكد أنك في قسم <strong className="text-white">Firestore Database → Rules</strong>{' '}
-                          (وليس Realtime Database)، وأن القائمة العلوية للقاعدة مضبوطة على{' '}
-                          <span className="font-latin text-[#f9c400]">
-                            {diagnosticReport.result.databaseId}
                           </span>.
                         </li>
                         <li>

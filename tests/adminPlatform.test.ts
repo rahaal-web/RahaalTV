@@ -19,6 +19,9 @@ import {
 } from '../src/lib/websiteBranding';
 import {
   DEFAULT_HOME_CONFIG,
+  HOME_CONFIG_AUTOPLAY_KEYS,
+  HOME_CONFIG_CORE_KEYS,
+  HOME_CONFIG_SLIDER_STYLE_KEYS,
   normalizeHomeConfig,
   pickLegacyAutoplayHomeConfig,
   pickLegacyCoreHomeConfig,
@@ -450,10 +453,13 @@ describe('Firestore Rules Schema Parity for SiteSettings', () => {
     assert.strictEqual(theme.showFooterBar, false);
   });
 
-  it('builds exact 15-key core and 23-key autoplay legacy homeConfig subsets matching isValidHomeConfig', () => {
+  it('builds exact 15-key core, 23-key autoplay, and 19-key slider-style homeConfig subsets matching isValidHomeConfig', () => {
     const coreSubset = pickLegacyCoreHomeConfig(DEFAULT_HOME_CONFIG);
     const autoplaySubset = pickLegacyAutoplayHomeConfig(DEFAULT_HOME_CONFIG);
 
+    assert.equal(HOME_CONFIG_CORE_KEYS.length, 15);
+    assert.equal(HOME_CONFIG_AUTOPLAY_KEYS.length, 8);
+    assert.equal(HOME_CONFIG_SLIDER_STYLE_KEYS.length, 19);
     assert.equal(Object.keys(coreSubset).length, 15);
     assert.equal(Object.keys(autoplaySubset).length, 23);
     assert.equal('heroAutoPlay' in coreSubset, false);
@@ -466,8 +472,15 @@ describe('Firestore Rules Schema Parity for SiteSettings', () => {
     const hasOnlyMatch = slice.match(/\.keys\(\)\.hasOnly\(\[([\s\S]*?)\]\)/);
     assert.ok(hasOnlyMatch);
     const allowedKeys = new Set(Array.from(hasOnlyMatch[1].matchAll(/'([^']+)'/g)).map((x) => x[1]));
-    for (const k of Object.keys(autoplaySubset)) {
-      assert.ok(allowedKeys.has(k), `Legacy subset key "${k}" missing from isValidHomeConfig.hasOnly`);
+    const combined = new Set([
+      ...HOME_CONFIG_CORE_KEYS,
+      ...HOME_CONFIG_AUTOPLAY_KEYS,
+      ...HOME_CONFIG_SLIDER_STYLE_KEYS,
+    ]);
+    assert.equal(combined.size, 42);
+    assert.equal(allowedKeys.size, 42);
+    for (const k of combined) {
+      assert.ok(allowedKeys.has(k), `Combined homeConfig key "${k}" missing from isValidHomeConfig.hasOnly`);
     }
   });
 });

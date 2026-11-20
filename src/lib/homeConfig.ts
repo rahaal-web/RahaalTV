@@ -403,6 +403,28 @@ export const HOME_CONFIG_AUTOPLAY_KEYS = [
   'heroSlideIds',
 ] as const;
 
+export const HOME_CONFIG_SLIDER_STYLE_KEYS = [
+  'heroShowDescription',
+  'heroTitleSizePx',
+  'heroDescriptionSizePx',
+  'heroDescriptionLines',
+  'heroTextAlign',
+  'heroInfoPosition',
+  'heroTextMaxWidthPx',
+  'heroImageFit',
+  'heroBackdropBlurPx',
+  'heroBackdropDimPct',
+  'heroShowBadge',
+  'heroShowRating',
+  'heroShowYear',
+  'heroShowDuration',
+  'heroShowGenres',
+  'heroShowQuality',
+  'heroShowWatchBtn',
+  'heroShowDetailsBtn',
+  'heroShowWatchlistBtn',
+] as const;
+
 export function pickLegacyCoreHomeConfig(cfg: HomeLayoutConfig): Record<string, unknown> {
   const normalized = normalizeHomeConfig(cfg);
   const out: Record<string, unknown> = {};
