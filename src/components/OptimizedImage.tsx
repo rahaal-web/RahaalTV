@@ -472,7 +472,7 @@ export function OptimizedImage({
     <div
       ref={containerRef}
       data-image-state={effectiveState}
-      className={`relative overflow-hidden ${className}`}
+      className={`relative isolate overflow-hidden ${className}`}
       style={disablePlaceholder ? style : surfaceStyle}
     >
       {/* Loading / Error Placeholder Layer */}

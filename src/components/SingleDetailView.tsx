@@ -436,7 +436,7 @@ export function SingleDetailView({
                 <button
                   type="button"
                   onClick={() => onOpenTrailer(item)}
-                  className="group absolute inset-0 m-auto flex h-14 w-14 flex-col items-center justify-center rounded-full bg-white/20 border border-white/40 text-white backdrop-blur-md shadow-2xl hover:bg-[#D92321] hover:border-[#D92321] hover:scale-110 transition-all cursor-pointer"
+                  className="group absolute inset-0 z-20 m-auto flex h-14 w-14 flex-col items-center justify-center rounded-full bg-white/20 border border-white/40 text-white backdrop-blur-md shadow-2xl hover:bg-[#D92321] hover:border-[#D92321] hover:scale-110 transition-all cursor-pointer"
                   aria-label="تشغيل الإعلان الرسمي"
                 >
                   <Play className="w-6 h-6 fill-current translate-x-0.5" />
@@ -445,7 +445,7 @@ export function SingleDetailView({
                 <button
                   type="button"
                   onClick={() => onOpenTrailer(item)}
-                  className="absolute bottom-3 left-1/2 -translate-x-1/2 inline-flex min-h-[36px] items-center gap-1.5 rounded-full bg-black/75 backdrop-blur-md border border-white/15 px-3.5 py-1.5 text-xs font-bold text-white/95 hover:bg-[#D92321] hover:border-[#D92321] transition-colors whitespace-nowrap cursor-pointer"
+                  className="absolute bottom-3 left-1/2 z-20 -translate-x-1/2 inline-flex min-h-[36px] items-center gap-1.5 rounded-full bg-black/75 backdrop-blur-md border border-white/15 px-3.5 py-1.5 text-xs font-bold text-white/95 hover:bg-[#D92321] hover:border-[#D92321] transition-colors whitespace-nowrap cursor-pointer"
                 >
                   <Play className="w-3 h-3 fill-current" />
                   <span>تشغيل الإعلان</span>
@@ -706,6 +706,26 @@ export function SingleDetailView({
                   )}
                 </button>
               </div>
+
+              {/* Official Trailer Quick-Launch Button */}
+              <button
+                type="button"
+                onClick={() => onOpenTrailer(item)}
+                className="group flex w-full items-center justify-between gap-2.5 rounded-2xl bg-[#15222d] hover:bg-[#1b2c39] border border-white/10 hover:border-[#f9c400]/50 px-3.5 py-2.5 text-right text-white transition-all cursor-pointer"
+              >
+                <span className="flex items-center gap-2.5 min-w-0">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#f9c400]/15 border border-[#f9c400]/30 text-[#f9c400] group-hover:bg-[#f9c400] group-hover:text-[#06131c] transition-colors">
+                    <Film className="w-4 h-4" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-xs font-extrabold truncate">تشغيل الإعلان الرسمي</span>
+                    <span className="block text-[10px] font-bold text-[#b7c9ef] truncate">
+                      {item.trailerDuration ? `تريلر • ${item.trailerDuration}` : 'مشاهدة العرض الترويجي'}
+                    </span>
+                  </span>
+                </span>
+                <Play className="w-3.5 h-3.5 fill-current text-[#f9c400] shrink-0" />
+              </button>
 
               {/* Inline Download Links Panel inside Left Column */}
               {showDownloads && (

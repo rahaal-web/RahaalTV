@@ -3441,32 +3441,47 @@ async function findYoutubeTrailerFallback(
 ): Promise<string> {
   const cleanEn = cleanText(englishTitle)
     .replace(/\b(20[1-3]\d|19\d\d)\b/g, '')
+    .replace(/\b(HD|FHD|UHD|4K|WEB-?DL|BluRay|HDRip|CAM)\b/gi, '')
+    .replace(/[()[\]]/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
   const cleanAr = cleanText(title)
     .replace(/\b(20[1-3]\d|19\d\d)\b/g, '')
+    .replace(/\b(HD|FHD|UHD|4K|WEB-?DL|BluRay|HDRip|CAM)\b/gi, '')
     .replace(/^(فيلم|مسلسل|برنامج|عرض)\s+/i, '')
     .replace(/\s+(مترجم|مدبلج|كامل|اون\s*لاين|أون\s*لاين).*$/i, '')
+    .replace(/[()[\]]/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
-  const baseQuery = cleanEn.length >= 3 && /[A-Za-z]{3,}/.test(cleanEn) ? cleanEn : cleanAr;
+  const useEn = cleanEn.length >= 3 && /[A-Za-z]{3,}/.test(cleanEn);
+  const baseQuery = useEn ? cleanEn : cleanAr;
   if (!baseQuery) return '';
 
   const kindSuffix = kind === 'series' ? 'series official trailer' : 'official trailer';
-  const query = `${baseQuery} ${year || ''} ${kindSuffix}`.replace(/\s+/g, ' ').trim();
-
-  try {
-    const res = await fetchRemoteText(
-      `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
-      4800
-    );
-    if (!res.ok || !res.text) return '';
-    const match = res.text.match(/"videoId":"([A-Za-z0-9_-]{11})"/);
-    if (match?.[1]) {
-      return `https://www.youtube.com/watch?v=${match[1]}`;
-    }
-    return '';
-  } catch {
-    return '';
+  const queries = [
+    `${baseQuery} ${year || ''} ${kindSuffix}`.replace(/\s+/g, ' ').trim(),
+  ];
+  if (!useEn && cleanAr) {
+    const arKind = kind === 'series' ? 'برومو مسلسل' : 'إعلان فيلم';
+    queries.push(`${arKind} ${cleanAr} ${year || ''}`.replace(/\s+/g, ' ').trim());
   }
+
+  for (const query of queries) {
+    try {
+      const res = await fetchRemoteText(
+        `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
+        4800
+      );
+      if (!res.ok || !res.text) continue;
+      const match = res.text.match(/"videoId":"([A-Za-z0-9_-]{11})"/);
+      if (match?.[1]) {
+        return `https://www.youtube.com/watch?v=${match[1]}`;
+      }
+    } catch {
+      // Try next query
+    }
+  }
+  return '';
 }
 
 async function verifyScrapedServers(

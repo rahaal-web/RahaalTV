@@ -40,10 +40,15 @@ import {
 import { User } from 'firebase/auth';
 import {
   filterServersInBrowser,
+  findTrailerInBrowser,
   isLikelyNonVideoWebsiteUrl,
   resolveApiEndpoint,
   shouldSkipBackendApiCalls,
 } from '../lib/clientScraper';
+import {
+  buildTrailerSearchQueryUrl,
+  parseTrailerPlaybackUrl,
+} from '../lib/trailerUtils';
 import { resolveDisplayShortUrl } from '../lib/permalink';
 import {
   getFirebaseAuthErrorMessage,
@@ -255,21 +260,7 @@ interface TrailerModalProps {
   onWatchFull: (item: MediaItem) => void;
 }
 
-function normalizeTrailerUrl(url?: string): { kind: 'video' | 'iframe'; src: string } | null {
-  if (!url) return null;
-  const trimmed = url.trim();
-  if (!/^https?:\/\//i.test(trimmed)) return null;
-  if (/\.(mp4|webm|ogg)(\?|$)/i.test(trimmed)) {
-    return { kind: 'video', src: trimmed };
-  }
-  const ytMatch = trimmed.match(
-    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{6,})/i
-  );
-  if (ytMatch) {
-    return { kind: 'iframe', src: `https://www.youtube.com/embed/${ytMatch[1]}?autoplay=1` };
-  }
-  return { kind: 'iframe', src: trimmed };
-}
+const resolvedTrailerCache = new Map<string, string>();
 
 export function TrailerModal({
   item,
@@ -279,13 +270,75 @@ export function TrailerModal({
   onWatchFull,
 }: TrailerModalProps) {
   const [playing, setPlaying] = useState(true);
-  const parsedTrailer = item ? normalizeTrailerUrl(item.trailerUrl) : null;
+  const [autoResolvedUrl, setAutoResolvedUrl] = useState<string>('');
+  const [resolvingTrailer, setResolvingTrailer] = useState(false);
+
+  const directParsed = item ? parseTrailerPlaybackUrl(item.trailerUrl) : null;
+  const cachedOrAutoUrl = item
+    ? autoResolvedUrl || resolvedTrailerCache.get(item.id) || ''
+    : '';
+  const parsedTrailer = directParsed || parseTrailerPlaybackUrl(cachedOrAutoUrl);
+
   const trailerShieldDecision = resolveEffectiveShieldDecision(
     parsedTrailer?.src,
     popupShieldConfig || loadStoredPopupShieldConfig()
   );
 
   useDialogAccessibility(Boolean(item), onClose);
+
+  useEffect(() => {
+    if (!item) {
+      setAutoResolvedUrl('');
+      setResolvingTrailer(false);
+      return;
+    }
+
+    setPlaying(true);
+
+    if (parseTrailerPlaybackUrl(item.trailerUrl)) {
+      setAutoResolvedUrl('');
+      setResolvingTrailer(false);
+      return;
+    }
+
+    const cached = resolvedTrailerCache.get(item.id);
+    if (cached) {
+      setAutoResolvedUrl(cached);
+      setResolvingTrailer(false);
+      return;
+    }
+
+    let cancelled = false;
+    setAutoResolvedUrl('');
+    setResolvingTrailer(true);
+
+    void findTrailerInBrowser({
+      title: item.title,
+      englishTitle: item.englishTitle,
+      year: item.year,
+      kind: item.kind,
+    })
+      .then((foundUrl) => {
+        if (cancelled) return;
+        const clean = String(foundUrl || '').trim();
+        if (clean) {
+          resolvedTrailerCache.set(item.id, clean);
+          setAutoResolvedUrl(clean);
+        }
+      })
+      .catch(() => {
+        // Non-fatal; fallback preview stage remains active
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setResolvingTrailer(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [item?.id, item?.trailerUrl, item?.title, item?.englishTitle, item?.year, item?.kind]);
 
   useEffect(() => {
     if (!item) return;
@@ -304,6 +357,14 @@ export function TrailerModal({
 
   const theme = normalizePlayerTheme(playerTheme || loadStoredPlayerTheme());
   const themeVars = buildPlayerThemeVars(theme);
+  const externalTrailerHref =
+    parsedTrailer?.watchUrl ||
+    buildTrailerSearchQueryUrl({
+      title: item.title,
+      englishTitle: item.englishTitle,
+      year: item.year,
+      kind: item.kind,
+    });
 
   return (
     <div
@@ -325,7 +386,7 @@ export function TrailerModal({
         }}
       >
         <div
-          className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-white/[0.08]"
+          className="flex items-center justify-between gap-2 px-4 sm:px-5 py-3 border-b border-white/[0.08]"
           style={{ backgroundColor: 'var(--pt-modal)' }}
         >
           <div className="flex items-center gap-2.5 min-w-0">
@@ -346,11 +407,21 @@ export function TrailerModal({
                 {theme.brandLabel} · TRAILER
               </span>
               <h3 className="font-display text-sm sm:text-base font-bold text-white truncate">
-                {item.trailerLabel}
+                {item.trailerLabel || `الإعلان الرسمي — ${item.title}`}
               </h3>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
+            <a
+              href={externalTrailerHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-shield-allow="true"
+              className="hidden md:inline-flex items-center gap-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.14] border border-white/10 px-3 py-2 text-xs font-bold text-white/90 transition-colors"
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>{parsedTrailer ? 'فتح في يوتيوب' : 'بحث في يوتيوب'}</span>
+            </a>
             <button
               type="button"
               onClick={() => {
@@ -392,13 +463,34 @@ export function TrailerModal({
               <iframe
                 key={`${parsedTrailer.src}-${trailerShieldDecision.mode}`}
                 src={parsedTrailer.src}
-                title={item.trailerLabel}
+                title={item.trailerLabel || `الإعلان الرسمي: ${item.title}`}
                 sandbox={trailerShieldDecision.sandboxAttr}
+                referrerPolicy="strict-origin-when-cross-origin"
                 allowFullScreen
-                allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                allow="autoplay; fullscreen; encrypted-media; picture-in-picture; accelerometer; gyroscope"
                 className="h-full w-full border-0 bg-black"
               />
             )
+          ) : resolvingTrailer ? (
+            <div className="relative h-full w-full flex flex-col items-center justify-center gap-3 p-6 text-center">
+              <OptimizedImage
+                src={getBackdropUrl(item, 'backdrop_detail')}
+                fallbackSrc={FALLBACK_BACKDROP}
+                alt={item.title}
+                slot="backdrop_detail"
+                priority
+                loading="eager"
+                className="!absolute inset-0 h-full w-full opacity-35"
+                imgClassName="object-cover"
+              />
+              <div className="relative z-10 flex flex-col items-center gap-3">
+                <Loader2 className="w-10 h-10 animate-spin" style={{ color: 'var(--pt-accent)' }} />
+                <p className="font-display text-base sm:text-lg font-extrabold text-white">
+                  جاري جلب الإعلان الرسمي...
+                </p>
+                <p className="text-xs text-[#b7c9ef]">{item.title}</p>
+              </div>
+            </div>
           ) : (
             <>
               <OptimizedImage
@@ -413,9 +505,9 @@ export function TrailerModal({
                   playing ? 'scale-110' : 'scale-100'
                 }`}
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-black via-black/35 to-transparent" />
+              <div className="pointer-events-none absolute inset-0 z-10 bg-gradient-to-t from-black via-black/35 to-transparent" />
 
-              <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
+              <div className="absolute inset-0 z-20 flex flex-col items-center justify-center p-6 text-center">
                 <button
                   type="button"
                   onClick={() => setPlaying((p) => !p)}
@@ -432,9 +524,19 @@ export function TrailerModal({
                   {item.title}
                 </p>
                 <p className="mt-1 max-w-xl text-xs sm:text-sm text-[#b7c9ef]">{item.tagline}</p>
+                <a
+                  href={externalTrailerHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-shield-allow="true"
+                  className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-white/15 hover:bg-white/25 border border-white/20 px-4 py-2 text-xs font-extrabold text-white backdrop-blur-md transition-colors"
+                >
+                  <Globe className="w-3.5 h-3.5" />
+                  <span>البحث عن الإعلان على يوتيوب</span>
+                </a>
               </div>
 
-              <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 bg-black/75 px-3.5 sm:px-5 py-2.5 sm:py-3 backdrop-blur-sm border-t border-white/10">
+              <div className="absolute inset-x-0 bottom-0 z-20 flex items-center justify-between gap-3 bg-black/75 px-3.5 sm:px-5 py-2.5 sm:py-3 backdrop-blur-sm border-t border-white/10">
                 <div className="flex items-center gap-2 sm:gap-3 text-[11px] sm:text-xs font-bold text-white min-w-0">
                   <Volume2 className="w-4 h-4 shrink-0" style={{ color: 'var(--pt-accent)' }} />
                   <span className="truncate">معاينة الإعلان الرسمي</span>

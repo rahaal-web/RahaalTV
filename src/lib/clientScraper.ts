@@ -2270,29 +2270,44 @@ export async function findTrailerInBrowser(params: {
 
   const cleanEn = cleanText(englishTitle)
     .replace(/\b(20[1-3]\d|19\d\d)\b/g, '')
+    .replace(/\b(HD|FHD|UHD|4K|WEB-?DL|BluRay|HDRip|CAM)\b/gi, '')
+    .replace(/[()[\]]/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
   const cleanAr = cleanText(title)
     .replace(/\b(20[1-3]\d|19\d\d)\b/g, '')
+    .replace(/\b(HD|FHD|UHD|4K|WEB-?DL|BluRay|HDRip|CAM)\b/gi, '')
     .replace(/^(فيلم|مسلسل|برنامج|عرض)\s+/i, '')
     .replace(/\s+(مترجم|مدبلج|كامل|اون\s*لاين|أون\s*لاين).*$/i, '')
+    .replace(/[()[\]]/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
-  const baseQuery = cleanEn.length >= 3 && /[A-Za-z]{3,}/.test(cleanEn) ? cleanEn : cleanAr;
+  const useEn = cleanEn.length >= 3 && /[A-Za-z]{3,}/.test(cleanEn);
+  const baseQuery = useEn ? cleanEn : cleanAr;
   if (!baseQuery) return '';
 
   const kindSuffix = kind === 'series' ? 'series official trailer' : 'official trailer';
-  const query = `${baseQuery} ${year || ''} ${kindSuffix}`.replace(/\s+/g, ' ').trim();
+  const queries = [
+    `${baseQuery} ${year || ''} ${kindSuffix}`.replace(/\s+/g, ' ').trim(),
+  ];
+  if (!useEn && cleanAr) {
+    const arKind = kind === 'series' ? 'برومو مسلسل' : 'إعلان فيلم';
+    queries.push(`${arKind} ${cleanAr} ${year || ''}`.replace(/\s+/g, ' ').trim());
+  }
 
-  try {
-    const ytRes = await fetchViaBrowserOrCorsRelay(
-      `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
-      6500
-    );
-    if (ytRes.ok && ytRes.text) {
-      const m = ytRes.text.match(/"videoId":"([A-Za-z0-9_-]{11})"/);
-      if (m?.[1]) return `https://www.youtube.com/watch?v=${m[1]}`;
+  for (const query of queries) {
+    try {
+      const ytRes = await fetchViaBrowserOrCorsRelay(
+        `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
+        6500
+      );
+      if (ytRes.ok && ytRes.text) {
+        const m = ytRes.text.match(/"videoId":"([A-Za-z0-9_-]{11})"/);
+        if (m?.[1]) return `https://www.youtube.com/watch?v=${m[1]}`;
+      }
+    } catch {
+      // Try next query
     }
-  } catch {
-    // Non-fatal
   }
 
   return '';
