@@ -29,7 +29,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, HEAD, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   'Access-Control-Expose-Headers':
-    'X-Final-Url, X-Upstream-Status, X-Upstream-X-Frame-Options, X-Upstream-CSP, X-Upstream-CF-Mitigated, X-Proxy-Worker',
+    'X-Final-Url, X-Upstream-Status, X-Upstream-X-Frame-Options, X-Upstream-CSP, X-Proxy-Worker',
   'X-Proxy-Worker': 'rahaltv-v4',
 };
 
@@ -378,7 +378,6 @@ export default {
       const contentType = upstream.headers.get('content-type') || 'text/html; charset=utf-8';
       const xFrame = upstream.headers.get('x-frame-options') || '';
       const csp = upstream.headers.get('content-security-policy') || '';
-      const cfMitigated = upstream.headers.get('cf-mitigated') || '';
       return new Response(body, {
         status: upstream.status,
         headers: {
@@ -390,7 +389,6 @@ export default {
           'X-Upstream-Status': String(upstream.status),
           ...(xFrame ? { 'X-Upstream-X-Frame-Options': xFrame } : {}),
           ...(csp ? { 'X-Upstream-CSP': csp } : {}),
-          ...(cfMitigated ? { 'X-Upstream-CF-Mitigated': cfMitigated } : {}),
         },
       });
     } catch (err) {
