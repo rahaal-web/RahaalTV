@@ -77,15 +77,26 @@ export function AdminSecurityLogsPanel({
       const report = await onRunRulesDiagnostic();
       setDiagnosticReport(report);
       if (report.ok) {
-        if (report.result.rejectedSections.length === 0) {
-          onNotify('قواعد firestore.rules المنشورة مطابقة بالكامل لجميع أقسام الإعدادات!');
+        const allSynced =
+          report.result.rejectedSections.length === 0 &&
+          report.syncedImagePlaceholdersToCloud &&
+          report.recentlyWatchedReady;
+        if (allSynced) {
+          onNotify(
+            'قواعد firestore.rules المنشورة مطابقة بالكامل لجميع أقسام الإعدادات والخلفيات المؤقتة وسجل المشاهدة!'
+          );
         } else if (report.outdatedRulesDetected) {
           onNotify(
-            `القواعد المنشورة على (${report.result.projectId}/${report.result.databaseId}) ما زالت قديمة — راجع تفاصيل التشخيص أدناه.`
+            `القواعد المنشورة على (${report.result.projectId}/${report.result.databaseId}) ما زالت تفتقد بعض القواعد الحديثة — راجع تفاصيل التشخيص أدناه.`
           );
         } else {
+          const missingList = [
+            ...report.result.rejectedSections,
+            ...(!report.syncedImagePlaceholdersToCloud ? ['settings/image_placeholders'] : []),
+            ...(!report.recentlyWatchedReady ? ['recently_watched'] : []),
+          ];
           onNotify(
-            `بعض الأقسام مرفوضة من قواعد Firebase (${report.result.rejectedSections.join(', ')}) — راجع نتيجة الفحص أدناه.`
+            `بعض الأقسام مرفوضة من قواعد Firebase (${missingList.join(', ')}) — راجع نتيجة الفحص أدناه.`
           );
         }
       } else {
@@ -114,6 +125,12 @@ export function AdminSecurityLogsPanel({
   };
 
   if (mode === 'security_rules') {
+    const allReportSynced =
+      diagnosticReport?.ok &&
+      diagnosticReport.result.rejectedSections.length === 0 &&
+      diagnosticReport.syncedImagePlaceholdersToCloud &&
+      diagnosticReport.recentlyWatchedReady;
+
     return (
       <div className="space-y-6">
         <div className="rounded-3xl bg-[#0c1821] border border-[#f9c400]/25 p-6 space-y-4">
@@ -126,7 +143,7 @@ export function AdminSecurityLogsPanel({
               <p className="text-xs leading-relaxed text-[#b7c9ef]">
                 تحمي هذه القواعد جميع مجموعات قاعدة البيانات (
                 <span className="font-latin text-white">
-                  media, settings, admins, admin_activity_logs, scraper_adapters, fonts, requests, users, ratings
+                  media, settings, settings/image_placeholders, recently_watched, admins, admin_activity_logs, admin_workspace, scraper_adapters, fonts, requests, users, ratings
                 </span>
                 ) لمشروع{' '}
                 <span className="font-latin text-[#f9c400]">{activeFirebaseConfig.projectId}</span>{' '}
@@ -186,7 +203,7 @@ export function AdminSecurityLogsPanel({
           {diagnosticReport && (
             <div
               className={`rounded-2xl border p-4 space-y-3 text-xs ${
-                diagnosticReport.ok && diagnosticReport.result.rejectedSections.length === 0
+                allReportSynced
                   ? 'bg-[#4CAF50]/10 border-[#4CAF50]/40 text-emerald-100'
                   : 'bg-[#f9c400]/10 border-[#f9c400]/40 text-amber-100'
               }`}
@@ -208,7 +225,7 @@ export function AdminSecurityLogsPanel({
 
               {diagnosticReport.ok ? (
                 <>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                     <div
                       className={`rounded-xl border px-3 py-2 flex items-center justify-between gap-2 ${
                         diagnosticReport.result.syncedHomeToCloud
@@ -264,7 +281,23 @@ export function AdminSecurityLogsPanel({
                           label: 'هوية الموقع (Branding)',
                           ok: diagnosticReport.result.syncedBrandingToCloud,
                         },
-                      ] as const
+                        {
+                          key: 'imagePlaceholders',
+                          label: 'الخلفيات المؤقتة للصور (Placeholders)',
+                          sub: diagnosticReport.syncedImagePlaceholdersToCloud
+                            ? 'settings/image_placeholders'
+                            : `مرفوض (${diagnosticReport.imagePlaceholdersErrorCode || 'permission-denied'})`,
+                          ok: diagnosticReport.syncedImagePlaceholdersToCloud,
+                        },
+                        {
+                          key: 'recentlyWatched',
+                          label: 'سجل شاهدته مؤخراً (Recently Watched)',
+                          sub: diagnosticReport.recentlyWatchedReady
+                            ? 'recently_watched جاهز'
+                            : 'قواعد recently_watched غير منشورة',
+                          ok: diagnosticReport.recentlyWatchedReady,
+                        },
+                      ] as Array<{ key: string; label: string; sub?: string; ok: boolean }>
                     ).map((row) => (
                       <div
                         key={row.key}
@@ -274,7 +307,14 @@ export function AdminSecurityLogsPanel({
                             : 'bg-[#D92321]/15 border-[#D92321]/45 text-[#ffb4b2]'
                         }`}
                       >
-                        <span className="font-bold">{row.label}</span>
+                        <div className="space-y-0.5 min-w-0">
+                          <span className="font-bold block">{row.label}</span>
+                          {row.sub && (
+                            <span className="font-latin text-[10px] opacity-85 block truncate" dir="ltr">
+                              {row.sub}
+                            </span>
+                          )}
+                        </div>
                         {row.ok ? (
                           <CheckCircle2 className="w-4 h-4 text-[#4CAF50] shrink-0" />
                         ) : (
@@ -293,7 +333,7 @@ export function AdminSecurityLogsPanel({
                         </span>
                       </p>
                       <p className="text-[11px] leading-relaxed">
-                        تحتوي النسخة الجديدة من <span className="font-latin text-[#f9c400]">firestore.rules</span> ({rulesLineCount} سطراً) على مستندات منفصلة خفيفة (<span className="font-latin text-white">settings/home_layout</span> و<span className="font-latin text-white">settings/slider_style</span> و<span className="font-latin text-white">settings/site_branding</span>) لتجاوز هذا الحد بالكامل. انسخ النسخة الجديدة والصقها في محرر Firebase ثم اضغط <strong className="text-white">Publish / نشر</strong> وبعدها أعد الضغط على «فحص تطابق القواعد الآن».
+                        تحتوي النسخة الجديدة من <span className="font-latin text-[#f9c400]">firestore.rules</span> ({rulesLineCount} سطراً) على مستندات منفصلة خفيفة (<span className="font-latin text-white">settings/home_layout</span> و<span className="font-latin text-white">settings/slider_style</span> و<span className="font-latin text-white">settings/site_branding</span> و<span className="font-latin text-white">settings/image_placeholders</span>) لتجاوز هذا الحد بالكامل. انسخ النسخة الجديدة والصقها في محرر Firebase ثم اضغط <strong className="text-white">Publish / نشر</strong> وبعدها أعد الضغط على «فحص تطابق القواعد الآن».
                       </p>
                     </div>
                   )}
@@ -320,14 +360,34 @@ export function AdminSecurityLogsPanel({
                           </p>
                         </div>
                       )}
+                      {!diagnosticReport.syncedImagePlaceholdersToCloud && (
+                        <div className="rounded-lg bg-black/30 border border-white/10 p-2.5 space-y-1">
+                          <p className="text-[11px] font-bold text-[#fde68a]">
+                            رفض فعلي على <span className="font-latin">settings/image_placeholders</span>:
+                          </p>
+                          <p className="font-latin text-[11px] text-white break-words" dir="ltr">
+                            {diagnosticReport.imagePlaceholdersErrorCode || 'permission-denied'}
+                            {diagnosticReport.imagePlaceholdersErrorMessage
+                              ? ` — ${diagnosticReport.imagePlaceholdersErrorMessage}`
+                              : ''}
+                          </p>
+                        </div>
+                      )}
                       <p className="text-[11px] leading-relaxed">
-                        {diagnosticReport.rejectedHomeKeys.length > 0 &&
-                        diagnosticReport.rejectedHomeKeys.length <= 5
-                          ? 'القاعدة النشطة في Firebase قريبة من التحديث الأخير لكنها ما زالت تفتقد هذه الحقول من التحديث الأخير لـ homeConfig.'
-                          : diagnosticReport.homeConfigMode === 'autoplay_only' ||
-                              diagnosticReport.homeConfigMode === 'core_only'
-                            ? 'القاعدة قبلت الحقول القديمة من homeConfig لكنها رفضت خصائص السلايدر الجديدة — وهذا يثبت أن دالة isValidHomeConfig في Firebase ما زالت بنسخة أقدم من الملف الكامل.'
-                            : 'القاعدة قبلت الخطوط ودرع النوافذ لكنها رفضت homeConfig و/أو branding.'}
+                        {!diagnosticReport.syncedImagePlaceholdersToCloud || !diagnosticReport.recentlyWatchedReady
+                          ? `القواعد المنشورة على Firebase حالياً تسمح بالإعدادات الأساسية، لكنها ما زالت تفتقد قواعد (${[
+                              !diagnosticReport.syncedImagePlaceholdersToCloud ? 'settings/image_placeholders' : '',
+                              !diagnosticReport.recentlyWatchedReady ? 'recently_watched' : '',
+                            ]
+                              .filter(Boolean)
+                              .join(' و ')}) أو أنك نسخت نسخة سابقة قبل التحديث الأخير — انسخ النص الكامل الحالي (${rulesLineCount} سطراً) واضغط Publish في Firebase Console.`
+                          : diagnosticReport.rejectedHomeKeys.length > 0 &&
+                              diagnosticReport.rejectedHomeKeys.length <= 5
+                            ? 'القاعدة النشطة في Firebase قريبة من التحديث الأخير لكنها ما زالت تفتقد هذه الحقول من التحديث الأخير لـ homeConfig.'
+                            : diagnosticReport.homeConfigMode === 'autoplay_only' ||
+                                diagnosticReport.homeConfigMode === 'core_only'
+                              ? 'القاعدة قبلت الحقول القديمة من homeConfig لكنها رفضت خصائص السلايدر الجديدة — وهذا يثبت أن دالة isValidHomeConfig في Firebase ما زالت بنسخة أقدم من الملف الكامل.'
+                              : 'القاعدة قبلت الخطوط ودرع النوافذ لكنها رفضت homeConfig و/أو branding.'}
                       </p>
                       <ul className="list-disc list-inside space-y-1 text-[11px] text-white/90">
                         <li>

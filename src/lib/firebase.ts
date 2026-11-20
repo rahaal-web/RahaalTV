@@ -54,6 +54,7 @@ import {
   WatchProgressRecord,
 } from '../types/media';
 import {
+  loadStoredPlaceholderConfig,
   normalizeImagePlaceholderConfig,
   sanitizePlaceholderConfigForFirestore,
 } from './placeholderConfig';
@@ -1258,6 +1259,10 @@ export type RulesDiagnosticReport =
         sliderStyle: boolean;
         siteBranding: boolean;
       };
+      syncedImagePlaceholdersToCloud: boolean;
+      imagePlaceholdersErrorCode?: string;
+      imagePlaceholdersErrorMessage?: string;
+      recentlyWatchedReady: boolean;
       userEmail: string | null;
       emailVerified: boolean;
     }
@@ -1272,13 +1277,15 @@ export type RulesDiagnosticReport =
 
 export async function diagnoseFirestoreSettingsRules(
   settings: SiteSettings,
-  uid: string
+  uid: string,
+  imagePlaceholders?: ImagePlaceholderConfig
 ): Promise<RulesDiagnosticReport> {
   const activeDb = getActiveDatabase();
   const activeCfg = getActiveFirebaseConfig();
   const projectId = activeCfg.projectId;
   const databaseId = activeCfg.firestoreDatabaseId || '(default)';
   const currentUser = getActiveAuth().currentUser;
+  const actorUid = currentUser?.uid || uid;
   const userEmail = currentUser?.email ?? null;
   const emailVerified = Boolean(currentUser?.emailVerified);
 
@@ -1454,6 +1461,34 @@ export async function diagnoseFirestoreSettingsRules(
       }
     }
 
+    let targetPlaceholders = imagePlaceholders;
+    if (!targetPlaceholders) {
+      try {
+        const existingPhSnap = await getDoc(doc(activeDb, 'settings', 'image_placeholders'));
+        if (existingPhSnap.exists()) {
+          targetPlaceholders = normalizeImagePlaceholderConfig(
+            existingPhSnap.data() as Partial<ImagePlaceholderConfig>
+          );
+        }
+      } catch {
+        // Fallback to local stored placeholder config
+      }
+    }
+    const placeholderProbeRes = await saveImagePlaceholderConfigToFirestore(
+      targetPlaceholders || loadStoredPlaceholderConfig(),
+      actorUid
+    );
+
+    let recentlyWatchedReady = false;
+    try {
+      await getDoc(doc(activeDb, 'recently_watched', `${actorUid}__probe_check`));
+      recentlyWatchedReady = true;
+    } catch (rwErr) {
+      if (!isPermissionDeniedError(rwErr)) {
+        recentlyWatchedReady = true;
+      }
+    }
+
     const rejectedSections = (
       ['homeConfig', 'typography', 'popupShield', 'branding'] as SettingsOptionalSection[]
     ).filter((k) => {
@@ -1466,18 +1501,26 @@ export async function diagnoseFirestoreSettingsRules(
     const payloadIssueDetected =
       (!syncedHomeToCloud && homeDefaultFullOk) || (!syncedBrandingToCloud && brandingDefaultOk);
 
+    const anyCoreRulePassed =
+      syncedHomeToCloud ||
+      syncedTypographyToCloud ||
+      syncedPopupShieldToCloud ||
+      syncedBrandingToCloud ||
+      homeConfigMode === 'autoplay_only' ||
+      homeConfigMode === 'core_only';
+
     const outdatedRulesDetected =
       !payloadIssueDetected &&
       !homeComplexityLimitDetected &&
-      (!syncedHomeToCloud || !syncedBrandingToCloud) &&
-      (syncedTypographyToCloud ||
-        syncedPopupShieldToCloud ||
-        homeConfigMode === 'autoplay_only' ||
-        homeConfigMode === 'core_only');
+      anyCoreRulePassed &&
+      (!syncedHomeToCloud ||
+        !syncedBrandingToCloud ||
+        !placeholderProbeRes.ok ||
+        !recentlyWatchedReady);
 
     if (rejectedSections.length === 0) {
       // Immediately synchronize live settings across settings/general and split docs
-      await saveSiteSettingsToFirestore(settings, uid);
+      await saveSiteSettingsToFirestore(settings, actorUid);
     }
 
     return {
@@ -1501,6 +1544,10 @@ export async function diagnoseFirestoreSettingsRules(
         sliderStyle: splitHomeResult.sliderStyleOk,
         siteBranding: splitBrandingDocOk,
       },
+      syncedImagePlaceholdersToCloud: placeholderProbeRes.ok,
+      imagePlaceholdersErrorCode: placeholderProbeRes.errorCode,
+      imagePlaceholdersErrorMessage: placeholderProbeRes.errorMessage,
+      recentlyWatchedReady,
       userEmail,
       emailVerified,
     };
@@ -1906,24 +1953,49 @@ export async function deleteWatchProgressFromFirestore(progressId: string): Prom
   }
 }
 
+export interface SaveImagePlaceholdersResult {
+  ok: boolean;
+  projectId: string;
+  databaseId: string;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
 export async function saveImagePlaceholderConfigToFirestore(
   cfg: ImagePlaceholderConfig,
   uid: string
-): Promise<boolean> {
+): Promise<SaveImagePlaceholdersResult> {
   const activeDb = getActiveDatabase();
+  const activeCfg = getActiveFirebaseConfig();
+  const projectId = activeCfg.projectId;
+  const databaseId = activeCfg.firestoreDatabaseId || '(default)';
+  const actorUid = getActiveAuth().currentUser?.uid || uid;
   const cleanCfg = sanitizePlaceholderConfigForFirestore(normalizeImagePlaceholderConfig(cfg));
   try {
     await setDoc(doc(activeDb, 'settings', 'image_placeholders'), {
       ...cleanCfg,
-      updatedBy: uid,
+      updatedBy: actorUid,
       updatedAt: serverTimestamp(),
     });
-    return true;
+    return { ok: true, projectId, databaseId };
   } catch (error) {
+    const { code, message } = getFirebaseErrorCodeAndMessage(error);
+    reportClientError({
+      source: 'firestore.settings.image_placeholders',
+      level: 'warn',
+      message: `Write to settings/image_placeholders on ${projectId}/${databaseId} failed (${code || 'unknown'}): ${message}`,
+      context: { projectId, databaseId, actorUid },
+    });
     if (!isPermissionDeniedError(error)) {
       handleFirestoreError(error, OperationType.WRITE, 'settings/image_placeholders');
     }
-    return false;
+    return {
+      ok: false,
+      projectId,
+      databaseId,
+      errorCode: code || 'permission-denied',
+      errorMessage: message,
+    };
   }
 }
 

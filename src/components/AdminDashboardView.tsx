@@ -2643,11 +2643,11 @@ export function AdminDashboardView({
     }
     setBusyAction(true);
     try {
-      const ok = await saveImagePlaceholderConfigToFirestore(clean, activeActorUid);
+      const res = await saveImagePlaceholderConfigToFirestore(clean, activeActorUid);
       onNotify(
-        ok
-          ? 'تم حفظ إعدادات الخلفيات المؤقتة وصورة الفشل ومزامنتها لجميع الزوار بنجاح!'
-          : 'تم حفظ الإعدادات محلياً — يرجى التأكد من نشر قواعد Firestore لـ settings/image_placeholders'
+        res.ok
+          ? `تم حفظ إعدادات الخلفيات المؤقتة وصورة الفشل ومزامنتها لجميع الزوار على (${res.projectId} / ${res.databaseId}) بنجاح!`
+          : `تم حفظ الإعدادات محلياً — قواعد (${res.projectId} / ${res.databaseId}) رفضت الكتابة إلى settings/image_placeholders (${res.errorCode || 'permission-denied'}). انسخ أحدث firestore.rules من تبويب «قواعد Firestore» واضغط Publish ثم أعد «فحص تطابق القواعد الآن».`
       );
     } catch {
       onNotify('تم الحفظ محلياً — تعذرت المزامنة السحابية لإعدادات الخلفيات المؤقتة');
@@ -4729,7 +4729,8 @@ export function AdminDashboardView({
                         popupShield: saveStoredPopupShieldConfig(activePopupShield),
                         branding: saveStoredWebsiteBranding(activeBranding),
                       },
-                      activeActorUid
+                      activeActorUid,
+                      localPlaceholderConfig
                     )
                   }
                 />

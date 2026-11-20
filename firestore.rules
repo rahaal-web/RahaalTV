@@ -419,22 +419,22 @@ service cloud.firestore {
         && isValidWebsiteBrandingFields(b);
     }
 
+    function isHexColorString(c) {
+      return c is string && c.size() == 7 && c.matches('^#[0-9a-fA-F]{6}$');
+    }
+
     function isValidImagePlaceholderSlotOverride(ov) {
       return ov is map
-        && ov.keys().hasAll([
-          'enabled', 'mode', 'primaryColor', 'secondaryColor', 'gradientAngle',
-          'customImageUrl', 'errorFallbackImageUrl', 'dimOpacityPct',
-          'showLogoOverlay', 'showFallbackIcon'
-        ])
         && ov.keys().hasOnly([
           'enabled', 'mode', 'primaryColor', 'secondaryColor', 'gradientAngle',
           'customImageUrl', 'errorFallbackImageUrl', 'dimOpacityPct',
           'showLogoOverlay', 'showFallbackIcon'
         ])
+        && ov.keys().size() == 10
         && ov.enabled is bool
         && ov.mode in ['solid', 'gradient', 'shimmer', 'logo_badge', 'custom_image']
-        && ov.primaryColor is string && ov.primaryColor.size() == 7 && ov.primaryColor.matches('^#[0-9a-fA-F]{6}$')
-        && ov.secondaryColor is string && ov.secondaryColor.size() == 7 && ov.secondaryColor.matches('^#[0-9a-fA-F]{6}$')
+        && isHexColorString(ov.primaryColor)
+        && isHexColorString(ov.secondaryColor)
         && (ov.gradientAngle is int || ov.gradientAngle is float) && ov.gradientAngle >= 0 && ov.gradientAngle <= 360
         && ov.customImageUrl is string && ov.customImageUrl.size() <= 600
         && ov.errorFallbackImageUrl is string && ov.errorFallbackImageUrl.size() <= 600
@@ -459,8 +459,8 @@ service cloud.firestore {
         'updatedBy', 'updatedAt'
       ])
       && data.mode in ['solid', 'gradient', 'shimmer', 'logo_badge', 'custom_image']
-      && data.primaryColor is string && data.primaryColor.size() == 7 && data.primaryColor.matches('^#[0-9a-fA-F]{6}$')
-      && data.secondaryColor is string && data.secondaryColor.size() == 7 && data.secondaryColor.matches('^#[0-9a-fA-F]{6}$')
+      && isHexColorString(data.primaryColor)
+      && isHexColorString(data.secondaryColor)
       && (data.gradientAngle is int || data.gradientAngle is float) && data.gradientAngle >= 0 && data.gradientAngle <= 360
       && data.shimmerEnabled is bool
       && data.shimmerSpeed in ['slow', 'normal', 'fast']
@@ -472,8 +472,8 @@ service cloud.firestore {
       && data.showFallbackIcon is bool
       && (data.fadeInDurationMs is int || data.fadeInDurationMs is float) && data.fadeInDurationMs >= 0 && data.fadeInDurationMs <= 600
       && data.slotOverrides is map
-      && data.slotOverrides.keys().hasAll(['poster', 'backdrop', 'cast', 'episode'])
       && data.slotOverrides.keys().hasOnly(['poster', 'backdrop', 'cast', 'episode'])
+      && data.slotOverrides.keys().size() == 4
       && isValidImagePlaceholderSlotOverride(data.slotOverrides.poster)
       && isValidImagePlaceholderSlotOverride(data.slotOverrides.backdrop)
       && isValidImagePlaceholderSlotOverride(data.slotOverrides.cast)
