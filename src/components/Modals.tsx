@@ -145,28 +145,28 @@ export function WatchlistModal({
       aria-modal="true"
       aria-label="قائمتي للمشاهدة لاحقاً"
       data-rtv-focus-trap="true"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4"
     >
       <div className="fixed inset-0 bg-black/75 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-2xl rounded-3xl bg-[#0c1821] border border-white/10 shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between bg-[#1a242e] px-6 py-4 border-b border-white/10">
-          <div className="flex items-center gap-2.5">
-            <Bookmark className="w-5 h-5 text-[#4CAF50]" />
-            <h2 className="font-display text-lg font-extrabold text-white">
+      <div className="relative z-10 w-full max-w-2xl rounded-2xl sm:rounded-3xl bg-[#0c1821] border border-white/10 shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between gap-3 bg-[#1a242e] px-4 py-3.5 sm:px-6 sm:py-4 border-b border-white/10">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <Bookmark className="w-5 h-5 text-[#4CAF50] shrink-0" />
+            <h2 className="font-display text-base sm:text-lg font-extrabold text-white truncate">
               قائمتي للمشاهدة لاحقًا ({items.length})
             </h2>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 text-white hover:bg-[#D92321] cursor-pointer"
+            className="inline-flex h-10 w-10 sm:h-9 sm:w-9 items-center justify-center rounded-xl bg-white/5 text-white hover:bg-[#D92321] cursor-pointer shrink-0"
             aria-label="إغلاق قائمتي"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="max-h-[65vh] overflow-y-auto p-5">
+        <div className="max-h-[72vh] sm:max-h-[65vh] overflow-y-auto p-3.5 sm:p-5">
           {items.length === 0 ? (
             <div className="py-12 text-center">
               <Film className="w-12 h-12 mx-auto text-[#b7c9ef]/30 mb-3" />
@@ -180,7 +180,7 @@ export function WatchlistModal({
               {items.map((item) => (
                 <div
                   key={item.id}
-                  className="flex items-center justify-between gap-4 rounded-2xl bg-[#1a242e]/80 border border-white/[0.07] p-3"
+                  className="flex items-center justify-between gap-2.5 sm:gap-4 rounded-2xl bg-[#1a242e]/80 border border-white/[0.07] p-2.5 sm:p-3"
                 >
                   <button
                     type="button"
@@ -188,7 +188,7 @@ export function WatchlistModal({
                       onSelectMedia(item);
                       onClose();
                     }}
-                    className="flex items-center gap-3.5 text-right flex-1 min-w-0 cursor-pointer group"
+                    className="flex items-center gap-3 sm:gap-3.5 text-right flex-1 min-w-0 cursor-pointer group"
                   >
                     <img
                       src={getPosterUrl(item)}
@@ -203,7 +203,7 @@ export function WatchlistModal({
                       <h3 className="font-display text-sm font-bold text-white group-hover:text-[#D92321] truncate">
                         {item.title}
                       </h3>
-                      <p className="text-xs text-[#b7c9ef] mt-1">
+                      <p className="text-[11px] sm:text-xs text-[#b7c9ef] mt-1 truncate">
                         {item.year} • {item.quality} • {item.duration}
                       </p>
                     </div>
@@ -212,7 +212,7 @@ export function WatchlistModal({
                     type="button"
                     onClick={() => onRemove(item)}
                     aria-label="إزالة من قائمتي"
-                    className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 text-[#b7c9ef] hover:bg-[#D92321] hover:text-white transition-colors cursor-pointer"
+                    className="inline-flex h-10 w-10 sm:h-9 sm:w-9 items-center justify-center rounded-xl bg-white/5 text-[#b7c9ef] hover:bg-[#D92321] hover:text-white transition-colors cursor-pointer shrink-0"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -349,7 +349,7 @@ export function TrailerModal({
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/[0.06] border border-white/10 text-white/85 hover:bg-white/15 hover:text-white transition-colors cursor-pointer"
+              className="inline-flex h-10 w-10 sm:h-8 sm:w-8 items-center justify-center rounded-lg bg-white/[0.06] border border-white/10 text-white/85 hover:bg-white/15 hover:text-white transition-colors cursor-pointer shrink-0"
               aria-label="إغلاق الإعلان"
             >
               <X className="w-4 h-4" />
@@ -409,10 +409,10 @@ export function TrailerModal({
                 <p className="mt-1 max-w-xl text-xs sm:text-sm text-[#b7c9ef]">{item.tagline}</p>
               </div>
 
-              <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-4 bg-black/75 px-5 py-3 backdrop-blur-sm border-t border-white/10">
-                <div className="flex items-center gap-3 text-xs font-bold text-white">
-                  <Volume2 className="w-4 h-4" style={{ color: 'var(--pt-accent)' }} />
-                  <span>معاينة الإعلان الرسمي</span>
+              <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 bg-black/75 px-3.5 sm:px-5 py-2.5 sm:py-3 backdrop-blur-sm border-t border-white/10">
+                <div className="flex items-center gap-2 sm:gap-3 text-[11px] sm:text-xs font-bold text-white min-w-0">
+                  <Volume2 className="w-4 h-4 shrink-0" style={{ color: 'var(--pt-accent)' }} />
+                  <span className="truncate">معاينة الإعلان الرسمي</span>
                   <div className="hidden sm:block h-1.5 w-44 rounded-full bg-white/20 overflow-hidden">
                     <div
                       className={`h-full transition-all duration-700 ${
@@ -429,7 +429,7 @@ export function TrailerModal({
                     onClose();
                     onWatchFull(item);
                   }}
-                  className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-extrabold transition-opacity hover:opacity-90 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 sm:gap-2 rounded-lg px-3.5 sm:px-4 min-h-[40px] sm:min-h-0 py-2 text-xs font-extrabold transition-opacity hover:opacity-90 cursor-pointer whitespace-nowrap shrink-0"
                   style={{
                     backgroundColor: 'var(--pt-accent)',
                     color: 'var(--pt-accent-contrast)',
@@ -2701,11 +2701,15 @@ export function PlayerModal({
                   </h2>
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-bold text-[#b7c9ef]">
                     <span className="font-latin tabular-nums text-white/90">{item.year}</span>
-                    <span className="text-white/30">·</span>
-                    <span className="inline-flex items-center gap-1 font-latin tabular-nums text-[#f9c400]">
-                      <Star className="w-3.5 h-3.5 fill-current" />
-                      <span>{Number(item.imdb || 7.5).toFixed(1)}</span>
-                    </span>
+                    {item.communityRating && item.communityRating.count > 0 && (
+                      <>
+                        <span className="text-white/30">·</span>
+                        <span className="inline-flex items-center gap-1 font-latin tabular-nums text-[#f9c400]">
+                          <Star className="w-3.5 h-3.5 fill-current" />
+                          <span dir="ltr">{item.communityRating.average.toFixed(1)}/5</span>
+                        </span>
+                      </>
+                    )}
                     <span className="text-white/30">·</span>
                     <span className="font-latin text-white/90">{item.quality}</span>
                     {item.duration && (
@@ -2965,12 +2969,12 @@ export function LoginModal({
       aria-modal="true"
       aria-label="حسابي على RahaL TV"
       data-rtv-focus-trap="true"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4"
     >
       <div className="fixed inset-0 bg-black/75 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-md rounded-3xl bg-[#0c1821] border border-white/10 p-6 shadow-2xl max-h-[92vh] overflow-y-auto">
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="font-display text-lg font-extrabold text-white">
+      <div className="relative z-10 w-full max-w-md rounded-2xl sm:rounded-3xl bg-[#0c1821] border border-white/10 p-4 sm:p-6 shadow-2xl max-h-[92vh] overflow-y-auto">
+        <div className="flex items-center justify-between gap-3 mb-4 sm:mb-5">
+          <h2 className="font-display text-base sm:text-lg font-extrabold text-white truncate">
             {firebaseUser
               ? 'حسابي على RahaL TV'
               : isGuest && !showAuthInGuest
@@ -2982,7 +2986,7 @@ export function LoginModal({
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 text-white hover:bg-[#D92321] cursor-pointer"
+            className="inline-flex h-10 w-10 sm:h-9 sm:w-9 items-center justify-center rounded-xl bg-white/5 text-white hover:bg-[#D92321] cursor-pointer shrink-0"
             aria-label="إغلاق نافذة الحساب"
           >
             <X className="w-4 h-4" />
@@ -3110,7 +3114,7 @@ export function LoginModal({
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
                   placeholder="مثال: رحال أحمد"
-                  className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
                 />
               </div>
             )}
@@ -3126,7 +3130,7 @@ export function LoginModal({
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 placeholder="admin@rahaltv.com أو admin"
-                className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
+                className="w-full min-h-[44px] rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
               />
             </div>
 
@@ -3140,7 +3144,7 @@ export function LoginModal({
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
-                className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
+                className="w-full min-h-[44px] rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#D92321] focus:outline-none"
               />
             </div>
 
@@ -3153,7 +3157,7 @@ export function LoginModal({
             <button
               type="submit"
               disabled={signingIn}
-              className="w-full inline-flex items-center justify-center gap-2.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] disabled:opacity-60 py-3.5 text-sm font-extrabold text-white shadow-lg transition-colors cursor-pointer"
+              className="w-full min-h-[46px] inline-flex items-center justify-center gap-2.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] disabled:opacity-60 py-3.5 text-sm font-extrabold text-white shadow-lg transition-colors cursor-pointer"
             >
               <ShieldCheck className="w-5 h-5" />
               <span>
@@ -3171,7 +3175,7 @@ export function LoginModal({
                 setAuthError(null);
                 setMode((m) => (m === 'login' ? 'register' : 'login'));
               }}
-              className="w-full text-center text-xs font-bold text-[#b7c9ef] hover:text-white pt-1 cursor-pointer"
+              className="w-full min-h-[40px] text-center text-xs font-bold text-[#b7c9ef] hover:text-white pt-1 cursor-pointer"
             >
               {mode === 'login'
                 ? 'ليس لديك حساب؟ إنشاء حساب عضو جديد'
@@ -3275,20 +3279,20 @@ export function FooterInfoModal({
       aria-modal="true"
       aria-label="معلومات وطلبات RahaL TV"
       data-rtv-focus-trap="true"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4"
     >
       <div className="fixed inset-0 bg-black/75 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-xl rounded-3xl bg-[#0c1821] border border-white/10 shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between bg-[#1a242e] px-6 py-4 border-b border-white/10">
-          <div className="flex items-center gap-2.5">
+      <div className="relative z-10 w-full max-w-xl rounded-2xl sm:rounded-3xl bg-[#0c1821] border border-white/10 shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between gap-3 bg-[#1a242e] px-4 py-3.5 sm:px-6 sm:py-4 border-b border-white/10">
+          <div className="flex items-center gap-2.5 min-w-0">
             {topic === 'requests' ? (
-              <Sparkles className="w-5 h-5 text-[#4CAF50]" />
+              <Sparkles className="w-5 h-5 text-[#4CAF50] shrink-0" />
             ) : topic === 'community' ? (
-              <Users className="w-5 h-5 text-[#D92321]" />
+              <Users className="w-5 h-5 text-[#D92321] shrink-0" />
             ) : (
-              <ShieldCheck className="w-5 h-5 text-[#f9c400]" />
+              <ShieldCheck className="w-5 h-5 text-[#f9c400] shrink-0" />
             )}
-            <h2 className="font-display text-lg font-extrabold text-white">
+            <h2 className="font-display text-base sm:text-lg font-extrabold text-white truncate">
               {topic === 'terms' && 'سياسة الاستخدام'}
               {topic === 'privacy' && 'سياسة الخصوصية'}
               {topic === 'community' && 'مجتمع RahaL TV'}
@@ -3298,14 +3302,14 @@ export function FooterInfoModal({
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 text-white hover:bg-[#D92321] cursor-pointer"
+            className="inline-flex h-10 w-10 sm:h-9 sm:w-9 items-center justify-center rounded-xl bg-white/5 text-white hover:bg-[#D92321] cursor-pointer shrink-0"
             aria-label="إغلاق"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="p-6 max-h-[70vh] overflow-y-auto space-y-4 text-sm leading-relaxed text-[#b7c9ef]">
+        <div className="p-4 sm:p-6 max-h-[75vh] sm:max-h-[70vh] overflow-y-auto space-y-4 text-sm leading-relaxed text-[#b7c9ef]">
           {topic === 'terms' && (
             <>
               <p className="text-white font-bold">مرحبًا بك في منصة RahaL TV الترفيهية.</p>
@@ -3335,7 +3339,7 @@ export function FooterInfoModal({
             <>
               <p className="text-white font-bold">انضم إلى مجتمع عشاق السينما والدراما على RahaL TV.</p>
               <p>
-                يمكنك متابعة أحدث إصدارات رمضان 2026، وتقييمات IMDb المحدثة يوميًا، وترشيح الأعمال
+                يمكنك متابعة أحدث إصدارات رمضان 2026، وتقييمات المشاهدين المباشرة، وترشيح الأعمال
                 المفضلة ليتم إضافتها في قائمة العروض المثبتة.
               </p>
             </>
@@ -3356,7 +3360,7 @@ export function FooterInfoModal({
                       onClose();
                       onOpenLogin();
                     }}
-                    className="inline-flex items-center gap-2 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-5 py-2.5 text-xs font-extrabold text-white cursor-pointer"
+                    className="w-full sm:w-auto min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-5 py-2.5 text-xs font-extrabold text-white cursor-pointer"
                   >
                     <ShieldCheck className="w-4 h-4" />
                     <span>تسجيل الدخول بحساب</span>
@@ -3373,7 +3377,7 @@ export function FooterInfoModal({
                         value={reqTitle}
                         onChange={(e) => setReqTitle(e.target.value)}
                         placeholder="مثال: فيلم Dune Part Three"
-                        className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#4CAF50] focus:outline-none"
+                        className="w-full min-h-[44px] rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#4CAF50] focus:outline-none"
                       />
                     </div>
                     <div>
@@ -3381,7 +3385,7 @@ export function FooterInfoModal({
                       <select
                         value={reqType}
                         onChange={(e) => setReqType(e.target.value as VisitorRequest['type'])}
-                        className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2.5 text-sm text-white focus:border-[#4CAF50] focus:outline-none"
+                        className="w-full min-h-[44px] rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2.5 text-sm text-white focus:border-[#4CAF50] focus:outline-none"
                       >
                         <option value="فيلم">فيلم</option>
                         <option value="مسلسل">مسلسل</option>
@@ -3399,13 +3403,13 @@ export function FooterInfoModal({
                       value={reqNotes}
                       onChange={(e) => setReqNotes(e.target.value)}
                       placeholder="يفضل جودة BluRay 1080p مترجم"
-                      className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#4CAF50] focus:outline-none"
+                      className="w-full min-h-[44px] rounded-xl bg-[#1a242e] border border-white/10 px-3.5 py-2.5 text-sm text-white focus:border-[#4CAF50] focus:outline-none"
                     />
                   </div>
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="inline-flex items-center gap-2 rounded-xl bg-[#4CAF50] hover:bg-[#43a047] px-5 py-2.5 text-xs font-extrabold text-white transition-colors cursor-pointer"
+                    className="w-full sm:w-auto min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#4CAF50] hover:bg-[#43a047] px-5 py-2.5 text-xs font-extrabold text-white transition-colors cursor-pointer"
                   >
                     <Send className="w-4 h-4" />
                     <span>{submitting ? 'جاري الإرسال...' : 'إرسال الطلب لإدارة RahaL TV'}</span>

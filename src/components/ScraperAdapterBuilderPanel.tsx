@@ -1904,7 +1904,7 @@ export function ScraperAdapterBuilderPanel({
                   </h4>
                   <p className="font-latin text-xs text-[#b7c9ef]">
                     {testResult.extractedPreview.englishTitle} · {testResult.extractedPreview.year} ·{' '}
-                    {testResult.extractedPreview.quality} · ★ {testResult.extractedPreview.imdb}
+                    {testResult.extractedPreview.quality}
                   </p>
                   <p className="text-xs text-[#d6e2f8] leading-relaxed line-clamp-3">
                     {testResult.extractedPreview.story}

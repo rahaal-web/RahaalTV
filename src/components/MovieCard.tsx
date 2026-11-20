@@ -30,7 +30,10 @@ export function MovieCard({
   onToggleWatchlist,
   variant = 'clean',
 }: MovieCardProps) {
-  const safeImdb = Number(item.imdb || 7.5).toFixed(1);
+  const viewerAvg =
+    item.communityRating && item.communityRating.count > 0
+      ? item.communityRating.average.toFixed(1)
+      : null;
   const primaryCat =
     item.categories?.[1] ||
     item.categories?.[0] ||
@@ -67,21 +70,17 @@ export function MovieCard({
             </span>
           </div>
 
-          <div className="absolute top-3 right-3 z-10 flex flex-col items-end gap-1">
-            <div className="flex items-center gap-1 rounded-md bg-black/75 px-2 py-1 text-xs font-bold backdrop-blur-sm border border-white/10">
-              <Star className="w-3.5 h-3.5 text-[#f9c400] fill-[#f9c400]" />
-              <span className="font-latin text-white">{safeImdb}</span>
-            </div>
-            {item.communityRating && item.communityRating.count > 0 && (
+          {viewerAvg && (
+            <div className="absolute top-3 right-3 z-10 flex flex-col items-end gap-1">
               <div className="flex items-center gap-1 rounded-md bg-[#4CAF50]/85 px-2 py-0.5 text-[10px] font-extrabold text-white backdrop-blur-sm border border-white/15">
                 <Star className="w-3 h-3 text-[#f9c400] fill-[#f9c400]" />
-                <span className="font-latin">{item.communityRating.average.toFixed(1)}/5</span>
+                <span dir="ltr" className="font-latin tabular-nums">{viewerAvg}/5</span>
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
-          <div className="absolute inset-x-0 bottom-0 p-3.5 text-right">
-            <p className="text-[11px] font-semibold text-[#a3a3a3] truncate mb-0.5">
+          <div className="absolute inset-x-0 bottom-0 p-2.5 sm:p-3.5 text-right">
+            <p className="text-[10.5px] sm:text-[11px] font-semibold text-[#a3a3a3] truncate mb-0.5">
               {primaryCat}
             </p>
             <h3
@@ -99,7 +98,7 @@ export function MovieCard({
             <div className="flex items-center justify-between gap-2 mb-1.5">
               <span className="font-latin text-xs font-bold text-[#f9c400] flex items-center gap-1">
                 <Star className="w-3.5 h-3.5 fill-[#f9c400]" />
-                {safeImdb}
+                {viewerAvg ? <span dir="ltr">{viewerAvg}/5</span> : <span className="font-sans text-[11px] text-[#b7c9ef]">بدون تقييم</span>}
               </span>
               <button
                 type="button"
@@ -216,21 +215,15 @@ export function MovieCard({
         {/* Measured Contrast Scrim */}
         <div className="absolute inset-0 bg-gradient-to-t from-[#181818] via-transparent to-black/45 opacity-90" />
 
-        {/* Subtle Top-Right IMDb & Community Rating */}
-        <div className="absolute top-2.5 right-2.5 z-10 flex flex-col items-end gap-1">
-          <div className="inline-flex items-center gap-1 rounded-lg bg-black/70 backdrop-blur-md px-2 py-0.5 text-[11px] font-bold text-white border border-white/10">
-            <Star className="w-3 h-3 text-[#f9c400] fill-[#f9c400]" />
-            <span className="font-latin tabular-nums">{safeImdb}</span>
-          </div>
-          {item.communityRating && item.communityRating.count > 0 && (
+        {/* Subtle Top-Right Viewer Rating */}
+        {viewerAvg && (
+          <div className="absolute top-2 right-2 sm:top-2.5 sm:right-2.5 z-10 flex flex-col items-end gap-1">
             <div className="inline-flex items-center gap-1 rounded-lg bg-[#0c1821]/85 backdrop-blur-md px-2 py-0.5 text-[10px] font-extrabold text-[#4CAF50] border border-[#4CAF50]/40">
               <Star className="w-2.5 h-2.5 text-[#f9c400] fill-[#f9c400]" />
-              <span className="font-latin tabular-nums">
-                {item.communityRating.average.toFixed(1)}/5
-              </span>
+              <span dir="ltr" className="font-latin tabular-nums">{viewerAvg}/5</span>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Top-Left Watchlist Quick Action */}
         <button
@@ -240,13 +233,13 @@ export function MovieCard({
             onToggleWatchlist(item);
           }}
           aria-label={isInWatchlist ? 'إزالة من قائمتي' : 'إضافة إلى قائمتي'}
-          className={`absolute top-2.5 left-2.5 z-10 inline-flex h-8 w-8 items-center justify-center rounded-lg backdrop-blur-md border transition-all cursor-pointer ${
+          className={`absolute top-2 left-2 sm:top-2.5 sm:left-2.5 z-10 inline-flex h-10 w-10 sm:h-8 sm:w-8 items-center justify-center rounded-xl sm:rounded-lg backdrop-blur-md border transition-all cursor-pointer ${
             isInWatchlist
               ? 'bg-[#E50914] border-[#E50914] text-white opacity-100'
-              : 'bg-black/65 border-white/15 text-white/80 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-[#E50914] hover:border-[#E50914] hover:text-white'
+              : 'bg-black/65 border-white/15 text-white/85 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-[#E50914] hover:border-[#E50914] hover:text-white'
           }`}
         >
-          {isInWatchlist ? <Check className="w-3.5 h-3.5" /> : <Bookmark className="w-3.5 h-3.5" />}
+          {isInWatchlist ? <Check className="w-4 h-4 sm:w-3.5 sm:h-3.5" /> : <Bookmark className="w-4 h-4 sm:w-3.5 sm:h-3.5" />}
         </button>
 
         {/* Center Hover Play Button */}
@@ -260,7 +253,7 @@ export function MovieCard({
       {/* Clean Card Footer (Unboxed Metadata) */}
       <div
         onClick={() => onSelect(item)}
-        className="flex flex-1 flex-col justify-between p-3 text-right cursor-pointer"
+        className="flex flex-1 flex-col justify-between p-2.5 sm:p-3 text-right cursor-pointer"
       >
         <h3
           style={{ fontSize: 'var(--rtv-card-title-size, 13px)' }}
@@ -268,7 +261,7 @@ export function MovieCard({
         >
           {item.title}
         </h3>
-        <div className="mt-1.5 flex items-center gap-1.5 text-[11px] font-medium text-[#a3a3a3] truncate tabular-nums">
+        <div className="mt-1 sm:mt-1.5 flex items-center gap-1.5 text-[10.5px] sm:text-[11px] font-medium text-[#a3a3a3] truncate tabular-nums">
           <span>{item.year || '2026'}</span>
           <span aria-hidden="true">·</span>
           <span className="truncate">{primaryCat}</span>

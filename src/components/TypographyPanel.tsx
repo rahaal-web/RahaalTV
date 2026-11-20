@@ -577,7 +577,7 @@ export function TypographyPanel({
             </p>
             <p className="text-xs text-[#a3a3a3]">
               جودة <span className="font-latin text-white">4K UHD</span> ·{' '}
-              <span className="font-latin text-[#f9c400]">IMDb 8.7</span>
+              <span dir="ltr" className="font-latin text-[#f9c400]">★ 4.8/5</span>
             </p>
           </div>
 

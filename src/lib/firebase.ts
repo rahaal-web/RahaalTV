@@ -614,7 +614,7 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
   }
 
   const parsedImdb = Number(item.imdb);
-  const safeImdb = Number.isFinite(parsedImdb) ? Math.min(10, Math.max(0, parsedImdb || 7.5)) : 7.5;
+  const safeImdb = Number.isFinite(parsedImdb) ? Math.min(10, Math.max(0, parsedImdb)) : 0;
 
   const base: Record<string, unknown> = {
     id: cleanId,
@@ -630,7 +630,7 @@ function sanitizeMediaPayload(item: MediaItem, uid: string, isCreate: boolean) {
     quality: String(item.quality || 'WEB-DL').trim().slice(0, 40) || 'WEB-DL',
     duration: String(item.duration || '120 دقيقة').trim().slice(0, 40) || '120 دقيقة',
     imdb: safeImdb,
-    votes: String(item.votes || '1,000').trim().slice(0, 40) || '1,000',
+    votes: String(item.votes || '0').trim().slice(0, 40) || '0',
     views: Math.max(0, Math.round(Number(item.views) || 0)),
     likes: Math.max(0, Math.round(Number(item.likes) || 0)),
     pinned: Boolean(item.pinned),

@@ -317,7 +317,7 @@ export function SingleDetailView({
         <div className="absolute inset-0 bg-gradient-to-t from-[#06131c] via-[#06131c]/30 to-black/15" />
         <div className="absolute inset-0 bg-gradient-to-l from-[#06131c]/70 via-[#06131c]/20 to-transparent" />
 
-        <div className="relative z-10 mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 pt-20 pb-5 md:pt-24 md:pb-7">
+        <div className="relative z-10 mx-auto max-w-[1440px] px-3.5 sm:px-6 lg:px-8 pt-20 pb-5 md:pt-24 md:pb-7">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
             {/* Breadcrumb & Page Title */}
             <div className="min-w-0 flex-1 drop-shadow-[0_2px_10px_rgba(0,0,0,0.9)]">
@@ -370,8 +370,8 @@ export function SingleDetailView({
               )}
             </div>
 
-            {/* IMDb + Live Community Rating Badges */}
-            <div className="flex flex-wrap items-center gap-3 self-start md:self-center shrink-0">
+            {/* Live Site Viewer Rating Badge */}
+            <div className="w-full md:w-auto flex items-center md:self-center shrink-0">
               <button
                 type="button"
                 onClick={() =>
@@ -379,54 +379,43 @@ export function SingleDetailView({
                     .getElementById('member-star-rating-card')
                     ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
                 }
-                className="inline-flex items-center gap-3 rounded-2xl bg-[#1a242e]/95 border border-[#4CAF50]/35 hover:border-[#f9c400]/60 px-4 py-3 shadow-xl backdrop-blur-md transition-colors text-right cursor-pointer"
+                className="flex w-full md:w-auto items-center justify-between md:justify-start gap-3 rounded-2xl bg-[#1a242e]/95 border border-[#4CAF50]/35 hover:border-[#f9c400]/60 px-3.5 py-2.5 md:px-4 md:py-3 shadow-xl backdrop-blur-md transition-colors text-right cursor-pointer"
               >
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#4CAF50]/20 border border-[#4CAF50]/40 text-[#f9c400]">
-                  <Star className="w-6 h-6 fill-current" />
-                </div>
-                <div>
-                  <div className="flex items-baseline gap-1">
-                    <span className="font-latin text-2xl font-black text-white">
-                      {ratingCount > 0 ? averageStars.toFixed(1) : '—'}
-                    </span>
-                    <span className="font-latin text-xs font-bold text-[#b7c9ef]">/ 5</span>
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex h-10 w-10 md:h-11 md:w-11 shrink-0 items-center justify-center rounded-xl bg-[#4CAF50]/20 border border-[#4CAF50]/40 text-[#f9c400]">
+                    <Star className="w-5 h-5 md:w-6 md:h-6 fill-current" />
                   </div>
-                  <p className="text-[11px] font-bold text-[#b7c9ef]">
-                    {ratingCount > 0
-                      ? `${ratingCount} ${ratingCount === 1 ? 'تقييم الأعضاء' : 'تقييمات الأعضاء'}`
-                      : 'تقييم المشاهدين'}
-                  </p>
+                  <div className="min-w-0">
+                    <div dir="ltr" className="inline-flex items-baseline gap-1">
+                      <span className="font-latin text-xl md:text-2xl font-black text-white tabular-nums">
+                        {ratingCount > 0 ? averageStars.toFixed(1) : '—'}
+                      </span>
+                      <span className="font-latin text-xs font-bold text-[#b7c9ef]">/ 5</span>
+                    </div>
+                    <p className="text-[11px] font-bold text-[#b7c9ef] truncate">
+                      {ratingCount > 0
+                        ? `${ratingCount} ${ratingCount === 1 ? 'تقييم المشاهدين' : 'تقييمات المشاهدين'}`
+                        : 'تقييم المشاهدين'}
+                    </p>
+                  </div>
                 </div>
+                <span className="md:hidden inline-flex items-center gap-1 rounded-xl bg-[#4CAF50]/15 border border-[#4CAF50]/35 px-2.5 py-1.5 text-[11px] font-extrabold text-[#4CAF50] shrink-0">
+                  <Star className="w-3.5 h-3.5 fill-current text-[#f9c400]" />
+                  <span>{userStars > 0 ? 'تقييمك ✓' : 'قيّم الآن'}</span>
+                </span>
               </button>
-
-              <div className="inline-flex items-center gap-3.5 rounded-2xl bg-[#1a242e]/95 border border-[#f9c400]/35 px-4 py-3 shadow-xl backdrop-blur-md">
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#f9c400] text-[#06131c]">
-                  <Star className="w-6 h-6 fill-current" />
-                </div>
-                <div>
-                  <div className="flex items-baseline gap-1">
-                    <span className="font-latin text-2xl font-black text-white">
-                      {Number(item.imdb || 7.5).toFixed(1)}
-                    </span>
-                    <span className="font-latin text-xs font-bold text-[#b7c9ef]">/ 10</span>
-                  </div>
-                  <p className="font-latin text-[11px] font-bold text-[#b7c9ef]">
-                    {item.votes} صوت — IMDb
-                  </p>
-                </div>
-              </div>
             </div>
           </div>
         </div>
       </section>
 
       {/* 2. Balanced Equal-Height 3-Column Layout (RTL: Right Poster | Center Story & Details | Left Watch, Download & Rating) */}
-      <section className="relative z-20 mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 mt-6">
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-5 lg:gap-6 items-stretch">
+      <section className="relative z-20 mx-auto max-w-[1440px] px-3.5 sm:px-6 lg:px-8 mt-5 sm:mt-6">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 sm:gap-5 lg:gap-6 items-stretch">
           {/* Right Column: Poster Rectangle + Watchlist inside a full-height matching frame */}
           <div className="md:col-span-4 lg:col-span-3 order-1 flex flex-col">
-            <div className="flex flex-1 flex-col justify-between gap-3.5 rounded-3xl bg-[#0c1821] border border-white/[0.08] p-3.5 shadow-xl">
-              <div className="relative aspect-[2/3] w-full max-w-[270px] mx-auto md:max-w-none overflow-hidden rounded-2xl border border-white/15 bg-[#08121a] shadow-[0_18px_40px_rgba(0,0,0,0.6)]">
+            <div className="flex flex-1 flex-col justify-between gap-3.5 rounded-2xl sm:rounded-3xl bg-[#0c1821] border border-white/[0.08] p-3.5 shadow-xl">
+              <div className="relative aspect-[2/3] w-full max-w-[240px] sm:max-w-[270px] mx-auto md:max-w-none overflow-hidden rounded-2xl border border-white/15 bg-[#08121a] shadow-[0_18px_40px_rgba(0,0,0,0.6)]">
                 {/* Diagonal Quality Ribbon */}
                 <div className="moov-ribbon bg-[#D92321] py-1 text-[11px] font-black tracking-wider text-white font-latin uppercase">
                   {item.quality}
@@ -456,7 +445,7 @@ export function SingleDetailView({
                 <button
                   type="button"
                   onClick={() => onOpenTrailer(item)}
-                  className="absolute bottom-3 left-1/2 -translate-x-1/2 inline-flex items-center gap-1.5 rounded-full bg-black/75 backdrop-blur-md border border-white/15 px-3.5 py-1.5 text-xs font-bold text-white/95 hover:bg-[#D92321] hover:border-[#D92321] transition-colors whitespace-nowrap cursor-pointer"
+                  className="absolute bottom-3 left-1/2 -translate-x-1/2 inline-flex min-h-[36px] items-center gap-1.5 rounded-full bg-black/75 backdrop-blur-md border border-white/15 px-3.5 py-1.5 text-xs font-bold text-white/95 hover:bg-[#D92321] hover:border-[#D92321] transition-colors whitespace-nowrap cursor-pointer"
                 >
                   <Play className="w-3 h-3 fill-current" />
                   <span>تشغيل الإعلان</span>
@@ -467,7 +456,7 @@ export function SingleDetailView({
               <button
                 type="button"
                 onClick={() => onToggleWatchlist(item)}
-                className={`w-full max-w-[270px] mx-auto md:max-w-none flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-extrabold border transition-all cursor-pointer ${
+                className={`w-full max-w-[240px] sm:max-w-[270px] min-h-[46px] mx-auto md:max-w-none flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-extrabold border transition-all cursor-pointer ${
                   isInWatchlist
                     ? 'bg-[#4CAF50]/20 border-[#4CAF50] text-[#4CAF50] shadow-[0_8px_20px_rgba(76,175,80,0.18)]'
                     : 'bg-[#15222d] border-white/10 text-white hover:border-[#4CAF50] hover:text-[#4CAF50] hover:bg-[#1a2a36]'
@@ -627,7 +616,7 @@ export function SingleDetailView({
                     </span>
                     <span className="font-bold text-xs sm:text-sm text-[#f9c400]">
                       {ratingCount > 0 ? (
-                        <span className="font-latin">
+                        <span dir="ltr" className="font-latin inline-block">
                           {averageStars.toFixed(1)} / 5 ({ratingCount})
                         </span>
                       ) : (
@@ -822,10 +811,12 @@ export function SingleDetailView({
                 </h2>
                 <div className="inline-flex items-center gap-1 rounded-lg bg-[#15222d] border border-[#f9c400]/25 px-2.5 py-1">
                   <Star className="w-3.5 h-3.5 text-[#f9c400] fill-[#f9c400]" />
-                  <span className="font-latin text-xs font-black text-white">
-                    {ratingCount > 0 ? averageStars.toFixed(1) : '—'}
+                  <span dir="ltr" className="inline-flex items-baseline gap-1">
+                    <span className="font-latin text-xs font-black text-white">
+                      {ratingCount > 0 ? averageStars.toFixed(1) : '—'}
+                    </span>
+                    <span className="font-latin text-[10px] font-bold text-[#b7c9ef]">/ 5</span>
                   </span>
-                  <span className="font-latin text-[10px] font-bold text-[#b7c9ef]">/ 5</span>
                 </div>
               </div>
 
@@ -846,7 +837,7 @@ export function SingleDetailView({
                         onMouseEnter={() => setHoverStar(starValue)}
                         onClick={() => void handleRateStars(starValue)}
                         aria-label={`تقييم ${starValue} من 5 نجوم`}
-                        className={`flex h-9 w-9 items-center justify-center rounded-xl border transition-all cursor-pointer disabled:opacity-60 ${
+                        className={`flex h-11 w-11 sm:h-9 sm:w-9 items-center justify-center rounded-xl border transition-all cursor-pointer disabled:opacity-60 ${
                           isActive
                             ? 'bg-[#f9c400]/15 border-[#f9c400]/50 scale-105 shadow-[0_0_14px_rgba(249,196,0,0.22)]'
                             : 'bg-[#15222d] border-white/[0.08] hover:border-[#f9c400]/40'
@@ -940,14 +931,14 @@ export function SingleDetailView({
       </section>
 
       {/* 3. Interactive Single Tabs (.single-tab) */}
-      <section id="watch-download-tabs" className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 mt-8">
-        <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] overflow-hidden">
+      <section id="watch-download-tabs" className="mx-auto max-w-[1440px] px-3.5 sm:px-6 lg:px-8 mt-6 sm:mt-8">
+        <div className="rounded-2xl sm:rounded-3xl bg-[#0c1821] border border-white/[0.08] overflow-hidden">
           {/* Tab Switcher */}
           <div className="flex flex-nowrap overflow-x-auto no-scrollbar md:flex-wrap border-b border-white/[0.08] bg-[#1a242e]">
             <button
               type="button"
               onClick={() => setActiveTab('watch')}
-              className={`inline-flex items-center gap-1.5 md:gap-2 px-3.5 py-3 md:px-6 md:py-4 text-xs md:text-sm font-extrabold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+              className={`inline-flex min-h-[46px] items-center gap-1.5 md:gap-2 px-4 py-3 md:px-6 md:py-4 text-xs md:text-sm font-extrabold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 activeTab === 'watch'
                   ? 'bg-[#D92321] text-white'
                   : 'text-[#b7c9ef] hover:text-white hover:bg-white/5'
@@ -961,7 +952,7 @@ export function SingleDetailView({
               <button
                 type="button"
                 onClick={() => setActiveTab('seasons')}
-                className={`inline-flex items-center gap-1.5 md:gap-2 px-3.5 py-3 md:px-6 md:py-4 text-xs md:text-sm font-extrabold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                className={`inline-flex min-h-[46px] items-center gap-1.5 md:gap-2 px-4 py-3 md:px-6 md:py-4 text-xs md:text-sm font-extrabold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                   activeTab === 'seasons'
                     ? 'bg-[#D92321] text-white'
                     : 'text-[#b7c9ef] hover:text-white hover:bg-white/5'
@@ -976,7 +967,7 @@ export function SingleDetailView({
               <button
                 type="button"
                 onClick={() => setActiveTab('franchise')}
-                className={`inline-flex items-center gap-1.5 md:gap-2 px-3.5 py-3 md:px-6 md:py-4 text-xs md:text-sm font-extrabold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                className={`inline-flex min-h-[46px] items-center gap-1.5 md:gap-2 px-4 py-3 md:px-6 md:py-4 text-xs md:text-sm font-extrabold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                   activeTab === 'franchise'
                     ? 'bg-[#D92321] text-white'
                     : 'text-[#b7c9ef] hover:text-white hover:bg-white/5'
@@ -990,7 +981,7 @@ export function SingleDetailView({
             <button
               type="button"
               onClick={() => setActiveTab('cast')}
-              className={`inline-flex items-center gap-1.5 md:gap-2 px-3.5 py-3 md:px-6 md:py-4 text-xs md:text-sm font-extrabold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+              className={`inline-flex min-h-[46px] items-center gap-1.5 md:gap-2 px-4 py-3 md:px-6 md:py-4 text-xs md:text-sm font-extrabold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 activeTab === 'cast'
                   ? 'bg-[#D92321] text-white'
                   : 'text-[#b7c9ef] hover:text-white hover:bg-white/5'
@@ -1162,12 +1153,12 @@ export function SingleDetailView({
                 )}
 
                 {/* Short URL & Social Share Row */}
-                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 rounded-2xl bg-[#1a242e]/60 border border-white/[0.08] p-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-1 min-w-0">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 rounded-2xl bg-[#1a242e]/60 border border-white/[0.08] p-3.5 sm:p-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 sm:gap-3 flex-1 min-w-0">
                     <span className="text-xs font-extrabold text-[#b7c9ef] whitespace-nowrap">
                       الرابط المختصر:
                     </span>
-                    <div className="flex flex-1 min-w-0 items-center gap-2 rounded-xl bg-[#06131c] border border-white/10 px-3 py-2">
+                    <div className="flex flex-1 min-w-0 items-center gap-2 rounded-xl bg-[#06131c] border border-white/10 px-3 py-1.5 sm:py-2">
                       <input
                         type="text"
                         readOnly
@@ -1179,7 +1170,7 @@ export function SingleDetailView({
                       <button
                         type="button"
                         onClick={handleCopyShortUrl}
-                        className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors shrink-0 cursor-pointer ${
+                        className={`inline-flex min-h-[38px] sm:min-h-0 items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors shrink-0 cursor-pointer ${
                           copiedUrl
                             ? 'bg-[#4CAF50] text-white'
                             : 'bg-[#D92321] hover:bg-[#dc0e30] text-white'
@@ -1191,21 +1182,23 @@ export function SingleDetailView({
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="inline-flex items-center gap-1 text-xs font-bold text-[#b7c9ef] ml-1">
+                  <div className="space-y-2 sm:space-y-0 sm:flex sm:flex-wrap sm:items-center sm:gap-2">
+                    <span className="inline-flex items-center gap-1 text-xs font-bold text-[#b7c9ef] sm:ml-1">
                       <Share2 className="w-3.5 h-3.5" />
                       مشاركة:
                     </span>
-                    {['فيسبوك', 'إكس', 'تيليجرام', 'واتساب'].map((platform) => (
-                      <button
-                        key={platform}
-                        type="button"
-                        onClick={() => handleSocialShare(platform)}
-                        className="rounded-xl bg-[#0c1821] border border-white/10 px-3 py-1.5 text-xs font-bold text-[#b7c9ef] hover:border-[#D92321] hover:text-white transition-colors cursor-pointer"
-                      >
-                        {platform}
-                      </button>
-                    ))}
+                    <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2">
+                      {['فيسبوك', 'إكس', 'تيليجرام', 'واتساب'].map((platform) => (
+                        <button
+                          key={platform}
+                          type="button"
+                          onClick={() => handleSocialShare(platform)}
+                          className="min-h-[40px] sm:min-h-0 rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 sm:py-1.5 text-xs font-bold text-[#b7c9ef] hover:border-[#D92321] hover:text-white transition-colors cursor-pointer"
+                        >
+                          {platform}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1263,7 +1256,7 @@ export function SingleDetailView({
             )}
 
             {activeTab === 'franchise' && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
                 {franchiseItems.map((rel) => (
                   <MovieCard
                     key={rel.id}
@@ -1277,17 +1270,17 @@ export function SingleDetailView({
             )}
 
             {activeTab === 'cast' && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
                 {item.cast.map((actor) => (
                   <div
                     key={actor.name}
-                    className="flex flex-col items-center rounded-2xl bg-[#1a242e]/70 border border-white/[0.07] p-4 text-center"
+                    className="flex flex-col items-center rounded-2xl bg-[#1a242e]/70 border border-white/[0.07] p-3.5 sm:p-4 text-center"
                   >
-                    <div className="mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-[#D92321] to-[#1a242e] border-2 border-white/20 text-lg font-black text-white shadow-lg">
+                    <div className="mb-3 flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full bg-gradient-to-br from-[#D92321] to-[#1a242e] border-2 border-white/20 text-base sm:text-lg font-black text-white shadow-lg">
                       {actor.initials}
                     </div>
-                    <p className="text-sm font-extrabold text-white leading-snug">{actor.name}</p>
-                    <p className="text-xs text-[#b7c9ef] mt-1">{actor.role}</p>
+                    <p className="text-xs sm:text-sm font-extrabold text-white leading-snug">{actor.name}</p>
+                    <p className="text-[11px] sm:text-xs text-[#b7c9ef] mt-1">{actor.role}</p>
                   </div>
                 ))}
               </div>
@@ -1297,13 +1290,13 @@ export function SingleDetailView({
       </section>
 
       {/* 4. Related Shows Grid (عروض ذات صلة) */}
-      <section className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 mt-12">
-        <div className="mb-5">
-          <h2 className="font-display text-xl sm:text-2xl font-extrabold text-white">عروض ذات صلة</h2>
+      <section className="mx-auto max-w-[1440px] px-3.5 sm:px-6 lg:px-8 mt-10 sm:mt-12">
+        <div className="mb-4 sm:mb-5">
+          <h2 className="font-display text-lg sm:text-2xl font-extrabold text-white">عروض ذات صلة</h2>
           <p className="text-xs text-[#b7c9ef] mt-1">أعمال مشابهة قد تنال إعجابك</p>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
           {relatedItems.map((rel) => (
             <MovieCard
               key={rel.id}

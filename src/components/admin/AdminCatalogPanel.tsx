@@ -11,7 +11,6 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Star,
   Trash2,
 } from 'lucide-react';
 import {
@@ -72,10 +71,6 @@ interface AdminCatalogPanelProps {
   onNavigateTab: (tab: AdminTab) => void;
   onNotify: (msg: string) => void;
   onDeleteDuplicateIds?: (ids: string[]) => Promise<void> | void;
-  refreshingRatings?: boolean;
-  ratingsProgress?: { done: number; total: number } | null;
-  default78Count?: number;
-  onRefreshRatings?: (mode: '7.8' | 'all' | 'selected') => void;
 }
 
 const KIND_LABELS: Record<MediaKind, string> = {
@@ -91,7 +86,7 @@ const COLUMN_LABELS: Record<CatalogColumnKey, string> = {
   type: 'النوع',
   category: 'القسم',
   year: 'السنة',
-  rating: 'IMDb',
+  rating: 'تقييم المشاهدين',
   views: 'المشاهدات',
   servers: 'السيرفرات / التحميل',
   flags: 'الحالة / التثبيت',
@@ -132,10 +127,6 @@ export function AdminCatalogPanel({
   onNavigateTab,
   onNotify,
   onDeleteDuplicateIds,
-  refreshingRatings = false,
-  ratingsProgress = null,
-  default78Count = 0,
-  onRefreshRatings,
 }: AdminCatalogPanelProps) {
   const [page, setPage] = useState(1);
   const [showColumnMenu, setShowColumnMenu] = useState(false);
@@ -169,7 +160,7 @@ export function AdminCatalogPanel({
         case 'title':
           return a.title.localeCompare(b.title, 'ar') * dir;
         case 'rating':
-          return ((a.imdb || 0) - (b.imdb || 0)) * dir;
+          return ((a.communityRating?.average || 0) - (b.communityRating?.average || 0)) * dir;
         case 'views':
           return ((a.views || 0) - (b.views || 0)) * dir;
         case 'year':
@@ -307,45 +298,6 @@ export function AdminCatalogPanel({
             )}
             <span>فحص السيرفرات</span>
           </button>
-
-          {onRefreshRatings && (
-            <button
-              type="button"
-              disabled={refreshingRatings || catalog.length === 0}
-              onClick={() =>
-                onRefreshRatings(
-                  selectedMediaIds.length > 0
-                    ? 'selected'
-                    : default78Count > 0
-                      ? '7.8'
-                      : 'all'
-                )
-              }
-              title={
-                selectedMediaIds.length > 0
-                  ? 'جلب التقييم الحقيقي من IMDb/TMDb للأعمال المحددة'
-                  : default78Count > 0
-                    ? `جلب التقييم الحقيقي للأعمال ذات التقييم الافتراضي 7.8 (${default78Count})`
-                    : 'تحديث جميع التقييمات من IMDb/TMDb'
-              }
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-[#f9c400]/20 border border-[#f9c400]/35 disabled:opacity-40 px-3.5 py-2.5 text-xs font-extrabold text-[#f9c400] cursor-pointer whitespace-nowrap shrink-0"
-            >
-              {refreshingRatings ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Star className="w-3.5 h-3.5" />
-              )}
-              <span>
-                {refreshingRatings && ratingsProgress
-                  ? `جلب التقييمات (${ratingsProgress.done}/${ratingsProgress.total})`
-                  : selectedMediaIds.length > 0
-                    ? `تقييم المحدد (${selectedMediaIds.length})`
-                    : default78Count > 0
-                      ? `تحديث التقييمات (IMDb/TMDb • ${default78Count})`
-                      : 'تحديث التقييمات (IMDb/TMDb)'}
-              </span>
-            </button>
-          )}
 
           <button
             type="button"
@@ -554,7 +506,7 @@ export function AdminCatalogPanel({
                   {cols.category && <th className="py-3 px-2">القسم</th>}
                   {cols.year && <th className="py-3 px-2">السنة</th>}
                   {cols.servers && <th className="py-3 px-2">السيرفرات / التحميل</th>}
-                  {cols.rating && <th className="py-3 px-2">IMDb</th>}
+                  {cols.rating && <th className="py-3 px-2">التقييم</th>}
                   {cols.views && <th className="py-3 px-2">المشاهدات</th>}
                   {cols.flags && <th className="py-3 px-2">مثبت</th>}
                   <th className="py-3 px-2 text-left">إجراءات</th>
@@ -691,7 +643,11 @@ export function AdminCatalogPanel({
                       )}
                       {cols.rating && (
                         <td className="py-3 px-2 font-black text-[#f9c400] tabular-nums whitespace-nowrap">
-                          ★ {Number(item.imdb || 0).toFixed(1)}
+                          {item.communityRating && item.communityRating.count > 0 ? (
+                            <span dir="ltr">★ {item.communityRating.average.toFixed(1)}/5</span>
+                          ) : (
+                            <span className="text-[#b7c9ef]/50">—</span>
+                          )}
                         </td>
                       )}
                       {cols.views && (

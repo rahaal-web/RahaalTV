@@ -28,7 +28,6 @@ export const ADMIN_SECTION_SUB_OPTIONS: Partial<Record<AdminTab, AdminSubOptionD
   ],
   catalog: [
     { id: 'search_filters', label: 'البحث والفلترة حسب النوع' },
-    { id: 'ratings_sync', label: 'جلب التقييمات الحقيقية IMDb/TMDb' },
     { id: 'bulk_toolbar', label: 'شريط التحديد والحذف الجماعي' },
     { id: 'catalog_table', label: 'جدول الأعمال الرئيسي' },
   ],

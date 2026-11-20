@@ -91,7 +91,7 @@ export function filterAndSortCatalog(
       }
     }
 
-    if (filters.minImdb > 0 && Number(item.imdb || 0) < filters.minImdb) return false;
+    if (filters.minImdb > 0 && Number(item.communityRating?.average || 0) < filters.minImdb) return false;
     if (filters.preset === 'pinned' && !item.pinned) return false;
     return true;
   });
@@ -107,7 +107,11 @@ export function filterAndSortCatalog(
 
   return [...filtered].sort((a, b) => {
     if (effectiveSort === 'views') return (b.views || 0) - (a.views || 0);
-    if (effectiveSort === 'rating') return (b.imdb || 0) - (a.imdb || 0);
+    if (effectiveSort === 'rating') {
+      const avgDiff = (b.communityRating?.average || 0) - (a.communityRating?.average || 0);
+      if (avgDiff !== 0) return avgDiff;
+      return (b.communityRating?.count || 0) - (a.communityRating?.count || 0);
+    }
     if (effectiveSort === 'likes') return (b.likes || 0) - (a.likes || 0);
     if (effectiveSort === 'year') {
       const yDiff = (parseInt(b.year, 10) || 0) - (parseInt(a.year, 10) || 0);

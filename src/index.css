@@ -225,6 +225,14 @@
   padding: var(--rtv-admin-card-padding, 24px);
 }
 
+@media (max-width: 639px) {
+  .rtv-admin-root main > div > .rounded-3xl,
+  .rtv-admin-root main > form > .rounded-3xl,
+  .rtv-admin-root .rtv-admin-card {
+    padding: min(var(--rtv-admin-card-padding, 24px), 16px);
+  }
+}
+
 .rtv-admin-root .rtv-admin-stack {
   display: flex;
   flex-direction: column;
@@ -701,6 +709,7 @@
   .rtv-mobile-watch-scroll {
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
+    padding-bottom: max(1rem, env(safe-area-inset-bottom, 0px));
   }
 
   .rtv-mobile-player-box {

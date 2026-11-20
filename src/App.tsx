@@ -449,7 +449,7 @@ export default function App() {
             language: raw.language || 'مترجم للعربية',
             quality: raw.quality || 'HD',
             duration: raw.duration || '',
-            imdb: Number.isFinite(parsedImdb) ? parsedImdb : 7.5,
+            imdb: Number.isFinite(parsedImdb) ? parsedImdb : 0,
             votes: raw.votes || '0',
             story: raw.story || '',
             cast: Array.isArray(raw.cast) ? raw.cast : [],
@@ -1153,10 +1153,10 @@ export default function App() {
         {toastMessage && (
           <div
             role="status"
-            className="fixed bottom-6 right-6 z-[60] inline-flex items-center gap-2.5 rounded-2xl bg-[#4CAF50] px-4 py-3 text-xs sm:text-sm font-extrabold text-white shadow-2xl border border-white/20"
+            className="fixed bottom-4 inset-x-4 sm:inset-x-auto sm:bottom-6 sm:right-6 sm:max-w-md z-[60] inline-flex items-center gap-2.5 rounded-2xl bg-[#4CAF50] px-4 py-3 text-xs sm:text-sm font-extrabold text-white shadow-2xl border border-white/20"
           >
             <CheckCircle2 className="w-4 h-4 shrink-0" />
-            <span>{toastMessage}</span>
+            <span className="leading-snug">{toastMessage}</span>
           </div>
         )}
       </>
@@ -1401,10 +1401,10 @@ export default function App() {
       {toastMessage && (
         <div
           role="status"
-          className="fixed bottom-20 sm:bottom-6 right-4 sm:right-6 z-50 inline-flex items-center gap-2.5 rounded-2xl bg-[#4CAF50] px-4 py-3 text-xs sm:text-sm font-extrabold text-white shadow-2xl border border-white/20"
+          className="fixed bottom-20 inset-x-4 sm:inset-x-auto sm:bottom-6 sm:right-6 sm:max-w-md z-50 inline-flex items-center gap-2.5 rounded-2xl bg-[#4CAF50] px-4 py-3 text-xs sm:text-sm font-extrabold text-white shadow-2xl border border-white/20"
         >
           <CheckCircle2 className="w-4 h-4 shrink-0" />
-          <span>{toastMessage}</span>
+          <span className="leading-snug">{toastMessage}</span>
         </div>
       )}
       {/* Offline Connectivity Indicator */}

@@ -54,7 +54,7 @@ export function Logo({
 
   return (
     <div
-      className={`inline-flex ${layoutClass} select-none whitespace-nowrap shrink-0`}
+      className={`inline-flex ${layoutClass} max-w-full min-w-0 select-none whitespace-nowrap shrink-0`}
       style={{ gap: `${Math.round(cfg.logoTextGapPx)}px` }}
     >
       {showImage && (
@@ -79,12 +79,12 @@ export function Logo({
 
       {showText && (
         <div
-          className={`flex flex-col leading-none justify-center ${
+          className={`flex flex-col leading-none justify-center min-w-0 max-w-full ${
             cfg.logoPlacement === 'above_text' ? 'items-center' : ''
           }`}
           dir="auto"
         >
-          <span style={textStyle}>
+          <span style={textStyle} className="truncate">
             {isDefaultBrandSplit ? (
               <>
                 RahaL <span className="text-[#E50914]">TV</span>

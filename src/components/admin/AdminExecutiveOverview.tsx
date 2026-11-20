@@ -101,9 +101,13 @@ export function AdminExecutiveOverview({
     const totalLikes = catalog.reduce((sum, item) => sum + (item.likes || 0), 0);
     const pendingRequests = requests.filter((r) => r.status === 'pending').length;
     const pinnedCount = catalog.filter((c) => c.pinned).length;
+    const ratedItems = catalog.filter((c) => (c.communityRating?.count || 0) > 0);
     const avgImdb =
-      catalog.length > 0
-        ? (catalog.reduce((s, c) => s + (Number(c.imdb) || 0), 0) / catalog.length).toFixed(1)
+      ratedItems.length > 0
+        ? (
+            ratedItems.reduce((s, c) => s + (c.communityRating?.average || 0), 0) /
+            ratedItems.length
+          ).toFixed(1)
         : '0.0';
 
     let totalServers = 0;
@@ -200,8 +204,8 @@ export function AdminExecutiveOverview({
     return [...catalog]
       .sort((a, b) => {
         if (analyticsSort === 'rating') {
-          const rA = a.communityRating?.average || a.imdb || 0;
-          const rB = b.communityRating?.average || b.imdb || 0;
+          const rA = a.communityRating?.average || 0;
+          const rB = b.communityRating?.average || 0;
           return rB - rA;
         }
         if (analyticsSort === 'likes') {
@@ -254,10 +258,12 @@ export function AdminExecutiveOverview({
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="rounded-2xl bg-[#0c1821] border border-white/[0.08] p-4">
             <span className="text-[11px] font-bold text-[#b7c9ef] flex items-center justify-between">
-              <span>متوسط تقييم IMDb</span>
+              <span>متوسط تقييم المشاهدين</span>
               <Star className="w-4 h-4 text-[#f9c400]" />
             </span>
-            <p className="text-2xl font-black text-white mt-2 tabular-nums">{metrics.avgImdb} / 10</p>
+            <p className="text-2xl font-black text-white mt-2 tabular-nums">
+              <span dir="ltr">{metrics.avgImdb} / 5</span>
+            </p>
           </div>
           <div className="rounded-2xl bg-[#0c1821] border border-white/[0.08] p-4">
             <span className="text-[11px] font-bold text-[#b7c9ef] flex items-center justify-between">
@@ -320,7 +326,9 @@ export function AdminExecutiveOverview({
                     <span className="font-latin text-xs font-black text-[#f9c400] tabular-nums">
                       {analyticsSort === 'views' && `${(item.views || 0).toLocaleString('en-US')} مشاهدة`}
                       {analyticsSort === 'rating' &&
-                        `★ ${(item.communityRating?.average || item.imdb || 0).toFixed(1)}`}
+                        (item.communityRating && item.communityRating.count > 0
+                          ? `★ ${item.communityRating.average.toFixed(1)}/5`
+                          : '—')}
                       {analyticsSort === 'likes' && `${(item.likes || 0).toLocaleString('en-US')} إعجاب`}
                     </span>
                     <button
@@ -773,7 +781,10 @@ export function AdminExecutiveOverview({
                   {item.title}
                 </p>
                 <p className="text-[10px] text-[#b7c9ef] mt-0.5 truncate">
-                  {KIND_LABELS[item.kind]} • {item.year} • ★ {(Number(item.imdb) || 0).toFixed(1)}
+                  {KIND_LABELS[item.kind]} • {item.year}
+                  {item.communityRating && item.communityRating.count > 0
+                    ? ` • ★ ${item.communityRating.average.toFixed(1)}/5`
+                    : ''}
                 </p>
               </div>
             </button>

@@ -219,12 +219,12 @@ function SectionHorizontalRow({
 
       <div
         ref={scrollerRef}
-        className="flex gap-4 overflow-x-auto no-scrollbar scroll-smooth snap-x snap-mandatory pb-2"
+        className="flex gap-3 sm:gap-4 overflow-x-auto no-scrollbar scroll-smooth snap-x snap-mandatory pb-2"
       >
         {items.map((item) => (
           <div
             key={item.id}
-            className="w-[46%] sm:w-[31%] md:w-[23.5%] lg:w-[19%] shrink-0 snap-start"
+            className="w-[46.5%] sm:w-[31%] md:w-[23.5%] lg:w-[19%] shrink-0 snap-start"
           >
             <MovieCard
               item={item}
@@ -465,7 +465,7 @@ export function HomeView({
   const enabledSections = homeConfig.sections.filter((sec) => sec.enabled);
 
   return (
-    <div className="space-y-6 sm:space-y-8 md:space-y-12 pb-16">
+    <div className="space-y-6 sm:space-y-9 md:space-y-12 pb-10 sm:pb-14">
       {/* Optional Admin Announcement Bar */}
       {siteSettings.announcementText && !dismissedBanner && (
         <div className="bg-[#E50914] pt-20 pb-2.5 px-4 text-center text-xs font-extrabold text-white relative">
@@ -593,30 +593,42 @@ export function HomeView({
               {/* Mobile Cinematic Hero Foreground (< 768px): Minimalist Netflix/Shahid Style */}
               <div
                 key={`mobile-hero-${activeHero.id}`}
-                className="md:hidden rtv-hero-content-in relative z-10 mx-auto w-full px-4 pt-20 pb-4 flex flex-col gap-3 text-right"
+                className="md:hidden rtv-hero-content-in relative z-10 mx-auto w-full px-3.5 sm:px-4 pt-20 pb-4 flex flex-col gap-3 text-right"
               >
                 <div className="space-y-1.5">
                   <h1 className="font-display text-[21px] sm:text-2xl font-extrabold text-white leading-tight line-clamp-2 drop-shadow-[0_2px_8px_rgba(0,0,0,0.85)]">
                     {heroTitle}
                   </h1>
 
-                  {(homeConfig.heroShowRating ||
+                  {((homeConfig.heroShowRating &&
+                    activeHero.communityRating &&
+                    activeHero.communityRating.count > 0) ||
                     homeConfig.heroShowYear ||
                     homeConfig.heroShowQuality) && (
                     <div className="flex items-center gap-2 text-xs font-bold text-[#e5e5e5] tabular-nums">
-                      {homeConfig.heroShowRating && (
-                        <span className="inline-flex items-center gap-1 text-[#f9c400] font-extrabold font-latin">
-                          <Star className="w-3.5 h-3.5 fill-current" />
-                          <span>{Number(activeHero.imdb || 7.5).toFixed(1)}</span>
-                        </span>
-                      )}
-                      {homeConfig.heroShowRating && homeConfig.heroShowYear && (
-                        <span aria-hidden="true" className="text-white/30">•</span>
-                      )}
+                      {homeConfig.heroShowRating &&
+                        activeHero.communityRating &&
+                        activeHero.communityRating.count > 0 && (
+                          <span className="inline-flex items-center gap-1 text-[#f9c400] font-extrabold font-latin">
+                            <Star className="w-3.5 h-3.5 fill-current" />
+                            <span dir="ltr">
+                              {activeHero.communityRating.average.toFixed(1)}/5
+                            </span>
+                          </span>
+                        )}
+                      {homeConfig.heroShowRating &&
+                        activeHero.communityRating &&
+                        activeHero.communityRating.count > 0 &&
+                        homeConfig.heroShowYear && (
+                          <span aria-hidden="true" className="text-white/30">•</span>
+                        )}
                       {homeConfig.heroShowYear && (
                         <span className="font-latin text-white/90">{activeHero.year || '2026'}</span>
                       )}
-                      {(homeConfig.heroShowRating || homeConfig.heroShowYear) &&
+                      {((homeConfig.heroShowRating &&
+                        activeHero.communityRating &&
+                        activeHero.communityRating.count > 0) ||
+                        homeConfig.heroShowYear) &&
                         homeConfig.heroShowQuality && (
                           <span aria-hidden="true" className="text-white/30">•</span>
                         )}
@@ -672,16 +684,16 @@ export function HomeView({
                           setHeroIndex((prev) => (prev - 1 + heroSlides.length) % heroSlides.length)
                         }
                         aria-label="العرض السابق"
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/35 text-white/80 hover:text-white active:scale-95 transition-all cursor-pointer shrink-0"
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/45 border border-white/10 text-white/85 hover:text-white active:scale-95 transition-all cursor-pointer shrink-0"
                       >
                         <ChevronRight className="w-4 h-4" />
                       </button>
                     ) : (
-                      <span className="w-8 shrink-0" />
+                      <span className="w-10 shrink-0" />
                     )}
 
                     <div
-                      className="flex items-center justify-center gap-1 flex-1 min-w-0"
+                      className="flex flex-wrap items-center justify-center gap-1 flex-1 min-w-0"
                       role="tablist"
                       aria-label="الأعمال المميزة في السلايدر"
                     >
@@ -695,7 +707,7 @@ export function HomeView({
                             aria-selected={isActiveDot}
                             aria-label={`عرض ${item.title}`}
                             onClick={() => setHeroIndex(idx)}
-                            className="py-2 px-0.5 flex items-center justify-center cursor-pointer focus:outline-none"
+                            className="py-2 px-1 flex items-center justify-center cursor-pointer focus:outline-none"
                           >
                             <span
                               className={`block h-1.5 rounded-full transition-all duration-300 ${
@@ -714,12 +726,12 @@ export function HomeView({
                         type="button"
                         onClick={() => setHeroIndex((prev) => (prev + 1) % heroSlides.length)}
                         aria-label="العرض التالي"
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/35 text-white/80 hover:text-white active:scale-95 transition-all cursor-pointer shrink-0"
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/45 border border-white/10 text-white/85 hover:text-white active:scale-95 transition-all cursor-pointer shrink-0"
                       >
                         <ChevronLeft className="w-4 h-4" />
                       </button>
                     ) : (
-                      <span className="w-8 shrink-0" />
+                      <span className="w-10 shrink-0" />
                     )}
                   </div>
                 )}
@@ -767,14 +779,18 @@ export function HomeView({
                     </span>
                   );
                 }
-                if (homeConfig.heroShowRating) {
+                if (
+                  homeConfig.heroShowRating &&
+                  activeHero.communityRating &&
+                  activeHero.communityRating.count > 0
+                ) {
                   metaChips.push(
                     <span
-                      key="imdb"
+                      key="viewer-rating"
                       className="inline-flex items-center gap-1 text-[#f9c400] font-extrabold font-latin"
                     >
                       <Star className="w-3.5 h-3.5 fill-current" />
-                      {Number(activeHero.imdb || 7.5).toFixed(1)}
+                      <span dir="ltr">{activeHero.communityRating.average.toFixed(1)}/5</span>
                     </span>
                   );
                 }
@@ -1116,15 +1132,15 @@ export function HomeView({
 
       {/* 2. Clean Single-Row Quick Filter Strip */}
       {homeConfig.showQuickFilters && (
-        <section className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between gap-3 overflow-x-auto no-scrollbar py-1">
+        <section className="mx-auto max-w-[1440px] px-3.5 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between gap-2.5 sm:gap-3 overflow-x-auto no-scrollbar py-1">
             <div className="flex items-center gap-2 shrink-0">
               {QUICK_FILTER_TABS.map((tab, idx) => (
                 <button
                   key={tab.id}
                   type="button"
                   onClick={() => onApplyFilter(tab.filter)}
-                  className={`rounded-xl px-4 py-2 text-xs sm:text-sm font-bold whitespace-nowrap transition-colors cursor-pointer border ${
+                  className={`min-h-[42px] sm:min-h-0 rounded-xl px-3.5 sm:px-4 py-2 text-xs sm:text-sm font-bold whitespace-nowrap transition-colors cursor-pointer border ${
                     idx === 0
                       ? 'bg-[#E50914] border-[#E50914] text-white'
                       : 'bg-[#181818] border-white/[0.08] text-[#d4d4d4] hover:bg-[#242424] hover:text-white'
@@ -1138,7 +1154,7 @@ export function HomeView({
             <button
               type="button"
               onClick={() => onApplyFilter({})}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#181818] border border-white/[0.08] px-3.5 py-2 text-xs font-bold text-[#a3a3a3] hover:text-white hover:border-white/25 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="inline-flex min-h-[42px] sm:min-h-0 items-center gap-1.5 rounded-xl bg-[#181818] border border-white/[0.08] px-3.5 py-2 text-xs font-bold text-[#a3a3a3] hover:text-white hover:border-white/25 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <SlidersHorizontal className="w-3.5 h-3.5 text-[#E50914]" />
               <span>تصفية متقدمة</span>
@@ -1170,7 +1186,10 @@ export function HomeView({
                   <div className="text-right">
                     <p className="text-xs font-bold text-white whitespace-nowrap">{item.title}</p>
                     <p className="font-latin text-[10px] font-bold text-[#f9c400] tabular-nums">
-                      {item.quality} · ★ {Number(item.imdb || 7.5).toFixed(1)}
+                      {item.quality}
+                      {item.communityRating && item.communityRating.count > 0
+                        ? ` · ★ ${item.communityRating.average.toFixed(1)}/5`
+                        : ''}
                     </p>
                   </div>
                 </button>
@@ -1188,28 +1207,28 @@ export function HomeView({
         return (
           <RevealSection
             key={section.id}
-            className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 space-y-4"
+            className="mx-auto max-w-[1440px] px-3.5 sm:px-6 lg:px-8 space-y-3.5 sm:space-y-4"
           >
-            <div className="flex items-end justify-between gap-4">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2.5">
+            <div className="flex items-center sm:items-end justify-between gap-3">
+              <div className="space-y-1 min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
                   {getSectionIcon(section.source)}
                   <h2
                     style={{ fontSize: 'var(--rtv-section-title-size, 22px)' }}
-                    className="font-display font-extrabold text-white"
+                    className="font-display font-extrabold text-white leading-snug truncate"
                   >
                     {section.title}
                   </h2>
                 </div>
                 {section.subtitle && (
-                  <p className="text-xs sm:text-sm text-[#a3a3a3]">{section.subtitle}</p>
+                  <p className="text-xs sm:text-sm text-[#a3a3a3] line-clamp-1">{section.subtitle}</p>
                 )}
               </div>
 
               <button
                 type="button"
                 onClick={() => onApplyFilter(getSectionViewAllFilter(section))}
-                className="inline-flex items-center gap-1 rounded-xl bg-[#181818] hover:bg-[#E50914] border border-white/[0.08] px-3.5 py-2 text-xs font-bold text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="inline-flex min-h-[40px] sm:min-h-0 items-center gap-1 rounded-xl bg-[#181818] hover:bg-[#E50914] border border-white/[0.08] px-3 sm:px-3.5 py-2 text-xs font-bold text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <span>عرض الكل</span>
                 <ChevronLeft className="w-3.5 h-3.5" />
@@ -1225,7 +1244,7 @@ export function HomeView({
                 onToggleWatchlist={onToggleWatchlist}
               />
             ) : (
-              <div className={`grid ${gridColClass} gap-4`}>
+              <div className={`grid ${gridColClass} gap-3 sm:gap-4`}>
                 {items.map((item) => (
                   <MovieCard
                     key={item.id}
@@ -1244,9 +1263,9 @@ export function HomeView({
 
       {/* 4. Optional Category Tag Strip (Admin Toggleable) */}
       {homeConfig.showCategoryBar && (
-        <RevealSection className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8">
-          <div className="rounded-2xl bg-[#141414] border border-white/[0.07] p-5 space-y-3">
-            <div className="flex items-center justify-between">
+        <RevealSection className="mx-auto max-w-[1440px] px-3.5 sm:px-6 lg:px-8">
+          <div className="rounded-2xl bg-[#141414] border border-white/[0.07] p-4 sm:p-5 space-y-3">
+            <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Tags className="w-4 h-4 text-[#E50914]" />
                 <h2 className="font-display text-base font-extrabold text-white">الأقسام السريعة</h2>
@@ -1254,19 +1273,19 @@ export function HomeView({
               <button
                 type="button"
                 onClick={() => onApplyFilter({})}
-                className="text-xs font-bold text-[#E50914] hover:text-white transition-colors cursor-pointer"
+                className="min-h-[36px] text-xs font-bold text-[#E50914] hover:text-white transition-colors cursor-pointer"
               >
                 كل الأقسام ({catalog.length})
               </button>
             </div>
 
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-nowrap sm:flex-wrap overflow-x-auto no-scrollbar sm:overflow-visible gap-2 pb-1 sm:pb-0">
               {quickCategoryChips.map((tag) => (
                 <button
                   key={tag.category}
                   type="button"
                   onClick={() => onApplyFilter({ category: tag.category })}
-                  className="inline-flex items-center gap-2 rounded-xl bg-[#1c1c1c] border border-white/[0.07] px-3 py-1.5 text-xs font-bold text-[#d4d4d4] hover:bg-[#E50914] hover:border-[#E50914] hover:text-white transition-colors cursor-pointer"
+                  className="inline-flex min-h-[40px] sm:min-h-0 shrink-0 items-center gap-2 rounded-xl bg-[#1c1c1c] border border-white/[0.07] px-3 py-1.5 text-xs font-bold text-[#d4d4d4] hover:bg-[#E50914] hover:border-[#E50914] hover:text-white transition-colors cursor-pointer whitespace-nowrap"
                 >
                   <span>{tag.label}</span>
                   <span className="font-latin text-[11px] opacity-70 tabular-nums">{tag.count}</span>
@@ -1279,9 +1298,9 @@ export function HomeView({
 
       {/* 5. Optional Full Paginated Library (Admin Toggleable) */}
       {homeConfig.showFullLibrary && (
-        <RevealSection className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8">
-          <div className="rounded-2xl bg-[#141414] border border-white/[0.08] p-5 sm:p-6 space-y-5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/[0.08] pb-4">
+        <RevealSection className="mx-auto max-w-[1440px] px-3.5 sm:px-6 lg:px-8">
+          <div className="rounded-2xl bg-[#141414] border border-white/[0.08] p-4 sm:p-6 space-y-4 sm:space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 sm:gap-4 border-b border-white/[0.08] pb-4">
               <div className="flex items-center gap-2.5">
                 <Grid2x2 className="w-5 h-5 text-[#E50914]" />
                 <div>
@@ -1291,7 +1310,7 @@ export function HomeView({
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-nowrap overflow-x-auto no-scrollbar sm:flex-wrap items-center gap-2 pb-0.5 sm:pb-0">
                 {[
                   { id: 'all' as const, label: 'الكل' },
                   { id: 'movie' as const, label: 'أفلام' },
@@ -1302,7 +1321,7 @@ export function HomeView({
                     key={tab.id}
                     type="button"
                     onClick={() => setLibraryFilter(tab.id)}
-                    className={`rounded-xl px-3.5 py-1.5 text-xs font-bold border transition-colors cursor-pointer ${
+                    className={`min-h-[40px] sm:min-h-0 shrink-0 whitespace-nowrap rounded-xl px-3.5 py-1.5 text-xs font-bold border transition-colors cursor-pointer ${
                       libraryFilter === tab.id
                         ? 'bg-[#E50914] border-[#E50914] text-white'
                         : 'bg-[#1c1c1c] border-white/10 text-[#a3a3a3] hover:text-white'
@@ -1314,7 +1333,7 @@ export function HomeView({
               </div>
             </div>
 
-            <div className={`grid ${gridColClass} gap-4`}>
+            <div className={`grid ${gridColClass} gap-3 sm:gap-4`}>
               {paginatedLibraryItems.map((item) => (
                 <MovieCard
                   key={item.id}
@@ -1333,18 +1352,18 @@ export function HomeView({
                   type="button"
                   disabled={safeLibraryPage <= 1}
                   onClick={() => setLibraryPage((p) => Math.max(1, p - 1))}
-                  className="rounded-xl bg-[#1c1c1c] border border-white/10 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40 cursor-pointer"
+                  className="min-h-[42px] sm:min-h-0 rounded-xl bg-[#1c1c1c] border border-white/10 px-4 sm:px-3 py-2 sm:py-1.5 text-xs font-bold text-white disabled:opacity-40 cursor-pointer"
                 >
                   السابق
                 </button>
-                <span className="font-latin text-xs font-bold text-[#a3a3a3] tabular-nums">
+                <span className="font-latin text-xs font-bold text-[#a3a3a3] tabular-nums px-2">
                   {safeLibraryPage} / {totalLibraryPages}
                 </span>
                 <button
                   type="button"
                   disabled={safeLibraryPage >= totalLibraryPages}
                   onClick={() => setLibraryPage((p) => Math.min(totalLibraryPages, p + 1))}
-                  className="rounded-xl bg-[#1c1c1c] border border-white/10 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40 cursor-pointer"
+                  className="min-h-[42px] sm:min-h-0 rounded-xl bg-[#1c1c1c] border border-white/10 px-4 sm:px-3 py-2 sm:py-1.5 text-xs font-bold text-white disabled:opacity-40 cursor-pointer"
                 >
                   التالي
                 </button>
@@ -1356,20 +1375,20 @@ export function HomeView({
 
       {/* 6. Clean Request / Contact CTA Banner */}
       {homeConfig.showRequestBanner && (
-        <RevealSection className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8">
-          <div className="rounded-2xl bg-gradient-to-l from-[#1c1c1c] via-[#161616] to-[#141414] border border-white/[0.08] p-6 sm:p-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-5">
+        <RevealSection className="mx-auto max-w-[1440px] px-3.5 sm:px-6 lg:px-8">
+          <div className="rounded-2xl bg-gradient-to-l from-[#1c1c1c] via-[#161616] to-[#141414] border border-white/[0.08] p-5 sm:p-8 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 sm:gap-5">
             <div className="space-y-1.5">
               <h2 className="font-display text-lg sm:text-xl font-extrabold text-white">
                 تبحث عن فيلم أو مسلسل غير موجود؟
               </h2>
-              <p className="text-xs sm:text-sm text-[#a3a3a3]">
+              <p className="text-xs sm:text-sm text-[#a3a3a3] leading-relaxed">
                 أرسل طلبك مباشرة لفريق الموقع وسنقوم بتوفيره بأعلى جودة متاحة.
               </p>
             </div>
             <button
               type="button"
               onClick={onOpenContact}
-              className="inline-flex items-center gap-2 rounded-xl bg-[#E50914] hover:bg-[#f40612] px-5 py-3 text-xs sm:text-sm font-extrabold text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="inline-flex w-full sm:w-auto min-h-[44px] items-center justify-center gap-2 rounded-xl bg-[#E50914] hover:bg-[#f40612] px-5 py-3 text-xs sm:text-sm font-extrabold text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <MessageSquarePlus className="w-4 h-4" />
               <span>اطلب عملاً أو تواصل معنا</span>

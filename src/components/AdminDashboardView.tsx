@@ -209,11 +209,6 @@ import {
   generateCleanSlug,
   resolveDisplayShortUrl,
 } from '../lib/permalink';
-import { inferEffectiveYear } from '../lib/imageMatching';
-import {
-  resolveMediaRatingsBatch,
-  resolveSingleMediaRating,
-} from '../lib/mediaRatings';
 import {
   checkServerUrlsInBrowser,
   CLOUDFLARE_WORKER_SOURCE,
@@ -548,8 +543,8 @@ function createEmptyMedia(): MediaItem {
     language: 'الانجليزية',
     quality: 'WEB-DL',
     duration: '125 دقيقة',
-    imdb: 8.0,
-    votes: '12,400',
+    imdb: 0,
+    votes: '0',
     views: 1500,
     likes: 240,
     pinned: false,
@@ -678,8 +673,8 @@ function scrapedToMediaItem(scraped: ScrapedPayload, indexOffset = 0): MediaItem
     language: scraped.language || 'مترجم للعربية',
     quality: scraped.quality || 'WEB-DL',
     duration: scraped.duration || '120 دقيقة',
-    imdb: Number(scraped.imdb) || 7.8,
-    votes: scraped.votes || '10,500',
+    imdb: 0,
+    votes: '0',
     views: 0,
     likes: 0,
     pinned: false,
@@ -1180,9 +1175,6 @@ export function AdminDashboardView({
   const [fetchingHqImages, setFetchingHqImages] = useState(false);
   const [probingEditorImages, setProbingEditorImages] = useState(false);
   const [editorImageProposal, setEditorImageProposal] = useState<ResolvedImageBundle | null>(null);
-  const [refreshingRatings, setRefreshingRatings] = useState(false);
-  const [ratingsProgress, setRatingsProgress] = useState<{ done: number; total: number } | null>(null);
-  const [fetchingEditorRating, setFetchingEditorRating] = useState(false);
 
   // Site-Wide Bulk Crawler states (Entire Website)
   const [siteScrapeMode, setSiteScrapeMode] = useState<'url' | 'html'>('url');
@@ -3087,144 +3079,6 @@ export function AdminDashboardView({
     }
   };
 
-  const default78Items = useMemo(
-    () => catalog.filter((item) => Math.abs((Number(item.imdb) || 0) - 7.8) < 0.01),
-    [catalog]
-  );
-
-  const handleFetchEditorRealRating = async () => {
-    if (!editingItem || fetchingEditorRating) return;
-    if (!editingItem.title.trim() && !editingItem.englishTitle.trim()) {
-      onNotify('أدخل عنوان العمل أولاً للبحث عن تقييمه الحقيقي');
-      return;
-    }
-    setFetchingEditorRating(true);
-    try {
-      const resolved = await resolveSingleMediaRating({
-        id: editingItem.id,
-        title: editingItem.title,
-        englishTitle: editingItem.englishTitle,
-        year: editingItem.year,
-        kind: editingItem.kind,
-      });
-      if (resolved && resolved.imdb > 0) {
-        const inferred = inferEffectiveYear(editingItem.title, editingItem.year);
-        const nextYear =
-          (!editingItem.year || editingItem.year === '2026') &&
-          (resolved.year || (inferred.explicit ? inferred.year : ''))
-            ? resolved.year || inferred.year
-            : editingItem.year;
-        setEditingItem((prev) =>
-          prev
-            ? {
-                ...prev,
-                imdb: resolved.imdb,
-                year: nextYear || prev.year,
-                votes: resolved.votes || prev.votes,
-              }
-            : prev
-        );
-        const srcLabel =
-          resolved.source === 'tmdb' ? 'TMDb' : resolved.source === 'tvmaze' ? 'TVmaze' : 'IMDb';
-        onNotify(`تم جلب التقييم الحقيقي من ${srcLabel}: ★ ${resolved.imdb}`);
-      } else {
-        onNotify('لم يُعثر على تقييم مطابق في IMDb/TMDb — يمكنك تعديله يدوياً');
-      }
-    } catch {
-      onNotify('تعذر جلب التقييم الآن');
-    } finally {
-      setFetchingEditorRating(false);
-    }
-  };
-
-  const handleRefreshRealRatings = async (mode: '7.8' | 'all' | 'selected') => {
-    if (!hasActor || refreshingRatings) return;
-    if (!isFirestoreSeeded) {
-      onNotify('قم أولاً باستيراد المكتبة لقاعدة البيانات لتفعيل تحديث التقييمات');
-      return;
-    }
-
-    const targets =
-      mode === 'selected'
-        ? catalog.filter((item) => selectedMediaIds.includes(item.id))
-        : mode === '7.8'
-          ? default78Items
-          : catalog;
-
-    if (targets.length === 0) {
-      onNotify('لا توجد أعمال مطابقة لتحديث تقييماتها');
-      return;
-    }
-
-    setRefreshingRatings(true);
-    setRatingsProgress({ done: 0, total: targets.length });
-    try {
-      const resolvedMap = await resolveMediaRatingsBatch(
-        targets.map((item) => ({
-          id: item.id,
-          title: item.title,
-          englishTitle: item.englishTitle,
-          year: item.year,
-          kind: item.kind,
-        })),
-        (done, total) => setRatingsProgress({ done, total })
-      );
-
-      const updates: MediaItem[] = [];
-      let matchedCount = 0;
-      for (const item of targets) {
-        const found = resolvedMap[item.id];
-        if (!found || found.imdb <= 0) continue;
-        matchedCount++;
-        const inferred = inferEffectiveYear(item.title, item.year);
-        const fixedYear =
-          item.year === '2026' && (found.year || (inferred.explicit ? inferred.year : ''))
-            ? found.year || inferred.year
-            : item.year;
-
-        if (found.imdb !== item.imdb || fixedYear !== item.year || (found.votes && found.votes !== item.votes)) {
-          updates.push({
-            ...item,
-            imdb: found.imdb,
-            year: fixedYear || item.year,
-            votes: found.votes || item.votes,
-          });
-        }
-      }
-
-      if (updates.length > 0) {
-        await bulkUpdateMediaInFirestore(updates, activeActorUid);
-        const unmatchedCount = Math.max(0, targets.length - matchedCount);
-        const alreadySynced = Math.max(0, matchedCount - updates.length);
-        const extras = [
-          alreadySynced > 0 ? `${alreadySynced} محدثة مسبقاً` : '',
-          unmatchedCount > 0 ? `${unmatchedCount} لم تتطابق` : '',
-        ]
-          .filter(Boolean)
-          .join(' • ');
-        onNotify(
-          `تم تحديث التقييم الحقيقي لـ ${updates.length} عمل من أصل ${targets.length}${extras ? ` (${extras})` : ''}.`
-        );
-      } else if (matchedCount > 0) {
-        const unmatchedCount = Math.max(0, targets.length - matchedCount);
-        onNotify(
-          unmatchedCount > 0
-            ? `تقييمات ${matchedCount} عمل مطابقة محدثة بالفعل، وتعذر مطابقة ${unmatchedCount} عمل.`
-            : `تقييمات الأعمال المطابقة (${matchedCount}) محدثة بالفعل.`
-        );
-      } else {
-        onNotify(
-          'لم يُعثر على تقييمات مطابقة على IMDb/TMDb/Wikidata للأعمال المفحوصة — تأكد من العنوان أو الاسم الإنجليزي وسنة الإصدار.'
-        );
-      }
-    } catch (err) {
-      onNotify(formatFirestoreWriteError(err, 'تعذر حفظ التقييمات الجديدة في Firestore'));
-    } finally {
-      setRefreshingRatings(false);
-      setRatingsProgress(null);
-    }
-  };
-
   const handleProbeEditorImageDimensions = async () => {
     if (!editingItem || probingEditorImages) return;
     setProbingEditorImages(true);
@@ -4153,8 +4007,8 @@ export function AdminDashboardView({
     >
       {/* Dedicated Standalone Admin Top Bar (Pinned at Top) */}
       <header className="shrink-0 z-40 border-b border-white/10 bg-[#0c1821]/95 backdrop-blur-md">
-        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-3">
-          <div className="flex items-center gap-3 min-w-0">
+        <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-2 sm:gap-3 px-3 sm:px-6 py-2.5 sm:py-3">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
             <button
               type="button"
               onClick={() => setMobileDrawerOpen(true)}
@@ -4182,16 +4036,16 @@ export function AdminDashboardView({
               )}
             </button>
 
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl rtv-admin-accent-bg text-white shadow-lg shrink-0">
+            <div className="hidden sm:flex h-10 w-10 items-center justify-center rounded-2xl rtv-admin-accent-bg text-white shadow-lg shrink-0">
               <LayoutDashboard className="w-5 h-5" />
             </div>
 
             <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="font-display text-base sm:text-lg font-extrabold text-white whitespace-nowrap">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                <h1 className="font-display text-sm sm:text-lg font-extrabold text-white truncate max-w-[42vw] sm:max-w-none">
                   إدارة {activeBranding.siteName || settingsForm.siteName || 'RahaL TV'}
                 </h1>
-                <span className="font-latin rounded-lg rtv-admin-accent-soft border border-white/15 px-2 py-0.5 text-[10px] font-black rtv-admin-accent-text">
+                <span className="hidden sm:inline-block font-latin rounded-lg rtv-admin-accent-soft border border-white/15 px-2 py-0.5 text-[10px] font-black rtv-admin-accent-text">
                   /admin
                 </span>
                 <span
@@ -4227,14 +4081,15 @@ export function AdminDashboardView({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             {/* Global Command Palette Button */}
             <button
               type="button"
               onClick={() => setCommandPaletteOpen(true)}
-              className="inline-flex items-center gap-2 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 px-3 py-2 text-xs font-bold text-[#b7c9ef] hover:text-white cursor-pointer whitespace-nowrap shrink-0"
+              aria-label="بحث وانتقال سريع"
+              className="inline-flex h-10 sm:h-auto w-10 sm:w-auto items-center justify-center gap-2 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 sm:px-3 sm:py-2 text-xs font-bold text-[#b7c9ef] hover:text-white cursor-pointer whitespace-nowrap shrink-0"
             >
-              <Command className="w-3.5 h-3.5 rtv-admin-accent-text" />
+              <Command className="w-4 h-4 sm:w-3.5 sm:h-3.5 rtv-admin-accent-text" />
               <span className="hidden md:inline">بحث وانتقال سريع</span>
               <span className="hidden lg:inline font-latin rounded bg-[#0c1821] px-1.5 py-0.5 text-[10px] rtv-admin-accent-text">
                 Ctrl+K
@@ -4246,7 +4101,7 @@ export function AdminDashboardView({
               type="button"
               onClick={() => navigateToTab('notifications')}
               aria-label="مركز الإشعارات والتنبيهات"
-              className={`relative inline-flex h-9 w-9 items-center justify-center rounded-xl border cursor-pointer shrink-0 ${
+              className={`relative inline-flex h-10 w-10 sm:h-9 sm:w-9 items-center justify-center rounded-xl border cursor-pointer shrink-0 ${
                 activeTab === 'notifications'
                   ? 'rtv-admin-accent-bg border-transparent text-white'
                   : 'bg-[#1a242e] border-white/10 text-[#b7c9ef] hover:text-white'
@@ -4263,7 +4118,8 @@ export function AdminDashboardView({
             <button
               type="button"
               onClick={openEditorForNew}
-              className="inline-flex items-center gap-1.5 rounded-xl rtv-admin-accent-bg hover:opacity-90 px-3.5 py-2 text-xs font-extrabold text-white shadow-md cursor-pointer whitespace-nowrap shrink-0"
+              aria-label="إضافة عمل جديد"
+              className="inline-flex h-10 sm:h-auto w-10 sm:w-auto items-center justify-center gap-1.5 rounded-xl rtv-admin-accent-bg hover:opacity-90 sm:px-3.5 sm:py-2 text-xs font-extrabold text-white shadow-md cursor-pointer whitespace-nowrap shrink-0"
             >
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">إضافة عمل جديد</span>
@@ -4272,9 +4128,10 @@ export function AdminDashboardView({
             <button
               type="button"
               onClick={onExitDashboard}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 px-3 py-2 text-xs font-bold text-white cursor-pointer whitespace-nowrap shrink-0"
+              aria-label="معاينة الموقع"
+              className="inline-flex h-10 sm:h-auto w-10 sm:w-auto items-center justify-center gap-1.5 rounded-xl bg-[#1a242e] hover:bg-white/10 border border-white/10 sm:px-3 sm:py-2 text-xs font-bold text-white cursor-pointer whitespace-nowrap shrink-0"
             >
-              <ExternalLink className="w-3.5 h-3.5" />
+              <ExternalLink className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
               <span className="hidden sm:inline">معاينة الموقع</span>
             </button>
 
@@ -4322,14 +4179,14 @@ export function AdminDashboardView({
             className="fixed inset-0 bg-black/75 backdrop-blur-sm"
             onClick={() => setMobileDrawerOpen(false)}
           />
-          <aside className="rtv-admin-sidebar-shell rtv-admin-sidebar-scroll relative z-10 w-80 max-w-[85vw] h-full bg-[#0c1821] border-l border-white/10 p-4 overflow-y-auto space-y-4 shadow-2xl">
+          <aside className="rtv-admin-sidebar-shell rtv-admin-sidebar-scroll relative z-10 w-80 max-w-[88vw] h-full bg-[#0c1821] border-l border-white/10 p-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] overflow-y-auto space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
               <span className="font-display text-sm font-extrabold text-white">أقسام RahaL TV</span>
               <button
                 type="button"
                 onClick={() => setMobileDrawerOpen(false)}
                 aria-label="إغلاق القائمة"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/10 text-white"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 text-white hover:bg-[#D92321] cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -4486,35 +4343,6 @@ export function AdminDashboardView({
               </div>
               );
             })()}
-            {isFirestoreSeeded && default78Items.length >= 5 && (
-              <div className="rounded-2xl bg-[#1a242e] border border-[#f9c400]/35 px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-lg">
-                <div className="flex items-center gap-2.5 text-xs font-bold text-[#fde68a]">
-                  <Star className="w-4 h-4 text-[#f9c400] shrink-0" />
-                  <span>
-                    رُصد <strong className="text-white tabular-nums">{default78Items.length}</strong> عمل
-                    بتقييم افتراضي <span className="font-latin text-white">7.8</span> — يمكنك تحديثها بالتقييمات الحقيقية من{' '}
-                    <span className="font-latin text-white">IMDb / TMDb</span> بضغطة واحدة.
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  disabled={refreshingRatings}
-                  onClick={() => void handleRefreshRealRatings('7.8')}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#f9c400] hover:bg-[#dfb20b] disabled:opacity-60 px-3.5 py-2 text-xs font-black text-[#06131c] cursor-pointer whitespace-nowrap shrink-0"
-                >
-                  {refreshingRatings ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Star className="w-3.5 h-3.5" />
-                  )}
-                  <span>
-                    {refreshingRatings && ratingsProgress
-                      ? `جاري الجلب (${ratingsProgress.done}/${ratingsProgress.total})...`
-                      : `جلب التقييمات الحقيقية الآن (${default78Items.length})`}
-                  </span>
-                </button>
-              </div>
-            )}
             <div key={activeTab} className="space-y-6">
             <Suspense
               fallback={
@@ -4628,10 +4456,6 @@ export function AdminDashboardView({
                   onNavigateTab={navigateToTab}
                   onNotify={onNotify}
                   onDeleteDuplicateIds={handleDeleteMediaIds}
-                  refreshingRatings={refreshingRatings}
-                  ratingsProgress={ratingsProgress}
-                  default78Count={default78Items.length}
-                  onRefreshRatings={(mode) => void handleRefreshRealRatings(mode)}
                 />
               )}
 
@@ -5087,9 +4911,6 @@ export function AdminDashboardView({
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="rounded-lg bg-[#D92321] px-2.5 py-1 text-[11px] font-black text-white">
                             {KIND_LABELS[scrapedResult.kind]}
-                          </span>
-                          <span className="rounded-lg bg-[#f9c400]/15 px-2.5 py-1 text-[11px] font-black text-[#f9c400]">
-                            ★ IMDb {scrapedResult.imdb}
                           </span>
                           <span className="rounded-lg bg-[#1a242e] px-2.5 py-1 text-[11px] font-bold text-white">
                             {scrapedResult.year} • {scrapedResult.quality}
@@ -5904,9 +5725,6 @@ export function AdminDashboardView({
                               <div className="flex flex-wrap items-center gap-1.5 mb-1">
                                 <span className="rounded-md bg-[#D92321] px-2 py-0.5 text-[10px] font-black text-white">
                                   {KIND_LABELS[item.kind]}
-                                </span>
-                                <span className="rounded-md bg-[#0c1821] px-2 py-0.5 text-[10px] font-bold text-[#f9c400]">
-                                  ★ {item.imdb}
                                 </span>
                                 <span className="rounded-md bg-[#0c1821] px-2 py-0.5 text-[10px] font-bold text-[#b7c9ef]">
                                   {item.year} • {item.quality}
@@ -6978,7 +6796,7 @@ export function AdminDashboardView({
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="block text-xs font-bold text-[#b7c9ef] mb-1">النوع</label>
                       <select
@@ -7010,37 +6828,6 @@ export function AdminDashboardView({
                         value={editingItem.quality}
                         onChange={(e) =>
                           setEditingItem({ ...editingItem, quality: e.target.value })
-                        }
-                        className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2.5 text-xs text-white"
-                      />
-                    </div>
-                    <div>
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <label className="block text-xs font-bold text-[#b7c9ef]">
-                          تقييم IMDb
-                        </label>
-                        <button
-                          type="button"
-                          disabled={fetchingEditorRating}
-                          onClick={() => void handleFetchEditorRealRating()}
-                          className="inline-flex items-center gap-1 rounded-lg bg-[#f9c400]/15 hover:bg-[#f9c400]/25 border border-[#f9c400]/35 px-2 py-0.5 text-[10px] font-extrabold text-[#f9c400] cursor-pointer disabled:opacity-50"
-                        >
-                          {fetchingEditorRating ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                          ) : (
-                            <Star className="w-3 h-3" />
-                          )}
-                          <span>جلب الحقيقي</span>
-                        </button>
-                      </div>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="1"
-                        max="10"
-                        value={editingItem.imdb}
-                        onChange={(e) =>
-                          setEditingItem({ ...editingItem, imdb: Number(e.target.value) || 7.5 })
                         }
                         className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2.5 text-xs text-white"
                       />

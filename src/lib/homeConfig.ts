@@ -348,7 +348,13 @@ export function resolveSectionMediaItems(
         .filter((i) => matchesCategoryFilter(i, 'مسلسلات') || i.kind === 'series' || i.kind === 'tv')
         .slice(0, limit);
     case 'top_rated':
-      return [...catalog].sort((a, b) => (b.imdb || 0) - (a.imdb || 0)).slice(0, limit);
+      return [...catalog]
+        .sort((a, b) => {
+          const avgDiff = (b.communityRating?.average || 0) - (a.communityRating?.average || 0);
+          if (avgDiff !== 0) return avgDiff;
+          return (b.communityRating?.count || 0) - (a.communityRating?.count || 0);
+        })
+        .slice(0, limit);
     case 'trending':
       return [...catalog].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, limit);
     case 'ramadan':

@@ -95,7 +95,7 @@ export function Header({
         }`}
       >
         <div
-          className={`mx-auto flex h-full max-w-[1440px] items-center justify-between gap-4 px-4 sm:px-6 lg:px-8 ${
+          className={`mx-auto flex h-full max-w-[1440px] items-center justify-between gap-2 sm:gap-4 px-3 sm:px-6 lg:px-8 ${
             isCenterBrand ? 'lg:grid lg:grid-cols-[1fr_auto_1fr]' : ''
           }`}
         >
@@ -104,7 +104,7 @@ export function Header({
             <button
               type="button"
               onClick={onNavigateHome}
-              className={`focus:outline-none cursor-pointer shrink-0 ${
+              className={`focus:outline-none cursor-pointer shrink-0 min-w-0 max-w-[44vw] sm:max-w-none overflow-hidden ${
                 isCenterBrand ? 'lg:order-2 lg:justify-self-center' : ''
               }`}
               aria-label={`العودة إلى الرئيسية - ${resolvedBrandName}`}
@@ -239,18 +239,20 @@ export function Header({
 
           {/* Zone 3: Quick Search + Primary Controls */}
           <div
-            className={`flex items-center gap-2 shrink-0 ${
+            className={`flex items-center gap-1.5 sm:gap-2 shrink-0 ${
               isCenterBrand ? 'lg:order-3 lg:justify-self-end' : ''
             }`}
           >
-            <PWAInstallButton variant="header" />
+            <div className="hidden sm:inline-flex">
+              <PWAInstallButton variant="header" />
+            </div>
             <button
               type="button"
               onClick={onOpenSearch}
               aria-label="بحث سريع"
-              className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#181818] border border-white/10 px-3 sm:px-3.5 text-xs sm:text-sm font-semibold text-[#e5e5e5] hover:border-[#E50914]/70 hover:text-white transition-colors cursor-pointer whitespace-nowrap"
+              className="inline-flex h-10 sm:h-10 w-10 sm:w-auto items-center justify-center gap-2 rounded-xl bg-[#181818] border border-white/10 sm:px-3.5 text-xs sm:text-sm font-semibold text-[#e5e5e5] hover:border-[#E50914]/70 hover:text-white transition-colors cursor-pointer whitespace-nowrap"
             >
-              <Search className="w-4 h-4 text-[#E50914]" />
+              <Search className="w-4 h-4 text-[#E50914] shrink-0" />
               <span className="hidden md:inline">بحث سريع</span>
             </button>
 
@@ -258,9 +260,9 @@ export function Header({
               type="button"
               onClick={onOpenWatchlist}
               aria-label="قائمتي"
-              className="relative inline-flex h-10 items-center gap-1.5 rounded-xl bg-[#181818] border border-white/10 px-3 text-xs sm:text-sm font-semibold text-[#e5e5e5] hover:border-white/25 hover:text-white transition-colors cursor-pointer whitespace-nowrap"
+              className="relative inline-flex h-10 items-center justify-center gap-1.5 rounded-xl bg-[#181818] border border-white/10 px-2.5 sm:px-3 text-xs sm:text-sm font-semibold text-[#e5e5e5] hover:border-white/25 hover:text-white transition-colors cursor-pointer whitespace-nowrap"
             >
-              <Bookmark className="w-4 h-4 text-[#f9c400]" />
+              <Bookmark className="w-4 h-4 text-[#f9c400] shrink-0" />
               <span className="hidden xl:inline">قائمتي</span>
               {watchlistCount > 0 && (
                 <span className="font-latin inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-[#E50914] px-1 text-[10px] font-black text-white tabular-nums">
@@ -274,13 +276,13 @@ export function Header({
                 type="button"
                 onClick={onOpenAdmin}
                 aria-label="لوحة التحكم"
-                className={`inline-flex h-10 items-center gap-1.5 rounded-xl border px-3 text-xs sm:text-sm font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                className={`inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border px-2.5 sm:px-3 text-xs sm:text-sm font-bold transition-colors cursor-pointer whitespace-nowrap ${
                   currentView === 'admin'
                     ? 'bg-[#f9c400] border-[#f9c400] text-[#0f0f0f]'
                     : 'bg-[#f9c400]/15 border-[#f9c400]/40 text-[#f9c400] hover:bg-[#f9c400] hover:text-[#0f0f0f]'
                 }`}
               >
-                <LayoutDashboard className="w-4 h-4" />
+                <LayoutDashboard className="w-4 h-4 shrink-0" />
                 <span className="hidden sm:inline">الإدارة</span>
               </button>
             )}
@@ -289,7 +291,7 @@ export function Header({
               type="button"
               onClick={onOpenLogin}
               aria-label={isGuest ? 'حساب الضيف' : 'حسابي'}
-              className={`inline-flex h-10 items-center gap-2 rounded-xl px-3 sm:px-3.5 text-xs sm:text-sm font-bold transition-colors cursor-pointer whitespace-nowrap ${
+              className={`inline-flex h-10 items-center justify-center gap-1.5 sm:gap-2 rounded-xl px-2.5 sm:px-3.5 text-xs sm:text-sm font-bold transition-colors cursor-pointer whitespace-nowrap ${
                 isGuest
                   ? 'bg-[#202020] hover:bg-[#2a2a2a] border border-white/15 text-white'
                   : 'bg-[#E50914] hover:bg-[#f40612] text-white'
@@ -300,12 +302,12 @@ export function Header({
                   src={userPhoto}
                   alt={username || 'حسابي'}
                   referrerPolicy="no-referrer"
-                  className="h-5 w-5 rounded-full object-cover border border-white/40"
+                  className="h-5 w-5 rounded-full object-cover border border-white/40 shrink-0"
                 />
               ) : (
-                <UserIcon className={`w-4 h-4 ${isGuest ? 'text-[#f9c400]' : ''}`} />
+                <UserIcon className={`w-4 h-4 shrink-0 ${isGuest ? 'text-[#f9c400]' : ''}`} />
               )}
-              <span className={`${isGuest ? 'inline' : 'hidden md:inline'} max-w-[100px] truncate`}>
+              <span className={`${isGuest ? 'hidden sm:inline' : 'hidden md:inline'} max-w-[100px] truncate`}>
                 {username || 'دخول'}
               </span>
             </button>
@@ -315,7 +317,7 @@ export function Header({
               type="button"
               onClick={() => setMobileMenuOpen(true)}
               aria-label="فتح القائمة الجانبية"
-              className="inline-flex lg:hidden h-10 w-10 items-center justify-center rounded-xl bg-[#181818] border border-white/10 text-white hover:border-white/30 cursor-pointer"
+              className="inline-flex lg:hidden h-10 w-10 items-center justify-center rounded-xl bg-[#181818] border border-white/10 text-white hover:border-white/30 cursor-pointer shrink-0"
             >
               <Menu className="w-5 h-5" />
             </button>
@@ -330,7 +332,7 @@ export function Header({
             className="fixed inset-0 bg-black/75 backdrop-blur-sm"
             onClick={() => setMobileMenuOpen(false)}
           />
-          <div className="relative z-10 flex h-full w-80 max-w-[86vw] flex-col bg-[#141414] border-l border-white/10 p-5 overflow-y-auto">
+          <div className="relative z-10 flex h-full w-80 max-w-[88vw] flex-col bg-[#141414] border-l border-white/10 p-4 sm:p-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] overflow-y-auto">
             <div className="flex items-center justify-between pb-4 mb-4 border-b border-white/10">
               {!isLogoHidden ? (
                 <Logo size="sm" showSubtitle branding={branding} fallbackSiteName={resolvedBrandName} />
@@ -454,7 +456,7 @@ export function Header({
                     </span>
                   </button>
                   {item.subItems && (
-                    <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                    <div className="mt-2 grid grid-cols-2 gap-1.5">
                       {item.subItems.map((sub) => (
                         <button
                           key={sub.category}
@@ -463,7 +465,7 @@ export function Header({
                             onSelectCategory(sub.category);
                             setMobileMenuOpen(false);
                           }}
-                          className="min-h-10 rounded-lg bg-[#242424] px-2.5 py-2 text-right text-xs font-medium text-[#d4d4d4] hover:bg-[#E50914] hover:text-white transition-colors cursor-pointer"
+                          className="min-h-11 rounded-lg bg-[#242424] px-2.5 py-2 text-right text-xs font-medium text-[#d4d4d4] hover:bg-[#E50914] hover:text-white transition-colors cursor-pointer truncate"
                         >
                           {sub.label}
                         </button>
@@ -496,15 +498,15 @@ export function Header({
         </div>
       )}
 
-      {/* Compact Mobile Bottom Nav Bar (<= 10% viewport height) */}
+      {/* Compact Mobile Bottom Nav Bar (<= 10% viewport height, safe-area aware) */}
       <nav
         aria-label="تنقل الجوال السريع"
-        className="fixed bottom-0 inset-x-0 z-40 grid grid-cols-5 h-14 bg-[#0f0f0f]/95 backdrop-blur-md border-t border-white/10 sm:hidden"
+        className="fixed bottom-0 inset-x-0 z-40 grid grid-cols-5 min-h-[58px] pb-[env(safe-area-inset-bottom,0px)] bg-[#0f0f0f]/95 backdrop-blur-md border-t border-white/10 sm:hidden"
       >
         <button
           type="button"
           onClick={onNavigateHome}
-          className={`flex flex-col items-center justify-center gap-0.5 text-[10px] font-bold ${
+          className={`flex flex-col items-center justify-center gap-0.5 py-1.5 text-[10px] font-bold cursor-pointer ${
             currentView === 'home' ? 'text-white' : 'text-[#a3a3a3]'
           }`}
         >
@@ -514,7 +516,7 @@ export function Header({
         <button
           type="button"
           onClick={onOpenSearch}
-          className="flex flex-col items-center justify-center gap-0.5 text-[10px] font-bold text-[#a3a3a3]"
+          className="flex flex-col items-center justify-center gap-0.5 py-1.5 text-[10px] font-bold text-[#a3a3a3] cursor-pointer"
         >
           <Search className="w-4 h-4" />
           <span>البحث</span>
@@ -522,23 +524,32 @@ export function Header({
         <button
           type="button"
           onClick={() => onSelectCategory('')}
-          className="flex flex-col items-center justify-center gap-0.5 text-[10px] font-bold text-[#a3a3a3]"
+          className={`flex flex-col items-center justify-center gap-0.5 py-1.5 text-[10px] font-bold cursor-pointer ${
+            currentView === 'archive' ? 'text-white' : 'text-[#a3a3a3]'
+          }`}
         >
-          <LayoutGrid className="w-4 h-4" />
+          <LayoutGrid className={`w-4 h-4 ${currentView === 'archive' ? 'text-[#E50914]' : ''}`} />
           <span>الأقسام</span>
         </button>
         <button
           type="button"
           onClick={onOpenWatchlist}
-          className="flex flex-col items-center justify-center gap-0.5 text-[10px] font-bold text-[#a3a3a3]"
+          className="relative flex flex-col items-center justify-center gap-0.5 py-1.5 text-[10px] font-bold text-[#a3a3a3] cursor-pointer"
         >
-          <Bookmark className="w-4 h-4 text-[#f9c400]" />
+          <span className="relative inline-flex">
+            <Bookmark className="w-4 h-4 text-[#f9c400]" />
+            {watchlistCount > 0 && (
+              <span className="font-latin absolute -top-1.5 -left-2.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#E50914] px-1 text-[9px] font-black text-white tabular-nums">
+                {watchlistCount}
+              </span>
+            )}
+          </span>
           <span>قائمتي</span>
         </button>
         <button
           type="button"
           onClick={() => setMobileMenuOpen(true)}
-          className="flex flex-col items-center justify-center gap-0.5 text-[10px] font-bold text-[#a3a3a3]"
+          className="flex flex-col items-center justify-center gap-0.5 py-1.5 text-[10px] font-bold text-[#a3a3a3] cursor-pointer"
         >
           <Menu className="w-4 h-4" />
           <span>القائمة</span>

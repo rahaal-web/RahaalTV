@@ -137,11 +137,11 @@ export function MediaPreviewModal({
       className="fixed inset-0 z-[55] flex items-center justify-center p-2 sm:p-4"
     >
       <div className="fixed inset-0 bg-black/90 backdrop-blur-md" onClick={onClose} />
-      <div className="rtv-site-preview relative z-10 w-[96vw] max-w-6xl max-h-[94vh] flex flex-col rounded-3xl bg-[#06131c] border border-[#f9c400]/35 shadow-2xl overflow-hidden">
+      <div className="rtv-site-preview relative z-10 w-[96vw] sm:w-[95vw] max-w-6xl max-h-[94vh] flex flex-col rounded-2xl sm:rounded-3xl bg-[#06131c] border border-[#f9c400]/35 shadow-2xl overflow-hidden">
         {/* Top Preview Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-3 bg-[#1a242e] px-5 py-3 border-b border-white/10">
-          <div className="flex flex-wrap items-center gap-2.5 min-w-0">
-            <span className="inline-flex items-center gap-1.5 rounded-lg bg-[#f9c400] px-2.5 py-1 text-[11px] font-black text-[#06131c]">
+        <div className="flex flex-wrap items-center justify-between gap-2.5 sm:gap-3 bg-[#1a242e] px-3.5 py-3 sm:px-5 border-b border-white/10">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 min-w-0 flex-1">
+            <span className="inline-flex items-center gap-1.5 rounded-lg bg-[#f9c400] px-2.5 py-1 text-[11px] font-black text-[#06131c] shrink-0">
               <Eye className="w-3.5 h-3.5" />
               <span>معاينة قبل النشر</span>
             </span>
@@ -153,13 +153,13 @@ export function MediaPreviewModal({
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between sm:justify-end gap-2 w-full sm:w-auto">
             {/* Switch between Page Preview and Card Preview */}
-            <div className="flex rounded-xl bg-[#0c1821] p-1 border border-white/10">
+            <div className="flex flex-1 sm:flex-none rounded-xl bg-[#0c1821] p-1 border border-white/10">
               <button
                 type="button"
                 onClick={() => setPreviewMode('page')}
-                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-extrabold cursor-pointer ${
+                className={`flex-1 sm:flex-none justify-center inline-flex items-center gap-1.5 rounded-lg px-3 min-h-[36px] sm:min-h-0 py-1 text-xs font-extrabold cursor-pointer whitespace-nowrap ${
                   previewMode === 'page'
                     ? 'bg-[#D92321] text-white'
                     : 'text-[#b7c9ef] hover:text-white'
@@ -171,7 +171,7 @@ export function MediaPreviewModal({
               <button
                 type="button"
                 onClick={() => setPreviewMode('card')}
-                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-extrabold cursor-pointer ${
+                className={`flex-1 sm:flex-none justify-center inline-flex items-center gap-1.5 rounded-lg px-3 min-h-[36px] sm:min-h-0 py-1 text-xs font-extrabold cursor-pointer whitespace-nowrap ${
                   previewMode === 'card'
                     ? 'bg-[#D92321] text-white'
                     : 'text-[#b7c9ef] hover:text-white'
@@ -185,7 +185,7 @@ export function MediaPreviewModal({
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-white/10 text-white hover:bg-[#D92321] cursor-pointer"
+              className="inline-flex h-10 w-10 sm:h-8 sm:w-8 items-center justify-center rounded-xl bg-white/10 text-white hover:bg-[#D92321] cursor-pointer shrink-0"
               aria-label="إغلاق المعاينة"
             >
               <X className="w-4 h-4" />
@@ -258,18 +258,24 @@ export function MediaPreviewModal({
                     </p>
                   </div>
 
-                  <div className="inline-flex items-center gap-3 self-start md:self-end rounded-2xl bg-[#1a242e]/95 border border-[#f9c400]/35 px-4 py-2.5 shadow-xl">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f9c400] text-[#06131c]">
+                  <div className="inline-flex items-center gap-3 self-start md:self-end rounded-2xl bg-[#1a242e]/95 border border-[#4CAF50]/35 px-4 py-2.5 shadow-xl">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#4CAF50]/20 border border-[#4CAF50]/40 text-[#f9c400]">
                       <Star className="w-5 h-5 fill-current" />
                     </div>
                     <div>
-                      <div className="flex items-baseline gap-1">
-                        <span className="font-latin text-xl font-black text-white">
-                          {(Number(item.imdb) || 7.5).toFixed(1)}
+                      <div dir="ltr" className="inline-flex items-baseline gap-1">
+                        <span className="font-latin text-xl font-black text-white tabular-nums">
+                          {item.communityRating && item.communityRating.count > 0
+                            ? item.communityRating.average.toFixed(1)
+                            : '—'}
                         </span>
-                        <span className="font-latin text-xs font-bold text-[#b7c9ef]">/ 10</span>
+                        <span className="font-latin text-xs font-bold text-[#b7c9ef]">/ 5</span>
                       </div>
-                      <p className="font-latin text-[10px] font-bold text-[#b7c9ef]">IMDb</p>
+                      <p className="text-[10px] font-bold text-[#b7c9ef]">
+                        {item.communityRating && item.communityRating.count > 0
+                          ? `${item.communityRating.count} تقييم المشاهدين`
+                          : 'تقييم المشاهدين'}
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -568,15 +574,15 @@ export function MediaPreviewModal({
         </div>
 
         {/* Footer Actions */}
-        <div className="flex flex-wrap items-center justify-between gap-3 bg-[#1a242e] px-5 py-3.5 border-t border-white/10">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-[#1a242e] px-3.5 py-3 sm:px-5 sm:py-3.5 border-t border-white/10">
           <p className="text-xs text-[#b7c9ef]">
             راجع البيانات والصورة والسيرفرات قبل اعتماد النشر النهائي.
           </p>
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-2 sm:gap-2.5">
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 hover:bg-white/15 px-4 py-2.5 text-xs font-extrabold text-white cursor-pointer"
+              className="min-h-[42px] inline-flex items-center justify-center gap-1.5 rounded-xl bg-white/10 hover:bg-white/15 px-4 py-2.5 text-xs font-extrabold text-white cursor-pointer"
             >
               <Edit3 className="w-3.5 h-3.5" />
               <span>العودة للتعديل</span>
@@ -586,7 +592,7 @@ export function MediaPreviewModal({
                 type="button"
                 disabled={busy}
                 onClick={onConfirmPublish}
-                className="inline-flex items-center gap-2 rounded-xl bg-[#4CAF50] hover:bg-[#43a047] disabled:opacity-50 px-5 py-2.5 text-xs font-extrabold text-white shadow-lg cursor-pointer"
+                className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#4CAF50] hover:bg-[#43a047] disabled:opacity-50 px-5 py-2.5 text-xs font-extrabold text-white shadow-lg cursor-pointer"
               >
                 <CheckCircle2 className="w-4 h-4" />
                 <span>{busy ? 'جاري النشر...' : publishLabel}</span>

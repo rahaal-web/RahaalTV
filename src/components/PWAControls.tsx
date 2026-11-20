@@ -82,7 +82,7 @@ export function PWAInstallButton({ variant = 'header', onAfterClick }: PWAInstal
                   type="button"
                   onClick={() => setShowIOSGuide(false)}
                   aria-label="إغلاق"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/5 text-white/80 hover:bg-[#E50914] hover:text-white cursor-pointer"
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white/5 text-white/80 hover:bg-[#E50914] hover:text-white cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -108,7 +108,7 @@ export function PWAInstallButton({ variant = 'header', onAfterClick }: PWAInstal
               <button
                 type="button"
                 onClick={() => setShowIOSGuide(false)}
-                className="mt-5 w-full rounded-xl bg-[#E50914] hover:bg-[#f40612] py-2.5 text-xs font-extrabold text-white transition-colors cursor-pointer"
+                className="mt-5 w-full min-h-[44px] rounded-xl bg-[#E50914] hover:bg-[#f40612] py-2.5 text-xs font-extrabold text-white transition-colors cursor-pointer"
               >
                 حسنًا
               </button>
@@ -130,7 +130,7 @@ export function OfflineIndicator() {
   return (
     <div
       role="status"
-      className="fixed bottom-20 sm:bottom-6 left-4 sm:left-6 z-50 inline-flex items-center gap-2 rounded-2xl bg-[#f9c400] px-4 py-2.5 text-xs font-black text-[#0f0f0f] shadow-2xl border border-black/15"
+      className="fixed bottom-20 inset-x-4 sm:inset-x-auto sm:bottom-6 sm:left-6 z-50 inline-flex items-center justify-center sm:justify-start gap-2 rounded-2xl bg-[#f9c400] px-4 py-2.5 text-xs font-black text-[#0f0f0f] shadow-2xl border border-black/15"
     >
       <WifiOff className="w-4 h-4 shrink-0" />
       <span>وضع عدم الاتصال — يتم عرض البيانات المخزنة مؤقتًا</span>

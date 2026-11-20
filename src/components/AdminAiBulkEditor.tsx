@@ -843,8 +843,10 @@ export function AdminAiBulkEditor({
                           {item.title}
                         </p>
                         <p className="text-[11px] text-[#b7c9ef] truncate">
-                          {KIND_LABELS[item.kind]} • {item.year} • {item.quality} • IMDb{' '}
-                          {item.imdb.toFixed(1)}
+                          {KIND_LABELS[item.kind]} • {item.year} • {item.quality}
+                          {item.communityRating && item.communityRating.count > 0
+                            ? ` • ★ ${item.communityRating.average.toFixed(1)}/5`
+                            : ''}
                         </p>
                       </div>
                     </div>

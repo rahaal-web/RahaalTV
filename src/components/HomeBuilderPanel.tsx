@@ -48,7 +48,7 @@ const SOURCE_OPTIONS: Array<{ value: HomeSectionSource; label: string }> = [
   { value: 'latest', label: 'أحدث الإضافات' },
   { value: 'movies', label: 'الأفلام' },
   { value: 'series', label: 'المسلسلات والبرامج' },
-  { value: 'top_rated', label: 'الأعلى تقييماً (IMDb)' },
+  { value: 'top_rated', label: 'الأعلى تقييماً (تقييم المشاهدين)' },
   { value: 'trending', label: 'الأكثر مشاهدة' },
   { value: 'ramadan', label: 'رمضان 2026' },
   { value: 'wrestling', label: 'مصارعة حرة' },

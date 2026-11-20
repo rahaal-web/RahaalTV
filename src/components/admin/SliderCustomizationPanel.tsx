@@ -88,7 +88,7 @@ const ELEMENT_TOGGLES: Array<{
   desc: string;
 }> = [
   { key: 'heroShowBadge', label: 'شارة السلايدر العلوية', desc: 'مثال: اختيار المحررين' },
-  { key: 'heroShowRating', label: 'تقييم IMDb', desc: 'عرض نجمة التقييم والدرجة' },
+  { key: 'heroShowRating', label: 'تقييم المشاهدين', desc: 'عرض نجمة تقييم المشاهدين والدرجة من 5' },
   { key: 'heroShowYear', label: 'سنة الإنتاج', desc: 'عرض سنة الإصدار في السطر التعريفي' },
   { key: 'heroShowDuration', label: 'مدة العرض / الحلقات', desc: 'المدة الزمنية أو عدد الحلقات' },
   { key: 'heroShowQuality', label: 'شارة الجودة (4K / WEB-DL)', desc: 'عرض شارة جودة النسخة' },
@@ -399,7 +399,11 @@ export function SliderCustomizationPanel({
                   {draft.heroShowRating && (
                     <span className="inline-flex items-center gap-1 font-latin font-bold text-[#f9c400]">
                       <Star className="w-3.5 h-3.5 fill-current" />
-                      {activeSlide?.imdb || 8.4}
+                      <span dir="ltr">
+                        {activeSlide?.communityRating && activeSlide.communityRating.count > 0
+                          ? `${activeSlide.communityRating.average.toFixed(1)}/5`
+                          : '5.0/5'}
+                      </span>
                     </span>
                   )}
                   {draft.heroShowYear && (

@@ -97,23 +97,23 @@ export function SearchDrawer({
       {/* Left-anchored Slide-Over Panel (800px max width matching .search drawer) */}
       <div className="relative z-10 flex h-full w-full max-w-[800px] flex-col bg-[#0c1821] border-r border-white/10 shadow-2xl">
         {/* Top Search Bar Header */}
-        <div className="border-b border-white/10 bg-[#1a242e] p-5 sm:p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="font-display text-lg font-extrabold text-white">البحث السريع في RahaL TV</h2>
-              <p className="text-xs text-[#b7c9ef]">ابحث باسم الفيلم أو المسلسل أو التصنيف أو السنة</p>
+        <div className="border-b border-white/10 bg-[#1a242e] px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))] sm:p-6">
+          <div className="flex items-center justify-between gap-3 mb-3.5 sm:mb-4">
+            <div className="min-w-0">
+              <h2 className="font-display text-base sm:text-lg font-extrabold text-white truncate">البحث السريع في RahaL TV</h2>
+              <p className="text-[11px] sm:text-xs text-[#b7c9ef]">ابحث باسم الفيلم أو المسلسل أو التصنيف أو السنة</p>
             </div>
             <button
               type="button"
               onClick={onClose}
               aria-label="إغلاق نافذة البحث"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.06] text-white hover:bg-[#D92321] transition-colors cursor-pointer"
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/[0.06] text-white hover:bg-[#D92321] transition-colors cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
 
-          <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3">
             <div className="relative flex-1">
               <Search className="w-4 h-4 text-[#D92321] absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
@@ -122,7 +122,7 @@ export function SearchDrawer({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="أبحث عن فيلم او مسلسل..."
-                className="w-full rounded-xl bg-[#06131c] border border-white/10 pr-11 pl-4 py-3 text-sm font-semibold text-white placeholder:text-[#b7c9ef]/50 focus:border-[#D92321] focus:outline-none"
+                className="w-full min-h-[46px] rounded-xl bg-[#06131c] border border-white/10 pr-11 pl-4 py-3 text-sm font-semibold text-white placeholder:text-[#b7c9ef]/50 focus:border-[#D92321] focus:outline-none"
               />
             </div>
 
@@ -130,7 +130,7 @@ export function SearchDrawer({
               value={category}
               onChange={(e) => setCategory(e.target.value)}
               aria-label="تصفية البحث حسب القسم"
-              className="rounded-xl bg-[#06131c] border border-white/10 px-4 py-3 text-sm font-bold text-white focus:border-[#D92321] focus:outline-none cursor-pointer"
+              className="min-h-[46px] rounded-xl bg-[#06131c] border border-white/10 px-4 py-3 text-sm font-bold text-white focus:border-[#D92321] focus:outline-none cursor-pointer"
             >
               {SEARCH_CATS.map((cat) => (
                 <option key={cat.label} value={cat.value}>
@@ -142,8 +142,8 @@ export function SearchDrawer({
         </div>
 
         {/* Results Grid */}
-        <div className="flex-1 overflow-y-auto p-5 sm:p-6">
-          <div className="flex items-center justify-between mb-4">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+          <div className="flex items-center justify-between gap-2 mb-3.5 sm:mb-4">
             <span className="text-xs font-bold text-[#b7c9ef]">
               {isSearching ? (
                 <span className="inline-flex items-center gap-2 text-white">
@@ -162,7 +162,7 @@ export function SearchDrawer({
                   onViewAllResults(debouncedQuery, category);
                   onClose();
                 }}
-                className="inline-flex items-center gap-1.5 text-xs font-extrabold text-[#D92321] hover:text-white transition-colors cursor-pointer"
+                className="inline-flex min-h-[38px] items-center gap-1.5 text-xs font-extrabold text-[#D92321] hover:text-white transition-colors cursor-pointer"
               >
                 <span>عرض كل النتائج ({results.length})</span>
                 <ArrowLeft className="w-3.5 h-3.5" />
@@ -205,10 +205,12 @@ export function SearchDrawer({
                       <span className="font-latin rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-white">
                         {item.quality}
                       </span>
-                      <span className="font-latin inline-flex items-center gap-1 text-[11px] font-bold text-[#f9c400]">
-                        <Star className="w-3 h-3 fill-[#f9c400]" />
-                        {Number(item.imdb || 7.5).toFixed(1)}
-                      </span>
+                      {item.communityRating && item.communityRating.count > 0 && (
+                        <span className="font-latin inline-flex items-center gap-1 text-[11px] font-bold text-[#f9c400]">
+                          <Star className="w-3 h-3 fill-[#f9c400]" />
+                          <span dir="ltr">{item.communityRating.average.toFixed(1)}/5</span>
+                        </span>
+                      )}
                     </div>
                     <h3 className="font-display text-sm font-bold text-white group-hover:text-[#D92321] transition-colors truncate">
                       {item.title}
