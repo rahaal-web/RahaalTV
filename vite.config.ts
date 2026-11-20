@@ -62,6 +62,18 @@ export default defineConfig(() => {
           navigateFallbackDenylist: [/^\/api\//],
           runtimeCaching: [
             {
+              urlPattern: /^\/api\/.*/i,
+              handler: 'NetworkOnly',
+            },
+            {
+              urlPattern: /\.(?:m3u8|mp4|ts|webm|mpd)(\?.*)?$/i,
+              handler: 'NetworkOnly',
+            },
+            {
+              urlPattern: /^https:\/\/(?:firestore|identitytoolkit|securetoken)\.googleapis\.com\/.*/i,
+              handler: 'NetworkOnly',
+            },
+            {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
               handler: 'CacheFirst',
               options: {

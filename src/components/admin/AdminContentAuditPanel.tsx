@@ -286,11 +286,13 @@ export function AdminContentAuditPanel({
                         <h4 className="text-sm font-extrabold text-white">{group.title}</h4>
                         <span className="text-[11px] text-[#b7c9ef]">
                           (
-                          {group.matchReason === 'title_cross_year'
-                            ? 'تشابه اسم مع اختلاف السنة'
-                            : group.matchReason === 'english_title_match'
-                              ? 'تطابق بالاسم الإنجليزي/العربي'
-                              : `سنة ${group.year}`}
+                          {group.matchReason === 'tmdb_id_match'
+                            ? 'تطابق معرف TMDB'
+                            : group.matchReason === 'title_cross_year'
+                              ? 'تشابه اسم مع اختلاف السنة'
+                              : group.matchReason === 'english_title_match'
+                                ? 'تطابق بالاسم الإنجليزي/العربي'
+                                : `سنة ${group.year}`}
                           )
                         </span>
                       </div>

@@ -313,6 +313,12 @@ import {
   saveStoredWebsiteBranding,
 } from '../lib/websiteBranding';
 import {
+  enqueueMediaHealthChecks,
+  enqueueSeasonHealthChecks,
+  loadLocalServerHealthCache,
+  subscribeServerHealthQueue,
+} from '../lib/serverHealthQueue';
+import {
   AdminPrivilegeRole,
   AdminRoleRecord,
   CastMember,
@@ -328,7 +334,9 @@ import {
   RequestStatus,
   ScraperAdapter,
   SeasonItem,
+  ServerHealthRecord,
   SiteSettings,
+  SkipSegmentsConfig,
   StreamServer,
   TypographyConfig,
   UserProfileRecord,
@@ -446,6 +454,7 @@ interface AdminDashboardViewProps {
   usersList: UserProfileRecord[];
   adminsList: AdminRoleRecord[];
   siteSettings: SiteSettings;
+  serverHealthMap?: Record<string, ServerHealthRecord>;
   customFonts?: Partial<Record<CustomFontSlot, CustomFontRecord>>;
   onCustomFontsChange?: (next: Partial<Record<CustomFontSlot, CustomFontRecord>>) => void;
   onPopupShieldChange?: (next: PopupShieldConfig) => void;
@@ -750,6 +759,7 @@ export function AdminDashboardView({
   usersList,
   adminsList,
   siteSettings,
+  serverHealthMap: externalServerHealthMap,
   customFonts,
   onCustomFontsChange,
   onPopupShieldChange,
@@ -1183,8 +1193,30 @@ export function AdminDashboardView({
   const [editingScrapedServerIdx, setEditingScrapedServerIdx] = useState<number | null>(null);
   const [fetchingTrailer, setFetchingTrailer] = useState(false);
   const [fetchingHqImages, setFetchingHqImages] = useState(false);
+  const [enrichingTmdb, setEnrichingTmdb] = useState(false);
   const [probingEditorImages, setProbingEditorImages] = useState(false);
   const [editorImageProposal, setEditorImageProposal] = useState<ResolvedImageBundle | null>(null);
+  const [localHealthCache, setLocalHealthCache] = useState<Record<string, ServerHealthRecord>>(() =>
+    loadLocalServerHealthCache()
+  );
+
+  useEffect(() => {
+    const unsub = subscribeServerHealthQueue((_state, map) => {
+      setLocalHealthCache(map);
+    });
+    return () => unsub();
+  }, []);
+
+  const effectiveServerHealthMap = useMemo<Record<string, ServerHealthRecord>>(() => {
+    const merged: Record<string, ServerHealthRecord> = { ...(externalServerHealthMap || {}) };
+    for (const [u, rec] of Object.entries(localHealthCache)) {
+      const ex = merged[u];
+      if (!ex || (rec.lastCheckedAtMs || 0) >= (ex.lastCheckedAtMs || 0)) {
+        merged[u] = rec;
+      }
+    }
+    return merged;
+  }, [externalServerHealthMap, localHealthCache]);
 
   // Site-Wide Bulk Crawler states (Entire Website)
   const [siteScrapeMode, setSiteScrapeMode] = useState<'url' | 'html'>('url');
@@ -1819,6 +1851,7 @@ export function AdminDashboardView({
         activeActorUid,
         !existsInDb
       );
+      enqueueMediaHealthChecks(verification.cleanedItem, activeActorUid, true);
       const removedNote =
         verification.removedCount > 0
           ? ` (تم منع واستبعاد ${verification.removedCount} سيرفر معطل أو صفحة موقع تلقائياً)`
@@ -1839,6 +1872,62 @@ export function AdminDashboardView({
       onNotify(formatFirestoreWriteError(err, 'حدث خطأ أثناء الحفظ في Firestore'));
     } finally {
       setBusyAction(false);
+    }
+  };
+
+  const handleEnrichMetadataFromTmdb = async () => {
+    if (!editingItem || enrichingTmdb) return;
+    if (!editingItem.title.trim() && !editingItem.englishTitle.trim()) {
+      onNotify('أدخل اسم العمل بالعربية أو الإنجليزية قبل الجلب من TMDB.');
+      return;
+    }
+    setEnrichingTmdb(true);
+    try {
+      const response = await fetch(resolveApiEndpoint('/api/metadata/tmdb-enrich'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: editingItem.title,
+          englishTitle: editingItem.englishTitle,
+          year: editingItem.year,
+          kind: editingItem.kind,
+        }),
+      });
+      const json = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        enrichment?: {
+          tmdbId?: number;
+          director?: string;
+          writer?: string;
+          ageRating?: string;
+          imdb?: number;
+          votes?: string;
+        };
+      };
+      if (!response.ok || !json.ok || !json.enrichment) {
+        onNotify(json.error || 'تعذر العثور على بيانات مطابقة في TMDB.');
+        return;
+      }
+      const info = json.enrichment;
+      setEditingItem((prev) =>
+        prev
+          ? {
+              ...prev,
+              tmdbId: prev.tmdbId || info.tmdbId,
+              director: prev.director || info.director || '',
+              writer: prev.writer || info.writer || '',
+              ageRating: prev.ageRating || info.ageRating || '',
+              imdb: prev.imdb > 0 ? prev.imdb : info.imdb || prev.imdb,
+              votes: prev.votes && prev.votes !== '0' ? prev.votes : info.votes || prev.votes,
+            }
+          : prev
+      );
+      onNotify('تم تحديث الحقول الفارغة ببيانات TMDB الحقيقية بنجاح.');
+    } catch {
+      onNotify('تعذر الاتصال بخدمة إثراء بيانات TMDB حالياً.');
+    } finally {
+      setEnrichingTmdb(false);
     }
   };
 
@@ -2063,6 +2152,7 @@ export function AdminDashboardView({
       }
 
       const saveResult = await saveMediaToFirestore(verification.cleanedItem, activeActorUid, true);
+      enqueueMediaHealthChecks(verification.cleanedItem, activeActorUid, true);
       const removedNote =
         verification.removedCount > 0
           ? ` (تم حظر ${verification.removedCount} سيرفر معطل أو صفحة موقع)`
@@ -2303,6 +2393,9 @@ export function AdminDashboardView({
       }
 
       const count = await bulkSaveMediaToFirestore(readyItems, activeActorUid);
+      for (const saved of readyItems) {
+        enqueueMediaHealthChecks(saved, activeActorUid, true);
+      }
       const extraNotes: string[] = [];
       if (strippedServersCount > 0) {
         extraNotes.push(`استُبعد ${strippedServersCount} سيرفر معطل/موقع`);
@@ -4415,6 +4508,7 @@ export function AdminDashboardView({
                 <AdminNotificationsPanel
                   catalog={catalog}
                   requests={requests}
+                  adminUid={activeActorUid}
                   isOwner={isOwner}
                   isFirestoreSeeded={isFirestoreSeeded}
                   onNavigateTab={navigateToTab}
@@ -4445,6 +4539,7 @@ export function AdminDashboardView({
                   tablePrefs={workspacePrefs.catalogTable}
                   onUpdateTablePrefs={updateCatalogTablePrefs}
                   serverStatuses={serverStatuses}
+                  serverHealthMap={effectiveServerHealthMap}
                   checkingCatalogLinks={checkingCatalogLinks}
                   onCheckCatalogLinks={async () => {
                     const urls = filteredCatalog
@@ -4538,6 +4633,8 @@ export function AdminDashboardView({
                   <AdminWatchServersPanel
                     mode="watch_servers"
                     catalog={catalog}
+                    adminUid={activeActorUid}
+                    serverHealthMap={effectiveServerHealthMap}
                     activePlayerTheme={activePlayerTheme}
                     busyAction={busyAction}
                     onEditMedia={openEditorForExisting}
@@ -4551,6 +4648,8 @@ export function AdminDashboardView({
                 <AdminWatchServersPanel
                   mode="player_theme"
                   catalog={catalog}
+                  adminUid={activeActorUid}
+                  serverHealthMap={effectiveServerHealthMap}
                   activePlayerTheme={activePlayerTheme}
                   busyAction={busyAction}
                   onEditMedia={openEditorForExisting}
@@ -5311,32 +5410,79 @@ export function AdminDashboardView({
                             ممثلون:{' '}
                             <strong className="text-white">{scrapedResult.cast.length}</strong>
                           </p>
-                          {(scrapedResult.seasons || []).some((s) => (s.episodes?.length || 0) > 0) && (
-                            <div className="max-h-40 overflow-y-auto space-y-1.5 pt-1 border-t border-white/10">
-                              {(scrapedResult.seasons || []).map((season) => (
-                                <div key={season.seasonNumber} className="space-y-1">
-                                  {(scrapedResult.seasons?.length || 0) > 1 && (
-                                    <p className="text-[10px] font-extrabold text-[#f9c400] px-1">
-                                      {season.label} ({season.episodes.length} حلقة)
+                          {(scrapedResult.seasons || []).some((s) => (s.episodes?.length || 0) > 0) && (() => {
+                            const seasonGaps = (scrapedResult.seasons || [])
+                              .map((s) => {
+                                const nums = (s.episodes || [])
+                                  .map((e) => Number(e.number))
+                                  .filter((n) => Number.isFinite(n) && n > 0)
+                                  .sort((a, b) => a - b);
+                                if (nums.length < 2) return null;
+                                const missing: number[] = [];
+                                const set = new Set(nums);
+                                const maxN = nums[nums.length - 1];
+                                for (let n = 1; n <= maxN; n++) {
+                                  if (!set.has(n)) missing.push(n);
+                                }
+                                return missing.length > 0 ? { season: s.seasonNumber, missing } : null;
+                              })
+                              .filter((x): x is { season: number; missing: number[] } => Boolean(x));
+
+                            return (
+                              <>
+                                {seasonGaps.length > 0 && (
+                                  <div className="rounded-xl bg-[#f9c400]/15 border border-[#f9c400]/35 px-2.5 py-2 text-[10px] text-[#fde68a] space-y-1">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <span className="font-extrabold">
+                                        تنبيه اكتمال المسلسل: توجد حلقات مفقودة
+                                      </span>
+                                      {scrapeMode === 'url' && scrapeUrl.trim() && (
+                                        <button
+                                          type="button"
+                                          disabled={scraping}
+                                          onClick={(ev) => {
+                                            void handleScrapeSubmit(ev as unknown as FormEvent);
+                                          }}
+                                          className="rounded-md bg-[#f9c400] px-2 py-0.5 text-[10px] font-black text-[#06131c] cursor-pointer"
+                                        >
+                                          إعادة محاولة الجلب
+                                        </button>
+                                      )}
+                                    </div>
+                                    <p className="font-bold">
+                                      {seasonGaps
+                                        .map((g) => `موسم ${g.season}: ناقص (${g.missing.slice(0, 10).join(', ')})`)
+                                        .join(' | ')}
                                     </p>
-                                  )}
-                                  {season.episodes.map((ep) => (
-                                    <div
-                                      key={`${season.seasonNumber}-${ep.number}`}
-                                      className="flex items-center justify-between text-[10px] text-[#b7c9ef] bg-[#0c1821]/70 rounded-lg px-2 py-1"
-                                    >
-                                      <span className="truncate font-bold text-white">
-                                        {ep.title || `الحلقة ${ep.number}`}
-                                      </span>
-                                      <span className="shrink-0 font-bold text-[#4CAF50] tabular-nums">
-                                        {ep.servers?.length || (ep.watchUrl ? 1 : 0)} سيرفر
-                                      </span>
+                                  </div>
+                                )}
+                                <div className="max-h-40 overflow-y-auto space-y-1.5 pt-1 border-t border-white/10">
+                                  {(scrapedResult.seasons || []).map((season) => (
+                                    <div key={season.seasonNumber} className="space-y-1">
+                                      {(scrapedResult.seasons?.length || 0) > 1 && (
+                                        <p className="text-[10px] font-extrabold text-[#f9c400] px-1">
+                                          {season.label} ({season.episodes.length} حلقة)
+                                        </p>
+                                      )}
+                                      {season.episodes.map((ep) => (
+                                        <div
+                                          key={`${season.seasonNumber}-${ep.number}`}
+                                          className="flex items-center justify-between text-[10px] text-[#b7c9ef] bg-[#0c1821]/70 rounded-lg px-2 py-1"
+                                        >
+                                          <span className="truncate font-bold text-white">
+                                            {ep.title || `الحلقة ${ep.number}`}
+                                          </span>
+                                          <span className="shrink-0 font-bold text-[#4CAF50] tabular-nums">
+                                            {ep.servers?.length || (ep.watchUrl ? 1 : 0)} سيرفر
+                                          </span>
+                                        </div>
+                                      ))}
                                     </div>
                                   ))}
                                 </div>
-                              ))}
-                            </div>
-                          )}
+                              </>
+                            );
+                          })()}
                         </div>
                       </div>
                     </div>
@@ -6891,6 +7037,134 @@ export function AdminDashboardView({
                     </div>
                   </div>
 
+                  {/* Metadata Credits, Age Rating & Optional Skip Timestamps */}
+                  <div className="rounded-2xl bg-[#1a242e]/60 border border-white/[0.08] p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs font-extrabold text-white">
+                        طاقم الإخراج والتصنيف العمري وتوقيتات التخطي (TMDB &amp; Skip Segments)
+                      </span>
+                      <button
+                        type="button"
+                        disabled={enrichingTmdb}
+                        onClick={() => void handleEnrichMetadataFromTmdb()}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-[#f9c400] hover:bg-[#dfb20b] disabled:opacity-50 px-3 py-1.5 text-[11px] font-black text-[#06131c] cursor-pointer"
+                      >
+                        {enrichingTmdb ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Sparkles className="w-3.5 h-3.5" />
+                        )}
+                        <span>{enrichingTmdb ? 'جاري الجلب...' : 'جلب من TMDB'}</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">المخرج</label>
+                        <input
+                          type="text"
+                          value={editingItem.director || ''}
+                          onChange={(e) =>
+                            setEditingItem({ ...editingItem, director: e.target.value })
+                          }
+                          placeholder="اسم المخرج"
+                          className="w-full rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-xs text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">المؤلف / الكاتب</label>
+                        <input
+                          type="text"
+                          value={editingItem.writer || ''}
+                          onChange={(e) =>
+                            setEditingItem({ ...editingItem, writer: e.target.value })
+                          }
+                          placeholder="اسم المؤلف"
+                          className="w-full rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-xs text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">التصنيف العمري</label>
+                        <select
+                          value={editingItem.ageRating || ''}
+                          onChange={(e) =>
+                            setEditingItem({ ...editingItem, ageRating: e.target.value })
+                          }
+                          className="w-full rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-xs text-white"
+                        >
+                          <option value="">غير محدد</option>
+                          <option value="G">G (عائلي)</option>
+                          <option value="PG">PG (إشراف عائلي)</option>
+                          <option value="PG-13">PG-13 (+13)</option>
+                          <option value="R">R (+17)</option>
+                          <option value="+18">+18 (للكبار فقط)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">معرف TMDB ID</label>
+                        <input
+                          type="number"
+                          dir="ltr"
+                          value={editingItem.tmdbId || ''}
+                          onChange={(e) =>
+                            setEditingItem({
+                              ...editingItem,
+                              tmdbId: e.target.value ? Number(e.target.value) : undefined,
+                            })
+                          }
+                          placeholder="123456"
+                          className="font-latin w-full rounded-xl bg-[#0c1821] border border-white/10 px-3 py-2 text-xs text-white"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-white/[0.06] space-y-2">
+                      <p className="text-[11px] font-bold text-[#b7c9ef]">
+                        توقيتات التخطي الاختيارية بالثواني (لا تظهر أزرار التخطي للمشاهد إلا عند ضبطها هنا)
+                      </p>
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                        {(
+                          [
+                            { key: 'introStartSec', label: 'بداية المقدمة' },
+                            { key: 'introEndSec', label: 'نهاية المقدمة' },
+                            { key: 'recapStartSec', label: 'بداية الملخص' },
+                            { key: 'recapEndSec', label: 'نهاية الملخص' },
+                            { key: 'nextSceneSec', label: 'تخطي المشهد (ثانية)' },
+                          ] as Array<{ key: keyof SkipSegmentsConfig; label: string }>
+                        ).map((field) => (
+                          <div key={field.key}>
+                            <label className="block text-[10px] font-bold text-[#9fb2d4] mb-1">
+                              {field.label}
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              dir="ltr"
+                              value={editingItem.skipSegments?.[field.key] ?? ''}
+                              onChange={(e) => {
+                                const val = e.target.value === '' ? undefined : Math.max(0, Number(e.target.value));
+                                const nextSkip: SkipSegmentsConfig = {
+                                  ...(editingItem.skipSegments || {}),
+                                };
+                                if (val === undefined) {
+                                  delete nextSkip[field.key];
+                                } else {
+                                  nextSkip[field.key] = val;
+                                }
+                                setEditingItem({
+                                  ...editingItem,
+                                  skipSegments: Object.keys(nextSkip).length > 0 ? nextSkip : undefined,
+                                });
+                              }}
+                              placeholder="—"
+                              className="font-latin w-full rounded-lg bg-[#0c1821] border border-white/10 px-2.5 py-1.5 text-xs text-white"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Dual High-Res Poster (2:3) + Backdrop (16:9) Section */}
                   {(() => {
                     const currentPosterUrl = getPosterUrl(editingItem);
@@ -7688,6 +7962,27 @@ export function AdminDashboardView({
 
                                 <button
                                   type="button"
+                                  onClick={() => {
+                                    const { enqueuedCount } = enqueueSeasonHealthChecks(
+                                      editingItem,
+                                      season.seasonNumber,
+                                      activeActorUid,
+                                      true
+                                    );
+                                    onNotify(
+                                      enqueuedCount > 0
+                                        ? `تمت جدولة فحص ${enqueuedCount} سيرفر لحلقات ${season.label}`
+                                        : 'لا توجد روابط سيرفرات مجدولة في هذا الموسم.'
+                                    );
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-lg bg-[#0c1821] text-sky-300 hover:bg-sky-500/20 border border-sky-400/30 px-2.5 py-1.5 text-[11px] font-bold cursor-pointer"
+                                >
+                                  <RefreshCw className="w-3 h-3" />
+                                  <span>فحص الموسم</span>
+                                </button>
+
+                                <button
+                                  type="button"
                                   onClick={() => removeSeason(sIdx)}
                                   className="inline-flex items-center gap-1 rounded-lg bg-[#0c1821] text-[#D92321] hover:bg-[#D92321] hover:text-white px-2.5 py-1.5 text-[11px] font-bold cursor-pointer"
                                 >
@@ -7851,13 +8146,91 @@ export function AdminDashboardView({
                                                 </div>
                                               );
                                             })}
+                                            </div>
+                                          )}
+
+                                          <div className="pt-2 border-t border-white/10 space-y-1.5">
+                                            <p className="text-[10px] font-extrabold text-[#b7c9ef]">
+                                              مقاطع التخطي الاختيارية للحلقة (بالثواني — تترك فارغة إن لم تحدد)
+                                            </p>
+                                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
+                                              <input
+                                                type="number"
+                                                min={0}
+                                                dir="ltr"
+                                                value={ep.skipSegments?.introStartSec ?? ''}
+                                                onChange={(e) => {
+                                                  const v = e.target.value === '' ? undefined : Math.max(0, Number(e.target.value));
+                                                  updateEpisode(sIdx, epIdx, {
+                                                    skipSegments: { ...(ep.skipSegments || {}), introStartSec: v },
+                                                  });
+                                                }}
+                                                placeholder="بداية المقدمة"
+                                                className="font-latin rounded-lg bg-[#0c1821] border border-white/10 px-2 py-1 text-[11px] text-white"
+                                              />
+                                              <input
+                                                type="number"
+                                                min={0}
+                                                dir="ltr"
+                                                value={ep.skipSegments?.introEndSec ?? ''}
+                                                onChange={(e) => {
+                                                  const v = e.target.value === '' ? undefined : Math.max(0, Number(e.target.value));
+                                                  updateEpisode(sIdx, epIdx, {
+                                                    skipSegments: { ...(ep.skipSegments || {}), introEndSec: v },
+                                                  });
+                                                }}
+                                                placeholder="نهاية المقدمة"
+                                                className="font-latin rounded-lg bg-[#0c1821] border border-white/10 px-2 py-1 text-[11px] text-white"
+                                              />
+                                              <input
+                                                type="number"
+                                                min={0}
+                                                dir="ltr"
+                                                value={ep.skipSegments?.recapStartSec ?? ''}
+                                                onChange={(e) => {
+                                                  const v = e.target.value === '' ? undefined : Math.max(0, Number(e.target.value));
+                                                  updateEpisode(sIdx, epIdx, {
+                                                    skipSegments: { ...(ep.skipSegments || {}), recapStartSec: v },
+                                                  });
+                                                }}
+                                                placeholder="بداية الملخص"
+                                                className="font-latin rounded-lg bg-[#0c1821] border border-white/10 px-2 py-1 text-[11px] text-white"
+                                              />
+                                              <input
+                                                type="number"
+                                                min={0}
+                                                dir="ltr"
+                                                value={ep.skipSegments?.recapEndSec ?? ''}
+                                                onChange={(e) => {
+                                                  const v = e.target.value === '' ? undefined : Math.max(0, Number(e.target.value));
+                                                  updateEpisode(sIdx, epIdx, {
+                                                    skipSegments: { ...(ep.skipSegments || {}), recapEndSec: v },
+                                                  });
+                                                }}
+                                                placeholder="نهاية الملخص"
+                                                className="font-latin rounded-lg bg-[#0c1821] border border-white/10 px-2 py-1 text-[11px] text-white"
+                                              />
+                                              <input
+                                                type="number"
+                                                min={0}
+                                                dir="ltr"
+                                                value={ep.skipSegments?.nextSceneSec ?? ''}
+                                                onChange={(e) => {
+                                                  const v = e.target.value === '' ? undefined : Math.max(0, Number(e.target.value));
+                                                  updateEpisode(sIdx, epIdx, {
+                                                    skipSegments: { ...(ep.skipSegments || {}), nextSceneSec: v },
+                                                  });
+                                                }}
+                                                placeholder="المشهد التالي"
+                                                className="font-latin rounded-lg bg-[#0c1821] border border-white/10 px-2 py-1 text-[11px] text-white"
+                                              />
+                                            </div>
                                           </div>
-                                        )}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
                             </div>
                           </div>
                         ))}

@@ -6,6 +6,13 @@ export interface CastMember {
   initials: string;
 }
 
+export interface SkipSegmentsConfig {
+  introStartSec?: number;
+  introEndSec?: number;
+  recapStartSec?: number;
+  recapEndSec?: number;
+}
+
 export interface EpisodeItem {
   number: number;
   title: string;
@@ -16,6 +23,7 @@ export interface EpisodeItem {
   watchSubpageUrl?: string;
   embedCode?: string;
   servers?: StreamServer[];
+  skipSegments?: SkipSegmentsConfig;
 }
 
 export interface SeasonItem {
@@ -88,6 +96,11 @@ export interface MediaItem {
   trailerUrl?: string;
   trailerLabel: string;
   trailerDuration: string;
+  director?: string;
+  writer?: string;
+  ageRating?: string;
+  tmdbId?: number;
+  skipSegments?: SkipSegmentsConfig;
   cast: CastMember[];
   seasons?: SeasonItem[];
   franchiseIds?: string[];
@@ -95,6 +108,10 @@ export interface MediaItem {
   downloads: DownloadMirror[];
   communityRating?: {
     average: number;
+    count: number;
+  };
+  reviewSummary?: {
+    average10: number;
     count: number;
   };
   createdAtMs?: number;
@@ -110,6 +127,7 @@ export interface CatalogFilterState {
   language: string;
   quality: string;
   minImdb: number;
+  releaseStatus?: 'all' | 'released' | 'comingSoon';
   preset: 'latest' | 'pinned' | 'views' | 'rating' | 'likes' | '';
 }
 
@@ -167,6 +185,17 @@ export type HomeSectionSource =
   | 'series'
   | 'top_rated'
   | 'trending'
+  | 'top_viewed'
+  | 'most_popular'
+  | 'recent_movies'
+  | 'recent_series'
+  | 'family'
+  | 'coming_soon'
+  | 'worth_watching'
+  | 'admin_picks'
+  | 'genre_action'
+  | 'genre_horror'
+  | 'genre_comedy'
   | 'ramadan'
   | 'wrestling'
   | 'category'
@@ -392,6 +421,140 @@ export interface MediaRatingRecord {
   stars: number;
   createdAtMs?: number;
   updatedAtMs?: number;
+}
+
+export type ServerHealthStatusType =
+  | 'confirmed_playing'
+  | 'page_available'
+  | 'needs_manual_check'
+  | 'broken'
+  | 'iframe_blocked'
+  | 'unknown_error';
+
+export type ServerWatchMode =
+  | 'strict_sandbox'
+  | 'redirect_guard'
+  | 'direct_unrestricted'
+  | 'direct_media';
+
+export interface ServerHealthRecord {
+  id: string;
+  url: string;
+  host: string;
+  mediaId?: string;
+  mediaTitle?: string;
+  seasonNumber?: number;
+  episodeNumber?: number;
+  serverName?: string;
+  status: ServerHealthStatusType;
+  connectivityStatus: string;
+  httpStatus: number;
+  canEmbedInIframe: boolean;
+  pageLoadStatus: string;
+  playerInitResult: string;
+  triedModes: ServerWatchMode[];
+  lastSuccessfulMode?: ServerWatchMode | '';
+  videoPlaybackConfirmed: boolean;
+  latencyMs: number;
+  lastFailureReason: string;
+  lastCheckedAtMs: number;
+  ttlMs: number;
+  checkedBy?: string;
+  createdAtMs?: number;
+  updatedAtMs?: number;
+}
+
+export interface WatchProgressRecord {
+  id: string;
+  userId: string;
+  profileId: string;
+  mediaId: string;
+  mediaTitle: string;
+  kind: MediaKind;
+  seasonNumber?: number;
+  episodeNumber?: number;
+  positionSec: number;
+  durationSec: number;
+  progressPct: number;
+  completed: boolean;
+  hiddenFromContinueWatching?: boolean;
+  lastServerUrl?: string;
+  updatedAtMs: number;
+}
+
+export interface UserSubProfile {
+  id: string;
+  userId: string;
+  name: string;
+  avatarEmoji: string;
+  avatarColor: string;
+  isKids: boolean;
+  maxAgeRating: 'all' | 'kids' | '13+' | '16+' | '18+';
+  hasPin: boolean;
+  pinHash?: string;
+  pinSalt?: string;
+  watchlistIds: string[];
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface MediaReviewRecord {
+  id: string;
+  mediaId: string;
+  userId: string;
+  profileId?: string;
+  authorName: string;
+  authorPhoto?: string;
+  rating10: number;
+  comment: string;
+  helpfulUids: string[];
+  helpfulCount: number;
+  reportedCount: number;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface ReviewReportRecord {
+  id: string;
+  reviewId: string;
+  mediaId: string;
+  reporterUid: string;
+  reason: string;
+  status: 'pending' | 'reviewed' | 'dismissed';
+  createdAtMs: number;
+}
+
+export type NotificationCategory =
+  | 'new_season'
+  | 'new_episode'
+  | 'watchlist_update'
+  | 'favorite_genre'
+  | 'site_update'
+  | 'admin_notice';
+
+export interface UserNotificationRecord {
+  id: string;
+  targetUid: string; // 'all' or specific user uid
+  category: NotificationCategory;
+  title: string;
+  body: string;
+  mediaId?: string;
+  seasonNumber?: number;
+  episodeNumber?: number;
+  readByUids: string[];
+  createdBy?: string;
+  createdAtMs: number;
+}
+
+export interface AnalyticsDailyRecord {
+  id: string; // YYYY-MM-DD
+  playbackStarts: number;
+  playbackCompletes: number;
+  watchlistAdds: number;
+  mediaCounts: Record<string, { starts: number; completes: number; watchlistAdds: number }>;
+  episodeCounts: Record<string, { starts: number; completes: number }>;
+  genreCounts: Record<string, number>;
+  updatedAtMs: number;
 }
 
 export * from './scraperAdapter';

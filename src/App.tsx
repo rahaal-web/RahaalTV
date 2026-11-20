@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Wrench, X } from 'lucide-react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, doc, onSnapshot, orderBy, query, where } from 'firebase/firestore';
@@ -22,10 +22,13 @@ import {
   TrailerModal,
   WatchlistModal,
 } from './components/Modals';
+import { NotificationsDrawer } from './components/NotificationsDrawer';
+import { ProfileManagerModal } from './components/ProfileManagerModal';
 import { SearchDrawer } from './components/SearchDrawer';
 import { OfflineIndicator } from './components/PWAControls';
 import { SingleDetailView } from './components/SingleDetailView';
 import { CATALOG_ITEMS } from './data/catalog';
+import { recordRealAnalyticsEvent } from './lib/analytics';
 import {
   extractHomeBaseFromRecord,
   extractSliderStyleFromRecord,
@@ -35,7 +38,23 @@ import {
   saveStoredHomeConfig,
 } from './lib/homeConfig';
 import { FALLBACK_BACKDROP, FALLBACK_POSTER, resolveMediaAssetUrl } from './lib/mediaFilters';
+import {
+  filterNotificationsByPrefs,
+  isNotificationRead,
+  loadLocalReadNotificationIds,
+  loadNotificationPreferences,
+  markNotificationReadLocally,
+  showOptionalBrowserNotification,
+} from './lib/notifications';
 import { loadStoredPlayerTheme, saveStoredPlayerTheme } from './lib/playerTheme';
+import {
+  createDefaultMainProfile,
+  isMediaAllowedForProfile,
+  loadActiveProfileId,
+  loadLocalSubProfiles,
+  saveActiveProfileId,
+  saveLocalSubProfiles,
+} from './lib/profiles';
 import {
   applyTypographyToDocument,
   loadStoredCustomFonts,
@@ -74,7 +93,17 @@ import {
   isGuestSessionActive,
   loadGuestSession,
 } from './lib/guestSession';
+import {
+  loadLocalServerHealthCache,
+  mergeExternalServerHealthMap,
+  subscribeServerHealthQueue,
+} from './lib/serverHealthQueue';
 import { installTvSpatialNavigation } from './lib/tvNavigation';
+import {
+  listWatchProgressForProfile,
+  mergeGuestWatchProgressToAccount,
+  removeFromContinueWatching,
+} from './lib/watchProgress';
 import {
   appendDatabaseConnectionLog,
   getActiveConnectionProfile,
@@ -90,6 +119,7 @@ import {
   getActiveDatabase,
   getUserAdminRole,
   handleFirestoreError,
+  markNotificationReadInFirestore,
   OperationType,
   probeDatabaseConnection,
   sanitizeRatingMediaId,
@@ -97,6 +127,10 @@ import {
   saveWatchlistToFirestore,
   signOutFirebase,
   submitVisitorRequestToFirestore,
+  subscribeNotifications,
+  subscribeServerHealthRecords,
+  subscribeUserSubProfiles,
+  subscribeWatchProgress,
   syncUserProfileToFirestore,
 } from './lib/firebase';
 import {
@@ -107,10 +141,15 @@ import {
   CustomFontSlot,
   HomeLayoutConfig,
   MediaItem,
+  NotificationPreferences,
   PopupShieldHostRule,
+  ServerHealthRecord,
   SiteSettings,
+  UserNotificationRecord,
   UserProfileRecord,
+  UserSubProfile,
   VisitorRequest,
+  WatchProgressRecord,
   WebsiteBrandingConfig,
 } from './types/media';
 
@@ -124,6 +163,7 @@ const DEFAULT_FILTERS: CatalogFilterState = {
   quality: '',
   minImdb: 0,
   preset: '',
+  releaseStatus: 'all',
 };
 
 const DEFAULT_SETTINGS: SiteSettings = {
@@ -172,16 +212,40 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [watchlistOpen, setWatchlistOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
+  const [profilesModalOpen, setProfilesModalOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [trailerItem, setTrailerItem] = useState<MediaItem | null>(null);
   const [playerState, setPlayerState] = useState<{
     item: MediaItem;
     episode: number;
     serverIndex?: number;
+    initialPositionSec?: number;
   } | null>(null);
   const [footerTopic, setFooterTopic] = useState<FooterTopic | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const clientCapabilities = useMemo(() => detectClientCapabilities(), []);
   const [compatBannerDismissed, setCompatBannerDismissed] = useState(false);
+
+  const [serverHealthMap, setServerHealthMap] = useState<Record<string, ServerHealthRecord>>(() =>
+    loadLocalServerHealthCache()
+  );
+  const [subProfiles, setSubProfiles] = useState<UserSubProfile[]>(() =>
+    loadLocalSubProfiles('guest')
+  );
+  const [activeProfileId, setActiveProfileId] = useState<string>(() =>
+    loadActiveProfileId('guest')
+  );
+  const [cloudWatchProgress, setCloudWatchProgress] = useState<WatchProgressRecord[]>([]);
+  const [watchProgressNonce, setWatchProgressNonce] = useState(0);
+  const [notifications, setNotifications] = useState<UserNotificationRecord[]>([]);
+  const [localReadNotifIds, setLocalReadNotifIds] = useState<Set<string>>(() =>
+    loadLocalReadNotificationIds()
+  );
+  const [notificationPrefs, setNotificationPrefs] = useState<NotificationPreferences>(() =>
+    loadNotificationPreferences()
+  );
+  const initialNotifLoadedRef = useRef(false);
+  const seenNotifIdsRef = useRef<Set<string>>(new Set());
 
   // Firebase Auth & RBAC State + Client-only Viewer Guest Session
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
@@ -267,8 +331,35 @@ export default function App() {
       }),
     [rawActiveCatalog, ratingsByMediaId]
   );
+  const activeUserKey = firebaseUser?.uid || 'guest';
+  const activeProfile = useMemo(
+    () =>
+      subProfiles.find((p) => p.id === activeProfileId) ||
+      subProfiles[0] ||
+      createDefaultMainProfile(activeUserKey),
+    [subProfiles, activeProfileId, activeUserKey]
+  );
+
+  const visibleCatalog = useMemo(
+    () => activeCatalog.filter((item) => isMediaAllowedForProfile(item, activeProfile)),
+    [activeCatalog, activeProfile]
+  );
+
+  const activeWatchProgress = useMemo(() => {
+    void watchProgressNonce;
+    return listWatchProgressForProfile(activeProfile.id, cloudWatchProgress, activeUserKey);
+  }, [activeProfile.id, cloudWatchProgress, activeUserKey, watchProgressNonce]);
+
+  const unreadNotificationsCount = useMemo(
+    () =>
+      filterNotificationsByPrefs(notifications, notificationPrefs).filter(
+        (n) => !isNotificationRead(n, firebaseUser?.uid || null, localReadNotifIds)
+      ).length,
+    [notifications, notificationPrefs, firebaseUser?.uid, localReadNotifIds]
+  );
+
   const selectedMedia =
-    activeCatalog.find((item) => item.id === selectedMediaId) || activeCatalog[0] || null;
+    visibleCatalog.find((item) => item.id === selectedMediaId) || visibleCatalog[0] || null;
   const hasDismissedStarters = starterCleared || dismissedStarterIds.length > 0;
 
   // Sync browser Back/Forward, deep-linked ?watch=<slug> URLs & /admin route
@@ -282,6 +373,11 @@ export default function App() {
       if (watchKey) {
         const matched = findMediaByRouteKey(activeCatalog, watchKey);
         if (matched) {
+          if (!isMediaAllowedForProfile(matched, activeProfile)) {
+            setToastMessage('هذا العمل مقيد في وضع الملف الشخصي الحالي');
+            setView('home');
+            return;
+          }
           setSelectedMediaId(matched.id);
           setRouteEpisode(episode || undefined);
           setView('single');
@@ -303,7 +399,7 @@ export default function App() {
       window.removeEventListener('popstate', syncFromLocation);
       window.removeEventListener('hashchange', syncFromLocation);
     };
-  }, [activeCatalog, firestoreCatalog.length]);
+  }, [activeCatalog, activeProfile, firestoreCatalog.length]);
 
   const effectiveBrandName =
     siteSettings.branding?.siteName?.trim() || siteSettings.siteName || 'RahaL TV';
@@ -345,6 +441,14 @@ export default function App() {
           setTrailerItem(null);
           return true;
         }
+        if (notificationsOpen) {
+          setNotificationsOpen(false);
+          return true;
+        }
+        if (profilesModalOpen) {
+          setProfilesModalOpen(false);
+          return true;
+        }
         if (searchOpen) {
           setSearchOpen(false);
           return true;
@@ -368,7 +472,7 @@ export default function App() {
         return false;
       },
     });
-  }, [playerState, trailerItem, searchOpen, watchlistOpen, loginOpen, footerTopic, view]);
+  }, [playerState, trailerItem, notificationsOpen, profilesModalOpen, searchOpen, watchlistOpen, loginOpen, footerTopic, view]);
 
   useEffect(() => {
     setLiveShieldConfig(siteSettings.popupShield);
@@ -820,17 +924,94 @@ export default function App() {
         } catch {
           // Handled cleanly inside firebase helper
         }
+        void mergeGuestWatchProgressToAccount(user.uid, loadActiveProfileId(user.uid)).then(() =>
+          setWatchProgressNonce((n) => n + 1)
+        );
       } else {
         setAdminRole(null);
         setVisitorRequests([]);
         setUsersList([]);
         setAdminsList([]);
+        setCloudWatchProgress([]);
       }
       setAuthLoading(false);
     });
     return () => unsubAuth();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dbReconnectNonce]);
+
+  // 2b. Server Health Cache + Cloud Sync (Non-blocking background preference map)
+  useEffect(() => {
+    const unsubQueue = subscribeServerHealthQueue((_state, map) => {
+      setServerHealthMap(map);
+    });
+    const unsubCloud = subscribeServerHealthRecords((cloudMap) => {
+      mergeExternalServerHealthMap(cloudMap);
+    });
+    return () => {
+      unsubQueue();
+      unsubCloud();
+    };
+  }, [dbReconnectNonce]);
+
+  // 2c. Household Sub-Profiles, Watch Progress & Notifications Listeners
+  useEffect(() => {
+    const localList = loadLocalSubProfiles(activeUserKey);
+    const localActive = loadActiveProfileId(activeUserKey);
+    setSubProfiles(localList);
+    setActiveProfileId(localActive);
+
+    if (!firebaseUser) {
+      return;
+    }
+
+    const unsubProfiles = subscribeUserSubProfiles(firebaseUser.uid, (cloudList) => {
+      if (cloudList.length === 0) return;
+      const merged = cloudList.some((p) => p.id === 'main')
+        ? cloudList
+        : [createDefaultMainProfile(firebaseUser.uid), ...cloudList];
+      saveLocalSubProfiles(firebaseUser.uid, merged);
+      setSubProfiles(merged);
+    });
+    const unsubProgress = subscribeWatchProgress(firebaseUser.uid, (records) => {
+      setCloudWatchProgress(records);
+    });
+
+    return () => {
+      unsubProfiles();
+      unsubProgress();
+    };
+  }, [firebaseUser, activeUserKey, dbReconnectNonce]);
+
+  useEffect(() => {
+    initialNotifLoadedRef.current = false;
+    seenNotifIdsRef.current.clear();
+    const unsubNotifs = subscribeNotifications(
+      firebaseUser?.uid || null,
+      canAccessAdmin,
+      (list) => {
+        setNotifications(list);
+        if (!initialNotifLoadedRef.current) {
+          initialNotifLoadedRef.current = true;
+          list.forEach((n) => seenNotifIdsRef.current.add(n.id));
+          return;
+        }
+        const allowed = filterNotificationsByPrefs(list, notificationPrefs);
+        for (const n of allowed) {
+          if (!seenNotifIdsRef.current.has(n.id)) {
+            seenNotifIdsRef.current.add(n.id);
+            if (
+              notificationPrefs.browserPushEnabled &&
+              !isNotificationRead(n, firebaseUser?.uid || null, localReadNotifIds)
+            ) {
+              showOptionalBrowserNotification(n);
+            }
+          }
+        }
+      }
+    );
+    return () => unsubNotifs();
+  }, [firebaseUser?.uid, canAccessAdmin, dbReconnectNonce, notificationPrefs, localReadNotifIds]);
 
   // 3. Authenticated Listeners (/requests, plus /users & /admins for Owner Admins only)
   useEffect(() => {
@@ -988,6 +1169,10 @@ export default function App() {
   };
 
   const handleSelectMedia = (item: MediaItem, openDownloads = false) => {
+    if (!isMediaAllowedForProfile(item, activeProfile)) {
+      showToast('هذا العمل غير متاح في وضع الملف الشخصي الحالي');
+      return;
+    }
     pushWatchRoute(item);
     setSelectedMediaId(item.id);
     setRouteEpisode(undefined);
@@ -1015,6 +1200,14 @@ export default function App() {
           ? `تمت إزالة "${item.title}" من قائمتي`
           : `تمت إضافة "${item.title}" إلى قائمتي بنجاح`
       );
+      if (!exists) {
+        void recordRealAnalyticsEvent({
+          kind: 'watchlist_add',
+          mediaId: item.id,
+          genres: item.genres,
+          isSignedIn: Boolean(firebaseUser),
+        });
+      }
       if (firebaseUser) {
         void saveWatchlistToFirestore(firebaseUser.uid, next);
       }
@@ -1090,7 +1283,7 @@ export default function App() {
     }
   };
 
-  const watchlistItems = activeCatalog.filter((i) => watchlistIds.includes(i.id));
+  const watchlistItems = visibleCatalog.filter((i) => watchlistIds.includes(i.id));
 
   /* ---------------- Dedicated Standalone /admin Page (No Header / No Footer) ---------------- */
   if (view === 'admin') {
@@ -1131,6 +1324,7 @@ export default function App() {
             usersList={usersList}
             adminsList={adminsList}
             siteSettings={siteSettings}
+            serverHealthMap={serverHealthMap}
             customFonts={customFonts}
             onCustomFontsChange={(next) => {
               saveStoredCustomFonts(next);
@@ -1244,7 +1438,7 @@ export default function App() {
         </div>
       )}
       <Header
-        catalog={activeCatalog}
+        catalog={visibleCatalog}
         onNavigateHome={navigateHome}
         onSelectCategory={(category) => handleApplyFilter({ category })}
         onOpenSearch={() => setSearchOpen(true)}
@@ -1268,12 +1462,16 @@ export default function App() {
         currentView={view}
         branding={siteSettings.branding}
         siteName={effectiveBrandName}
+        activeProfile={activeProfile}
+        onOpenProfiles={() => setProfilesModalOpen(true)}
+        unreadNotificationsCount={unreadNotificationsCount}
+        onOpenNotifications={() => setNotificationsOpen(true)}
       />
 
       <main className="flex-1">
         {view === 'home' && (
           <HomeView
-            catalog={activeCatalog}
+            catalog={visibleCatalog}
             siteSettings={siteSettings}
             isAdmin={isOwnerAdmin}
             loading={!initialMediaLoaded && activeCatalog.length === 0}
@@ -1284,12 +1482,26 @@ export default function App() {
             onOpenHomeBuilder={() => openAdminPage('home_builder')}
             watchlistIds={watchlistIds}
             onToggleWatchlist={handleToggleWatchlist}
+            watchProgressRecords={activeWatchProgress}
+            userId={firebaseUser?.uid || null}
+            onResumePlay={(item, ep, pos) =>
+              setPlayerState({
+                item,
+                episode: ep || 1,
+                initialPositionSec: pos || 0,
+              })
+            }
+            onRemoveContinueWatching={(progressId) => {
+              void removeFromContinueWatching(progressId, Boolean(firebaseUser)).then(() =>
+                setWatchProgressNonce((n) => n + 1)
+              );
+            }}
           />
         )}
 
         {view === 'archive' && (
           <CatalogArchiveView
-            catalog={activeCatalog}
+            catalog={visibleCatalog}
             filters={filters}
             onUpdateFilters={setFilters}
             onResetFilters={() => setFilters(DEFAULT_FILTERS)}
@@ -1301,7 +1513,7 @@ export default function App() {
 
         {view === 'single' && selectedMedia && (
           <SingleDetailView
-            catalog={activeCatalog}
+            catalog={visibleCatalog}
             item={selectedMedia}
             initialEpisode={routeEpisode}
             initialOpenDownloads={openDownloadsOnSingle}
@@ -1312,13 +1524,15 @@ export default function App() {
             onApplyFilter={handleApplyFilter}
             onNavigateHome={navigateHome}
             onOpenTrailer={(item) => setTrailerItem(item)}
-            onOpenPlayer={(item, ep = 1, srvIdx = 0) =>
-              setPlayerState({ item, episode: ep, serverIndex: srvIdx })
+            onOpenPlayer={(item, ep = 1, srvIdx = 0, pos = 0) =>
+              setPlayerState({ item, episode: ep, serverIndex: srvIdx, initialPositionSec: pos })
             }
             isInWatchlist={watchlistIds.includes(selectedMedia.id)}
             onToggleWatchlist={handleToggleWatchlist}
             onNotify={showToast}
             watchlistIds={watchlistIds}
+            watchProgressRecords={activeWatchProgress}
+            activeProfileId={activeProfile.id}
           />
         )}
       </main>
@@ -1333,7 +1547,7 @@ export default function App() {
 
       {/* Overlays & Modals */}
       <SearchDrawer
-        catalog={activeCatalog}
+        catalog={visibleCatalog}
         isOpen={searchOpen}
         onClose={() => setSearchOpen(false)}
         onSelectMedia={handleSelectMedia}
@@ -1363,8 +1577,15 @@ export default function App() {
           item={playerState.item}
           initialEpisode={playerState.episode || 1}
           initialServerIndex={playerState.serverIndex || 0}
+          initialPositionSec={playerState.initialPositionSec}
           playerTheme={siteSettings.playerTheme}
           popupShieldConfig={siteSettings.popupShield}
+          serverHealthMap={serverHealthMap}
+          activeProfileId={activeProfile.id}
+          userId={activeUserKey}
+          isSignedIn={Boolean(firebaseUser)}
+          watchProgressRecords={activeWatchProgress}
+          onSaveWatchProgress={() => setWatchProgressNonce((n) => n + 1)}
           onUpdateHostRule={handleUpdateHostRule}
           isInWatchlist={watchlistIds.includes(playerState.item.id)}
           onToggleWatchlist={handleToggleWatchlist}
@@ -1372,6 +1593,59 @@ export default function App() {
           onClose={() => setPlayerState(null)}
         />
       )}
+
+      <ProfileManagerModal
+        isOpen={profilesModalOpen}
+        onClose={() => setProfilesModalOpen(false)}
+        uid={firebaseUser?.uid || null}
+        profiles={subProfiles}
+        activeProfile={activeProfile}
+        onProfilesChange={setSubProfiles}
+        onSelectProfile={(profileId) => {
+          saveActiveProfileId(activeUserKey, profileId);
+          setActiveProfileId(profileId);
+          setWatchProgressNonce((n) => n + 1);
+          const picked = subProfiles.find((p) => p.id === profileId);
+          if (picked) {
+            showToast(
+              picked.isKids
+                ? `تم تفعيل وضع الأطفال (${picked.name})`
+                : `تم التبديل إلى ملف "${picked.name}"`
+            );
+          }
+        }}
+        onNotify={showToast}
+      />
+
+      <NotificationsDrawer
+        isOpen={notificationsOpen}
+        onClose={() => setNotificationsOpen(false)}
+        notifications={notifications}
+        localReadIds={localReadNotifIds}
+        uid={firebaseUser?.uid || null}
+        preferences={notificationPrefs}
+        onUpdatePreferences={setNotificationPrefs}
+        onMarkRead={(notifId) => {
+          setLocalReadNotifIds(markNotificationReadLocally(notifId));
+          if (firebaseUser) {
+            void markNotificationReadInFirestore(notifId, firebaseUser.uid);
+          }
+        }}
+        onMarkAllRead={() => {
+          let nextSet = localReadNotifIds;
+          notifications.forEach((n) => {
+            nextSet = markNotificationReadLocally(n.id);
+            if (firebaseUser) {
+              void markNotificationReadInFirestore(n.id, firebaseUser.uid);
+            }
+          });
+          setLocalReadNotifIds(new Set(nextSet));
+          showToast('تم تعليم جميع الإشعارات كمقروءة');
+        }}
+        catalog={visibleCatalog}
+        onSelectMedia={handleSelectMedia}
+        onNotify={showToast}
+      />
 
       <LoginModal
         isOpen={loginOpen}

@@ -15,6 +15,14 @@ service cloud.firestore {
       return id is string && id.size() >= 3 && id.size() <= 260 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidCompositeId(id) {
+      return id is string && id.size() >= 3 && id.size() <= 380 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidDayKey(dayKey) {
+      return dayKey is string && dayKey.size() == 10 && dayKey.matches('^20[0-9]{2}-[0-9]{2}-[0-9]{2}$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -81,6 +89,7 @@ service cloud.firestore {
         'poster_url', 'backdrop_url', 'poster_width', 'poster_height',
         'backdrop_width', 'backdrop_height', 'image_source', 'image_quality_status',
         'tagline', 'story', 'shortUrl', 'trailerUrl', 'trailerLabel', 'trailerDuration',
+        'director', 'writer', 'ageRating', 'tmdbId', 'skipSegments',
         'cast', 'seasons', 'franchiseIds', 'servers', 'downloads',
         'updatedBy', 'createdAt', 'updatedAt'
       ])
@@ -119,6 +128,11 @@ service cloud.firestore {
       && data.trailerUrl is string && data.trailerUrl.size() <= 500
       && data.trailerLabel is string && data.trailerLabel.size() <= 200
       && data.trailerDuration is string && data.trailerDuration.size() <= 30
+      && (!('director' in data) || (data.director is string && data.director.size() <= 160))
+      && (!('writer' in data) || (data.writer is string && data.writer.size() <= 160))
+      && (!('ageRating' in data) || (data.ageRating is string && data.ageRating.size() <= 24))
+      && (!('tmdbId' in data) || ((data.tmdbId is int || data.tmdbId is float) && data.tmdbId >= 0))
+      && (!('skipSegments' in data) || (data.skipSegments is map && data.skipSegments.keys().size() <= 6))
       && data.cast is list && data.cast.size() <= 25
       && data.seasons is list && data.seasons.size() <= 20
       && data.franchiseIds is list && data.franchiseIds.size() <= 15
@@ -157,6 +171,32 @@ service cloud.firestore {
       && data.watchlistIds is list && data.watchlistIds.size() <= 100
       && data.role in ['member', 'admin']
       && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidSubProfile(data) {
+      return data.keys().hasAll([
+        'id', 'userId', 'name', 'avatarEmoji', 'avatarColor', 'isKids',
+        'maxAgeRating', 'hasPin', 'watchlistIds', 'createdAtMs', 'updatedAtMs', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'id', 'userId', 'name', 'avatarEmoji', 'avatarColor', 'isKids',
+        'maxAgeRating', 'hasPin', 'pinHash', 'pinSalt', 'watchlistIds',
+        'createdAtMs', 'updatedAtMs', 'updatedAt'
+      ])
+      && isValidId(data.id)
+      && isValidId(data.userId)
+      && data.name is string && data.name.size() >= 1 && data.name.size() <= 60
+      && data.avatarEmoji is string && data.avatarEmoji.size() >= 1 && data.avatarEmoji.size() <= 16
+      && data.avatarColor is string && data.avatarColor.size() >= 4 && data.avatarColor.size() <= 20
+      && data.isKids is bool
+      && data.maxAgeRating in ['all', 'kids', '13+', '16+', '18+']
+      && data.hasPin is bool
+      && (!('pinHash' in data) || (data.pinHash is string && data.pinHash.size() <= 128))
+      && (!('pinSalt' in data) || (data.pinSalt is string && data.pinSalt.size() <= 64))
+      && data.watchlistIds is list && data.watchlistIds.size() <= 150
+      && (data.createdAtMs is int || data.createdAtMs is float) && data.createdAtMs >= 0
+      && (data.updatedAtMs is int || data.updatedAtMs is float) && data.updatedAtMs >= 0
       && data.updatedAt is timestamp;
     }
 
@@ -471,6 +511,156 @@ service cloud.firestore {
       && data.updatedAt is timestamp;
     }
 
+    function isValidMediaReview(data) {
+      return data.keys().hasAll([
+        'id', 'mediaId', 'userId', 'authorName', 'rating10', 'comment',
+        'helpfulUids', 'helpfulCount', 'reportedCount', 'createdAtMs', 'updatedAtMs',
+        'createdAt', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'id', 'mediaId', 'userId', 'profileId', 'authorName', 'authorPhoto',
+        'rating10', 'comment', 'helpfulUids', 'helpfulCount', 'reportedCount',
+        'createdAtMs', 'updatedAtMs', 'createdAt', 'updatedAt'
+      ])
+      && isValidRatingId(data.id)
+      && isValidId(data.mediaId)
+      && isValidId(data.userId)
+      && (!('profileId' in data) || (data.profileId is string && data.profileId.size() <= 128))
+      && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 120
+      && (!('authorPhoto' in data) || (data.authorPhoto is string && data.authorPhoto.size() <= 500))
+      && data.rating10 is int && data.rating10 >= 1 && data.rating10 <= 10
+      && data.comment is string && data.comment.size() <= 1500
+      && data.helpfulUids is list && data.helpfulUids.size() <= 1000
+      && (data.helpfulCount is int || data.helpfulCount is float) && data.helpfulCount >= 0
+      && (data.reportedCount is int || data.reportedCount is float) && data.reportedCount >= 0
+      && (data.createdAtMs is int || data.createdAtMs is float) && data.createdAtMs >= 0
+      && (data.updatedAtMs is int || data.updatedAtMs is float) && data.updatedAtMs >= 0
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidReviewReport(data) {
+      return data.keys().hasAll([
+        'id', 'reviewId', 'mediaId', 'reporterUid', 'reason', 'status', 'createdAtMs', 'createdAt'
+      ])
+      && data.keys().hasOnly([
+        'id', 'reviewId', 'mediaId', 'reporterUid', 'reason', 'status', 'createdAtMs', 'createdAt'
+      ])
+      && isValidCompositeId(data.id)
+      && isValidRatingId(data.reviewId)
+      && isValidId(data.mediaId)
+      && isValidId(data.reporterUid)
+      && data.reason is string && data.reason.size() >= 2 && data.reason.size() <= 300
+      && data.status in ['pending', 'reviewed', 'dismissed']
+      && (data.createdAtMs is int || data.createdAtMs is float) && data.createdAtMs >= 0
+      && data.createdAt is timestamp;
+    }
+
+    function isValidServerHealthRecord(data) {
+      return data.keys().hasAll([
+        'id', 'url', 'host', 'status', 'connectivityStatus', 'httpStatus',
+        'canEmbedInIframe', 'pageLoadStatus', 'playerInitResult', 'triedModes',
+        'videoPlaybackConfirmed', 'latencyMs', 'lastFailureReason',
+        'lastCheckedAtMs', 'ttlMs', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'id', 'url', 'host', 'mediaId', 'mediaTitle', 'seasonNumber', 'episodeNumber',
+        'serverName', 'status', 'connectivityStatus', 'httpStatus', 'canEmbedInIframe',
+        'pageLoadStatus', 'playerInitResult', 'triedModes', 'lastSuccessfulMode',
+        'videoPlaybackConfirmed', 'latencyMs', 'lastFailureReason', 'lastCheckedAtMs',
+        'ttlMs', 'checkedBy', 'createdAtMs', 'updatedAtMs', 'createdAt', 'updatedAt'
+      ])
+      && isValidId(data.id)
+      && data.url is string && data.url.size() >= 1 && data.url.size() <= 700
+      && data.host is string && data.host.size() >= 1 && data.host.size() <= 200
+      && data.status in ['confirmed_playing', 'page_available', 'needs_manual_check', 'broken', 'iframe_blocked', 'unknown_error']
+      && data.connectivityStatus is string && data.connectivityStatus.size() <= 80
+      && (data.httpStatus is int || data.httpStatus is float) && data.httpStatus >= 0 && data.httpStatus <= 999
+      && data.canEmbedInIframe is bool
+      && data.pageLoadStatus is string && data.pageLoadStatus.size() <= 120
+      && data.playerInitResult is string && data.playerInitResult.size() <= 120
+      && data.triedModes is list && data.triedModes.size() <= 8
+      && (!('lastSuccessfulMode' in data) || data.lastSuccessfulMode in ['', 'strict_sandbox', 'redirect_guard', 'direct_unrestricted', 'direct_media'])
+      && data.videoPlaybackConfirmed is bool
+      && (data.latencyMs is int || data.latencyMs is float) && data.latencyMs >= 0
+      && data.lastFailureReason is string && data.lastFailureReason.size() <= 400
+      && (data.lastCheckedAtMs is int || data.lastCheckedAtMs is float) && data.lastCheckedAtMs >= 0
+      && (data.ttlMs is int || data.ttlMs is float) && data.ttlMs >= 0
+      && (!('checkedBy' in data) || (data.checkedBy is string && data.checkedBy.size() <= 128))
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidWatchProgress(data) {
+      return data.keys().hasAll([
+        'id', 'userId', 'profileId', 'mediaId', 'mediaTitle', 'kind',
+        'positionSec', 'durationSec', 'progressPct', 'completed', 'updatedAtMs', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'id', 'userId', 'profileId', 'mediaId', 'mediaTitle', 'kind',
+        'seasonNumber', 'episodeNumber', 'positionSec', 'durationSec',
+        'progressPct', 'completed', 'hiddenFromContinueWatching', 'lastServerUrl',
+        'updatedAtMs', 'updatedAt'
+      ])
+      && isValidCompositeId(data.id)
+      && isValidId(data.userId)
+      && isValidId(data.profileId)
+      && isValidId(data.mediaId)
+      && data.mediaTitle is string && data.mediaTitle.size() >= 1 && data.mediaTitle.size() <= 200
+      && data.kind in ['movie', 'series', 'tv', 'wrestling']
+      && (!('seasonNumber' in data) || ((data.seasonNumber is int || data.seasonNumber is float) && data.seasonNumber >= 1))
+      && (!('episodeNumber' in data) || ((data.episodeNumber is int || data.episodeNumber is float) && data.episodeNumber >= 1))
+      && (data.positionSec is int || data.positionSec is float) && data.positionSec >= 0
+      && (data.durationSec is int || data.durationSec is float) && data.durationSec >= 0
+      && (data.progressPct is int || data.progressPct is float) && data.progressPct >= 0 && data.progressPct <= 100
+      && data.completed is bool
+      && (!('hiddenFromContinueWatching' in data) || data.hiddenFromContinueWatching is bool)
+      && (!('lastServerUrl' in data) || (data.lastServerUrl is string && data.lastServerUrl.size() <= 700))
+      && (data.updatedAtMs is int || data.updatedAtMs is float) && data.updatedAtMs >= 0
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll([
+        'id', 'targetUid', 'category', 'title', 'body', 'readByUids', 'createdAtMs', 'createdAt'
+      ])
+      && data.keys().hasOnly([
+        'id', 'targetUid', 'category', 'title', 'body', 'mediaId', 'seasonNumber',
+        'episodeNumber', 'readByUids', 'createdBy', 'createdAtMs', 'createdAt'
+      ])
+      && isValidId(data.id)
+      && data.targetUid is string && data.targetUid.size() >= 1 && data.targetUid.size() <= 128
+      && data.category in ['new_season', 'new_episode', 'watchlist_update', 'favorite_genre', 'site_update', 'admin_notice']
+      && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+      && data.body is string && data.body.size() >= 1 && data.body.size() <= 500
+      && (!('mediaId' in data) || (data.mediaId is string && data.mediaId.size() <= 128))
+      && (!('seasonNumber' in data) || (data.seasonNumber is int || data.seasonNumber is float))
+      && (!('episodeNumber' in data) || (data.episodeNumber is int || data.episodeNumber is float))
+      && data.readByUids is list && data.readByUids.size() <= 2000
+      && (!('createdBy' in data) || (data.createdBy is string && data.createdBy.size() <= 128))
+      && (data.createdAtMs is int || data.createdAtMs is float) && data.createdAtMs >= 0
+      && data.createdAt is timestamp;
+    }
+
+    function isValidAnalyticsDaily(data) {
+      return data.keys().hasAll([
+        'id', 'playbackStarts', 'playbackCompletes', 'watchlistAdds',
+        'mediaCounts', 'episodeCounts', 'genreCounts', 'updatedAtMs', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'id', 'playbackStarts', 'playbackCompletes', 'watchlistAdds',
+        'mediaCounts', 'episodeCounts', 'genreCounts', 'updatedAtMs', 'updatedAt'
+      ])
+      && isValidDayKey(data.id)
+      && (data.playbackStarts is int || data.playbackStarts is float) && data.playbackStarts >= 0
+      && (data.playbackCompletes is int || data.playbackCompletes is float) && data.playbackCompletes >= 0
+      && (data.watchlistAdds is int || data.watchlistAdds is float) && data.watchlistAdds >= 0
+      && data.mediaCounts is map && data.mediaCounts.keys().size() <= 500
+      && data.episodeCounts is map && data.episodeCounts.keys().size() <= 500
+      && data.genreCounts is map && data.genreCounts.keys().size() <= 100
+      && (data.updatedAtMs is int || data.updatedAtMs is float) && data.updatedAtMs >= 0
+      && data.updatedAt is timestamp;
+    }
+
     function isValidAdminActivityLog(data) {
       return data.keys().hasAll([
         'id', 'adminUid', 'adminName', 'rawCommand', 'understoodCommand',
@@ -724,6 +914,17 @@ service cloud.firestore {
       allow delete: if isStaffAdmin() && isValidId(mediaId);
     }
 
+    match /server_health/{healthId} {
+      allow get: if isValidId(healthId);
+      allow list: if true;
+      allow create, update: if isStaffAdmin()
+        && isValidId(healthId)
+        && isValidServerHealthRecord(incoming())
+        && incoming().id == healthId
+        && incoming().updatedAt == request.time;
+      allow delete: if isStaffAdmin() && isValidId(healthId);
+    }
+
     match /requests/{requestId} {
       allow get: if isValidId(requestId) && ((isSignedIn() && existing().userId == request.auth.uid) || isOwnerAdmin());
       allow list: if (isSignedIn() && existing().userId == request.auth.uid) || isOwnerAdmin();
@@ -780,6 +981,37 @@ service cloud.firestore {
           && incoming().updatedAt == request.time;
         allow delete: if isOwnerAdmin() && isValidId(userId);
       }
+
+      match /profiles/{profileId} {
+        allow get: if isValidId(userId) && isValidId(profileId) && isOwner(userId);
+        allow list: if isValidId(userId) && isOwner(userId);
+        allow create, update: if isSignedIn()
+          && isValidId(userId)
+          && isValidId(profileId)
+          && isOwner(userId)
+          && isValidSubProfile(incoming())
+          && incoming().id == profileId
+          && incoming().userId == userId
+          && incoming().updatedAt == request.time;
+        allow delete: if isSignedIn() && isValidId(userId) && isValidId(profileId) && isOwner(userId);
+      }
+    }
+
+    match /watch_progress/{progressId} {
+      allow get: if isSignedIn()
+        && isValidCompositeId(progressId)
+        && (
+          progressId.matches('^' + request.auth.uid + '__[a-zA-Z0-9_\\-]+$') ||
+          existing().userId == request.auth.uid
+        );
+      allow list: if isSignedIn() && existing().userId == request.auth.uid;
+      allow create, update: if isSignedIn()
+        && isValidCompositeId(progressId)
+        && isValidWatchProgress(incoming())
+        && incoming().id == progressId
+        && incoming().userId == request.auth.uid
+        && incoming().updatedAt == request.time;
+      allow delete: if isSignedIn() && isValidCompositeId(progressId) && existing().userId == request.auth.uid;
     }
 
     match /admins/{adminUid} {
@@ -866,6 +1098,78 @@ service cloud.firestore {
         && incoming().diff(existing()).affectedKeys().hasOnly(['stars', 'updatedAt']);
       allow delete: if isValidRatingId(ratingId)
         && ((isSignedIn() && existing().userId == request.auth.uid) || isOwnerAdmin());
+    }
+
+    match /reviews/{reviewId} {
+      allow get: if isValidRatingId(reviewId);
+      allow list: if true;
+      allow create: if isSignedIn()
+        && isValidRatingId(reviewId)
+        && isValidMediaReview(incoming())
+        && incoming().id == reviewId
+        && incoming().userId == request.auth.uid
+        && reviewId == incoming().mediaId + '__' + request.auth.uid
+        && incoming().helpfulCount == 0
+        && incoming().helpfulUids.size() == 0
+        && incoming().reportedCount == 0
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isSignedIn()
+        && isValidRatingId(reviewId)
+        && isValidMediaReview(incoming())
+        && incoming().id == existing().id
+        && incoming().mediaId == existing().mediaId
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (existing().userId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['rating10', 'comment', 'authorName', 'authorPhoto', 'updatedAtMs', 'updatedAt'])) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['helpfulUids', 'helpfulCount', 'updatedAtMs', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['reportedCount', 'updatedAtMs', 'updatedAt']) ||
+          isStaffAdmin()
+        );
+      allow delete: if isValidRatingId(reviewId)
+        && ((isSignedIn() && existing().userId == request.auth.uid) || isStaffAdmin());
+    }
+
+    match /review_reports/{reportId} {
+      allow get, list: if isStaffAdmin();
+      allow create: if isSignedIn()
+        && isValidCompositeId(reportId)
+        && isValidReviewReport(incoming())
+        && incoming().id == reportId
+        && incoming().reporterUid == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().createdAt == request.time;
+      allow update, delete: if isStaffAdmin();
+    }
+
+    match /notifications/{notifId} {
+      allow get: if isValidId(notifId)
+        && (existing().targetUid == 'all' || (isSignedIn() && existing().targetUid == request.auth.uid) || isStaffAdmin());
+      allow list: if existing().targetUid == 'all' || (isSignedIn() && existing().targetUid == request.auth.uid) || isStaffAdmin();
+      allow create: if isStaffAdmin()
+        && isValidId(notifId)
+        && isValidNotification(incoming())
+        && incoming().id == notifId
+        && incoming().createdAt == request.time;
+      allow update: if isStaffAdmin()
+        || (
+          isSignedIn()
+          && isValidNotification(incoming())
+          && incoming().diff(existing()).affectedKeys().hasOnly(['readByUids'])
+        );
+      allow delete: if isStaffAdmin() && isValidId(notifId);
+    }
+
+    match /analytics_daily/{dayKey} {
+      allow get, list: if isStaffAdmin();
+      allow create, update: if isSignedIn()
+        && isValidDayKey(dayKey)
+        && isValidAnalyticsDaily(incoming())
+        && incoming().id == dayKey
+        && incoming().updatedAt == request.time;
+      allow delete: if isOwnerAdmin() && isValidDayKey(dayKey);
     }
 
     match /admin_activity_logs/{logId} {

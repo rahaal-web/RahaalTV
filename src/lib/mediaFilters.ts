@@ -52,6 +52,9 @@ export function filterAndSortCatalog(
         normalizeArabicText(item.title).includes(qNorm) ||
         normalizeArabicText(item.englishTitle).includes(qNorm) ||
         normalizeArabicText(item.story).includes(qNorm) ||
+        normalizeArabicText(item.director || '').includes(qNorm) ||
+        normalizeArabicText(item.writer || '').includes(qNorm) ||
+        (item.cast || []).some((c) => normalizeArabicText(c.name).includes(qNorm)) ||
         (item.genres || []).some((g) => normalizeArabicText(g).includes(qNorm)) ||
         normalizeArabicText(item.country).includes(qNorm) ||
         String(item.year || '').includes(qNorm);
@@ -91,7 +94,12 @@ export function filterAndSortCatalog(
       }
     }
 
-    if (filters.minImdb > 0 && Number(item.communityRating?.average || 0) < filters.minImdb) return false;
+    if (filters.minImdb > 0) {
+      const score = Math.max(Number(item.imdb || 0), Number(item.reviewSummary?.average10 || 0));
+      if (score < filters.minImdb) return false;
+    }
+    if (filters.releaseStatus === 'released' && item.comingSoon) return false;
+    if (filters.releaseStatus === 'comingSoon' && !item.comingSoon) return false;
     if (filters.preset === 'pinned' && !item.pinned) return false;
     return true;
   });
@@ -162,4 +170,65 @@ export function buildDynamicFilterOptions(catalog: MediaItem[]) {
     languages: mergeUniqueOptions(FILTER_OPTIONS.languages, dynamicLanguages),
     qualities: mergeUniqueOptions(FILTER_OPTIONS.qualities, dynamicQualities),
   };
+}
+
+export interface SearchSuggestionItem {
+  type: 'media' | 'person' | 'genre';
+  label: string;
+  sublabel: string;
+  mediaId?: string;
+}
+
+export function buildSearchSuggestions(
+  catalog: MediaItem[],
+  rawQuery: string,
+  maxItems = 8
+): SearchSuggestionItem[] {
+  const qNorm = normalizeArabicText(rawQuery);
+  if (!qNorm || qNorm.length < 2) return [];
+
+  const suggestions: SearchSuggestionItem[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const item of catalog) {
+    if (suggestions.length >= maxItems) break;
+    const tNorm = normalizeArabicText(item.title);
+    const eNorm = normalizeArabicText(item.englishTitle);
+    if (tNorm.includes(qNorm) || eNorm.includes(qNorm)) {
+      const key = `m:${item.id}`;
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        suggestions.push({
+          type: 'media',
+          label: item.title,
+          sublabel: `${item.englishTitle} • ${item.year}`,
+          mediaId: item.id,
+        });
+      }
+    }
+  }
+
+  // Also suggest matching directors, writers, or cast names
+  for (const item of catalog) {
+    if (suggestions.length >= maxItems) break;
+    const people = [
+      ...(item.director ? [{ name: item.director, role: 'مخرج' }] : []),
+      ...(item.writer ? [{ name: item.writer, role: 'مؤلف' }] : []),
+      ...(item.cast || []).map((c) => ({ name: c.name, role: c.role || 'ممثل' })),
+    ];
+    for (const p of people) {
+      if (suggestions.length >= maxItems) break;
+      const pNorm = normalizeArabicText(p.name);
+      if (pNorm.includes(qNorm) && !seenKeys.has(`p:${pNorm}`)) {
+        seenKeys.add(`p:${pNorm}`);
+        suggestions.push({
+          type: 'person',
+          label: p.name,
+          sublabel: p.role,
+        });
+      }
+    }
+  }
+
+  return suggestions.slice(0, maxItems);
 }

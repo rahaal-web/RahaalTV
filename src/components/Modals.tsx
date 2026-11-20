@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Bookmark,
@@ -10,8 +10,10 @@ import {
   ChevronRight,
   ChevronUp,
   Film,
+  Forward,
   Globe,
   LayoutDashboard,
+  ListVideo,
   Loader2,
   LogOut,
   Maximize2,
@@ -25,8 +27,8 @@ import {
   Send,
   Server,
   Share2,
-  ShieldAlert,
   ShieldCheck,
+  SkipForward,
   Sparkles,
   Star,
   Trash2,
@@ -37,12 +39,7 @@ import {
   X,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
-import {
-  filterServersInBrowser,
-  isLikelyNonVideoWebsiteUrl,
-  resolveApiEndpoint,
-  shouldSkipBackendApiCalls,
-} from '../lib/clientScraper';
+import { isLikelyNonVideoWebsiteUrl } from '../lib/clientScraper';
 import { resolveDisplayShortUrl } from '../lib/permalink';
 import {
   getFirebaseAuthErrorMessage,
@@ -64,20 +61,29 @@ import {
   setActiveShieldPlayerContext,
 } from '../lib/popupShield';
 import {
-  buildCompatibleModeChain,
+  buildSmartModeChainWithMemory,
+  clearRememberedWorkingMode,
+  resolveSafeIframePresentation,
+  sanitizeAndRepairStreamUrl,
+  saveRememberedWorkingMode,
+} from '../lib/playerAutoRepair';
+import {
   classifyAutoplayPlayError,
   computeFaultFailoverTransition,
   findNextAvailableServerIndex,
-  getSmartPlayStatusMessage,
-  getWatchModeDisplayInfo,
-  LOAD_TIMEOUT_DIRECT_MS,
-  LOAD_TIMEOUT_IFRAME_MS,
-  resolveManualModeStep,
   resolveNextModeOnFailure,
-  resolveProactiveFilterDecision,
-  type SmartPlayState,
   type WatchMode,
 } from '../lib/serverFailover';
+import {
+  recordPassivePlayerObservation,
+  sortServersByCachedHealth,
+} from '../lib/serverHealthQueue';
+import {
+  computeWatchProgressPayload,
+  findProgressForEpisode,
+  saveWatchProgressEntry,
+} from '../lib/watchProgress';
+import { recordRealAnalyticsEvent } from '../lib/analytics';
 import { handlePosterError } from '../lib/mediaFilters';
 import {
   detectClientCapabilities,
@@ -94,7 +100,10 @@ import {
   PopupShieldConfig,
   PopupShieldHostRule,
   PopupShieldProfileMode,
+  ServerHealthRecord,
+  ServerWatchMode,
   VisitorRequest,
+  WatchProgressRecord,
 } from '../types/media';
 import { FooterTopic } from './Footer';
 
@@ -143,7 +152,26 @@ export function WatchlistModal({
   onSelectMedia,
   onRemove,
 }: WatchlistModalProps) {
+  const [typeFilter, setTypeFilter] = useState<'all' | 'movie' | 'series'>('all');
+  const [sortOrder, setSortOrder] = useState<'recent' | 'rating' | 'year'>('recent');
+
   useDialogAccessibility(isOpen, onClose);
+
+  const displayedItems = useMemo(() => {
+    const filtered = items.filter((it) => {
+      if (typeFilter === 'movie') return it.kind === 'movie' || it.kind === 'play';
+      if (typeFilter === 'series') return it.kind === 'series' || it.kind === 'tv' || it.kind === 'wrestling';
+      return true;
+    });
+    if (sortOrder === 'rating') {
+      return [...filtered].sort((a, b) => (b.imdb || 0) - (a.imdb || 0));
+    }
+    if (sortOrder === 'year') {
+      return [...filtered].sort((a, b) => Number(b.year || 0) - Number(a.year || 0));
+    }
+    return filtered;
+  }, [items, typeFilter, sortOrder]);
+
   if (!isOpen) return null;
 
   return (
@@ -173,18 +201,60 @@ export function WatchlistModal({
           </button>
         </div>
 
-        <div className="max-h-[72vh] sm:max-h-[65vh] overflow-y-auto p-3.5 sm:p-5">
-          {items.length === 0 ? (
+        {items.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 bg-[#0f1b24] px-4 py-2.5 border-b border-white/[0.07]">
+            <div className="flex items-center gap-1.5">
+              {(
+                [
+                  { id: 'all', label: 'الكل' },
+                  { id: 'movie', label: 'أفلام' },
+                  { id: 'series', label: 'مسلسلات' },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setTypeFilter(tab.id)}
+                  className={`rounded-lg px-2.5 py-1 text-xs font-extrabold transition-colors cursor-pointer ${
+                    typeFilter === tab.id
+                      ? 'bg-[#D92321] text-white'
+                      : 'bg-white/5 text-[#b7c9ef] hover:bg-white/10 hover:text-white'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            <select
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as 'recent' | 'rating' | 'year')}
+              aria-label="ترتيب قائمتي"
+              className="rounded-lg bg-[#1a242e] border border-white/10 px-2.5 py-1 text-xs font-bold text-white focus:border-[#D92321] focus:outline-none cursor-pointer"
+            >
+              <option value="recent">الأحدث إضافة</option>
+              <option value="rating">الأعلى تقييماً</option>
+              <option value="year">الأحدث إصداراً</option>
+            </select>
+          </div>
+        )}
+
+        <div className="max-h-[70vh] sm:max-h-[62vh] overflow-y-auto p-3.5 sm:p-5">
+          {displayedItems.length === 0 ? (
             <div className="py-12 text-center">
               <Film className="w-12 h-12 mx-auto text-[#b7c9ef]/30 mb-3" />
-              <p className="text-sm font-bold text-white mb-1">قائمتك فارغة حاليًا</p>
+              <p className="text-sm font-bold text-white mb-1">
+                {items.length === 0 ? 'قائمتك فارغة حاليًا' : 'لا توجد أعمال مطابقة لهذا الفلتر'}
+              </p>
               <p className="text-xs text-[#b7c9ef]">
-                اضغط على زر "أضافة الي قائمتي" داخل أي فيلم أو مسلسل لحفظه هنا.
+                {items.length === 0
+                  ? 'اضغط على زر "أضافة الي قائمتي" داخل أي فيلم أو مسلسل لحفظه هنا.'
+                  : 'غيّر الفلتر لعرض باقي الأعمال المحفوظة في قائمتك.'}
               </p>
             </div>
           ) : (
             <div className="space-y-3">
-              {items.map((item) => (
+              {displayedItems.map((item) => (
                 <div
                   key={item.id}
                   className="flex items-center justify-between gap-2.5 sm:gap-4 rounded-2xl bg-[#1a242e]/80 border border-white/[0.07] p-2.5 sm:p-3"
@@ -211,7 +281,7 @@ export function WatchlistModal({
                         {item.title}
                       </h3>
                       <p className="text-[11px] sm:text-xs text-[#b7c9ef] mt-1 truncate">
-                        {item.year} • {item.quality} • {item.duration}
+                        {item.year} • {item.quality} • {item.imdb ? `★ ${item.imdb}` : item.duration}
                       </p>
                     </div>
                   </button>
@@ -459,8 +529,15 @@ interface PlayerModalProps {
   item: MediaItem | null;
   initialEpisode?: number;
   initialServerIndex?: number;
+  initialPositionSec?: number;
   playerTheme?: PlayerThemeConfig;
   popupShieldConfig?: PopupShieldConfig;
+  serverHealthMap?: Record<string, ServerHealthRecord>;
+  activeProfileId?: string;
+  userId?: string;
+  isSignedIn?: boolean;
+  watchProgressRecords?: WatchProgressRecord[];
+  onSaveWatchProgress?: (record: WatchProgressRecord) => void;
   onUpdateHostRule?: (rule: PopupShieldHostRule) => void;
   isInWatchlist?: boolean;
   onToggleWatchlist?: (item: MediaItem) => void;
@@ -478,53 +555,6 @@ interface ServerFilterEntry {
   sandboxRejected?: boolean;
 }
 
-function getFriendlyServerError(entry?: ServerFilterEntry | null): {
-  title: string;
-  subtitle: string;
-  shortStatus: string;
-} {
-  if (!entry) {
-    return {
-      title: 'تعذر تشغيل هذا السيرفر',
-      subtitle: 'حدث انقطاع مؤقت في السيرفر. يمكنك تجربة سيرفر آخر.',
-      shortStatus: 'غير متاح',
-    };
-  }
-  if (entry.faultType === '403' || entry.httpStatus === 403) {
-    return {
-      title: 'السيرفر غير متاح حالياً',
-      subtitle: 'تعذر الوصول إلى مصدر البث في هذا السيرفر. جرّب سيرفراً آخر للمشاهدة.',
-      shortStatus: 'غير متاح',
-    };
-  }
-  if (entry.faultType === '404' || entry.httpStatus === 404 || entry.httpStatus === 410) {
-    return {
-      title: 'الفيديو غير متوفر على هذا السيرفر',
-      subtitle: 'لم يتم العثور على ملف المشاهدة هنا. اختر سيرفراً بديلاً للمتابعة.',
-      shortStatus: 'غير متوفر',
-    };
-  }
-  if (entry.faultType === 'frame_blocked' || entry.faultType === 'sandboxed_embed') {
-    return {
-      title: 'تعذر تشغيل هذا السيرفر هنا',
-      subtitle: 'هذا السيرفر لا يدعم التشغيل داخل المشغل الحالي. جرّب سيرفراً آخر.',
-      shortStatus: 'غير متوافق',
-    };
-  }
-  if (entry.faultType === 'not_video') {
-    return {
-      title: 'الرابط لا يحتوي على فيديو مباشر',
-      subtitle: 'تم إيقاف هذا الرابط لأنه لا يفتح مشغل فيديو. جرّب سيرفراً آخر.',
-      shortStatus: 'غير متاح',
-    };
-  }
-  return {
-    title: 'تعذر الاتصال بالسيرفر',
-    subtitle: 'قد يكون السيرفر مشغولاً حالياً. يمكنك تجربة سيرفر آخر أو إعادة المحاولة.',
-    shortStatus: 'متعطل',
-  };
-}
-
 function cleanQualityIdentifier(quality?: string, fallback?: string): string {
   const cleaned = String(quality || fallback || 'HD')
     .replace(/مستورد|embed/gi, '')
@@ -532,28 +562,30 @@ function cleanQualityIdentifier(quality?: string, fallback?: string): string {
   return cleaned || String(fallback || 'HD').replace(/مستورد|embed/gi, '').trim() || 'HD';
 }
 
-function extractSafeStreamSrc(embedCode?: string, url?: string): string | null {
-  if (embedCode) {
-    const match = embedCode.match(/src\s*=\s*["']([^"']+)["']/i);
-    if (match && /^https?:\/\//i.test(match[1].trim())) {
-      return match[1].trim();
-    }
-    if (/^https?:\/\//i.test(embedCode.trim())) {
-      return embedCode.trim();
-    }
+function formatSeekTimeLabel(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const rem = s % 60;
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
   }
-  if (url && /^https?:\/\//i.test(url.trim())) {
-    return url.trim();
-  }
-  return null;
+  return `${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
 }
 
 export function PlayerModal({
   item,
   initialEpisode = 1,
   initialServerIndex = 0,
+  initialPositionSec,
   playerTheme,
   popupShieldConfig,
+  serverHealthMap = {},
+  activeProfileId = 'main',
+  userId = 'guest',
+  isSignedIn = false,
+  watchProgressRecords = [],
+  onSaveWatchProgress,
   onUpdateHostRule,
   isInWatchlist = false,
   onToggleWatchlist,
@@ -564,30 +596,21 @@ export function PlayerModal({
   const [seasonIdx, setSeasonIdx] = useState(0);
   const [episodeNum, setEpisodeNum] = useState(initialEpisode);
 
-  // Server Filtering system states
+  // Silent runtime failover state (no blocking pre-player loader or viewer probes)
   const [filterMap, setFilterMap] = useState<Record<number, ServerFilterEntry>>({});
-  const [isFiltering, setIsFiltering] = useState(false);
-  const [filterAlert, setFilterAlert] = useState<{
-    kind: 'switched' | 'warning';
-    message: string;
-  } | null>(null);
   const [bypassEpisodeSrc, setBypassEpisodeSrc] = useState(false);
-  const [manualBypassFault, setManualBypassFault] = useState<Record<number, boolean>>({});
   const [playerReloadKey, setPlayerReloadKey] = useState(0);
-  const [retryAllNonce, setRetryAllNonce] = useState(0);
   const [allServersFailed, setAllServersFailed] = useState(false);
-  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [shieldSessionOverrides, setShieldSessionOverrides] = useState<
     Record<number, Exclude<PopupShieldProfileMode, 'direct_media'>>
   >({});
   const [bypassDirectUrlByServer, setBypassDirectUrlByServer] = useState<Record<number, boolean>>({});
-  const [smartPlayState, setSmartPlayState] = useState<SmartPlayState>('initializing');
-  const [smartPlayDetail, setSmartPlayDetail] = useState<string>('');
-  const [smartOverlayDismissed, setSmartOverlayDismissed] = useState<boolean>(false);
+  const [isBuffering, setIsBuffering] = useState(false);
   const [showMobileDetails, setShowMobileDetails] = useState(false);
   const [isTheaterMode, setIsTheaterMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isMobileCinemaFill, setIsMobileCinemaFill] = useState(false);
+  const [showInlineEpisodesDrawer, setShowInlineEpisodesDrawer] = useState(false);
   const [hlsLevels, setHlsLevels] = useState<Array<{ index: number; label: string }>>([]);
   const [selectedHlsLevel, setSelectedHlsLevel] = useState<number>(-1);
   const [hlsSubtitles, setHlsSubtitles] = useState<Array<{ index: number; label: string }>>([]);
@@ -597,6 +620,10 @@ export function PlayerModal({
   const [customVttUrl, setCustomVttUrl] = useState('');
   const [showSubtitleInput, setShowSubtitleInput] = useState(false);
   const [seekFeedback, setSeekFeedback] = useState<'forward' | 'backward' | null>(null);
+  const [currentTimeSec, setCurrentTimeSec] = useState(0);
+  const [resumeToastText, setResumeToastText] = useState<string | null>(null);
+  const [autoNextCountdown, setAutoNextCountdown] = useState<number | null>(null);
+
   const playerBoxRef = useRef<HTMLDivElement | null>(null);
   const videoElementRef = useRef<HTMLVideoElement | null>(null);
   const iframeElementRef = useRef<HTMLIFrameElement | null>(null);
@@ -616,27 +643,69 @@ export function PlayerModal({
   const attemptTokenRef = useRef<number>(0);
   const playbackConfirmedRef = useRef<boolean>(false);
   const hasStartedPlayingRef = useRef<boolean>(false);
-  const iframeLoadedRef = useRef<boolean>(false);
   const filterMapRef = useRef<Record<number, ServerFilterEntry>>({});
   const userPausedRef = useRef<boolean>(false);
-  const loadTimeoutRef = useRef<number | null>(null);
+  const activeUrlForDiagnosticsRef = useRef<string>('');
+  const activeServerNameRef = useRef<string>('سيرفر');
+  const resumedOnceKeyRef = useRef<string>('');
+  const completedAnalyticsKeyRef = useRef<string>('');
   const doubleTapRef = useRef<{ lastTime: number; side: 'left' | 'right' | null }>({
     lastTime: 0,
     side: null,
   });
 
-  useDialogAccessibility(Boolean(item), onClose);
+  // Flush current <video> watch progress immediately (used on pause, episode switch, close, unload)
+  const flushWatchProgressNow = useCallback(
+    (forceImmediate = true) => {
+      if (!item) return;
+      const vid = videoElementRef.current;
+      if (!vid) return;
+      const pos = Number(vid.currentTime || 0);
+      const dur = Number(vid.duration || 0);
+      if (!Number.isFinite(pos) || pos < 1) return;
+      const sNum = item.seasons?.[seasonIdx]?.seasonNumber;
+      const epNum = item.seasons && item.seasons.length > 0 ? episodeNum : undefined;
+      const rec = computeWatchProgressPayload({
+        userId,
+        profileId: activeProfileId,
+        media: item,
+        seasonNumber: sNum,
+        episodeNumber: epNum,
+        positionSec: pos,
+        durationSec: Number.isFinite(dur) ? dur : 0,
+        lastServerUrl: activeUrlForDiagnosticsRef.current || undefined,
+      });
+      onSaveWatchProgress?.(rec);
+      void saveWatchProgressEntry(rec, {
+        immediate: forceImmediate,
+        throttleMs: 7000,
+        isSignedIn,
+      });
+    },
+    [item, seasonIdx, episodeNum, userId, activeProfileId, isSignedIn, onSaveWatchProgress]
+  );
+
+  const handleCloseWithFlush = useCallback(() => {
+    flushWatchProgressNow(true);
+    onClose();
+  }, [flushWatchProgressNow, onClose]);
+
+  useDialogAccessibility(Boolean(item), handleCloseWithFlush);
   const canUsePiP = detectClientCapabilities().supportsPictureInPicture;
 
-  // Lock background page scroll while Watch Modal is open (prevents iOS/Android bleed)
   useEffect(() => {
     if (!item) return;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+    const onUnload = () => flushWatchProgressNow(true);
+    window.addEventListener('pagehide', onUnload);
+    window.addEventListener('beforeunload', onUnload);
     return () => {
       document.body.style.overflow = prevOverflow;
+      window.removeEventListener('pagehide', onUnload);
+      window.removeEventListener('beforeunload', onUnload);
     };
-  }, [item]);
+  }, [item, flushWatchProgressNow]);
 
   useEffect(() => {
     const onFsChange = () => {
@@ -671,16 +740,8 @@ export function PlayerModal({
     setIsMobileCinemaFill((prev) => !prev);
   }, []);
 
-  const clearLoadTimeout = useCallback(() => {
-    if (loadTimeoutRef.current !== null) {
-      window.clearTimeout(loadTimeoutRef.current);
-      loadTimeoutRef.current = null;
-    }
-  }, []);
-
   // Strictly release active video, HLS, and iframe resources before any server/mode transition
   const cleanupActiveMediaInstances = useCallback(() => {
-    clearLoadTimeout();
     if (hlsInstanceRef.current) {
       try {
         hlsInstanceRef.current.destroy();
@@ -705,109 +766,134 @@ export function PlayerModal({
         // Ignore iframe reset error
       }
     }
-  }, [clearLoadTimeout]);
+  }, []);
 
-  // Confirmed playback (only call upon genuine video readiness/playback or explicit user activation on loaded frame)
-  const confirmServerLoadReady = useCallback(
+  const confirmRuntimePlayback = useCallback(
     (serverIdx: number, expectedToken?: number, options?: { verifiedPlayback?: boolean }) => {
       if (expectedToken !== undefined && attemptTokenRef.current !== expectedToken) return;
       const isPlayback = Boolean(options?.verifiedPlayback);
-      clearLoadTimeout();
+      setIsBuffering(false);
       setAllServersFailed(false);
       modeTransitionLockRef.current = false;
+
+      const activeUrl = activeUrlForDiagnosticsRef.current;
+      const usedMode = currentWatchModeRef.current;
+      if (activeUrl) {
+        saveRememberedWorkingMode(activeUrl, usedMode);
+        recordPassivePlayerObservation({
+          url: activeUrl,
+          serverName: activeServerNameRef.current,
+          mediaId: item?.id,
+          mediaTitle: item?.title,
+          seasonNumber: item?.seasons?.[seasonIdx]?.seasonNumber,
+          episodeNumber: item?.seasons?.length ? episodeNum : undefined,
+          status: isPlayback ? 'confirmed_playing' : 'page_available',
+          succeededMode: usedMode as ServerWatchMode,
+          playbackConfirmed: isPlayback,
+          uid: isSignedIn ? userId : undefined,
+        });
+      }
 
       if (isPlayback) {
         playbackConfirmedRef.current = true;
         hasStartedPlayingRef.current = true;
-        setSmartPlayState('confirmed_playing');
-        setSmartPlayDetail('');
-        setSmartOverlayDismissed(true);
-      } else if (!playbackConfirmedRef.current) {
-        setSmartPlayState((prev) => (prev === 'autoplay_blocked' ? 'autoplay_blocked' : 'page_loaded_ready'));
-      }
-
-      const existing = filterMapRef.current[serverIdx];
-      if (!existing) {
-        const nextMap: Record<number, ServerFilterEntry> = {
-          ...filterMapRef.current,
-          [serverIdx]: {
-            url: '',
-            ok: true,
-            faultType: null,
-            httpStatus: 200,
-            reason: isPlayback
-              ? 'تم بدء تشغيل الفيديو بنجاح'
-              : 'الصفحة متاحة — بانتظار تأكيد التشغيل',
-          },
-        };
-        filterMapRef.current = nextMap;
-        setFilterMap(nextMap);
+        if (item) {
+          void recordRealAnalyticsEvent({
+            kind: 'playback_start',
+            mediaId: item.id,
+            seasonNumber: item.seasons?.[seasonIdx]?.seasonNumber,
+            episodeNumber: item.seasons?.length ? episodeNum : undefined,
+            genres: item.genres,
+            isSignedIn,
+          });
+        }
       }
     },
-    [clearLoadTimeout]
+    [item, seasonIdx, episodeNum, isSignedIn, userId]
   );
 
-  // Reset selections when media item or initial props change
+  // Reset selections when media item or initial props change — opens player immediately with cached healthy server preference
   useEffect(() => {
-    const seasons = item?.seasons || [];
-    const matchingSeason = seasons.findIndex((s) =>
+    if (!item) return;
+    const seasonsList = item.seasons || [];
+    const matchingSeasonIdx = seasonsList.findIndex((s) =>
       (s.episodes || []).some((e) => e.number === initialEpisode)
     );
+    const resolvedSeasonIdx = matchingSeasonIdx >= 0 ? matchingSeasonIdx : 0;
+    const epList = seasonsList[resolvedSeasonIdx]?.episodes || [];
+    const epObj = epList.find((e) => e.number === initialEpisode);
+    const rawServers =
+      epObj?.servers && epObj.servers.length > 0 ? epObj.servers : item.servers || [];
+
+    // Pick cached healthy server first if caller passed default index 0
+    let preferredIdx = initialServerIndex < rawServers.length ? initialServerIndex : 0;
+    if (initialServerIndex === 0 && rawServers.length > 1 && Object.keys(serverHealthMap).length > 0) {
+      const sorted = sortServersByCachedHealth(rawServers, serverHealthMap);
+      const bestIdx = rawServers.indexOf(sorted[0]);
+      if (bestIdx >= 0) preferredIdx = bestIdx;
+    }
+
     cleanupActiveMediaInstances();
     attemptTokenRef.current += 1;
     modeTransitionLockRef.current = false;
-    selectedServerRef.current = initialServerIndex;
-    triedServersRef.current = new Set([initialServerIndex]);
+    selectedServerRef.current = preferredIdx;
+    triedServersRef.current = new Set([preferredIdx]);
     triedModesByServerRef.current = {};
     playbackConfirmedRef.current = false;
     hasStartedPlayingRef.current = false;
-    iframeLoadedRef.current = false;
     filterMapRef.current = {};
     userPausedRef.current = false;
-    setSeasonIdx(matchingSeason >= 0 ? matchingSeason : 0);
+    resumedOnceKeyRef.current = '';
+    completedAnalyticsKeyRef.current = '';
+
+    setSeasonIdx(resolvedSeasonIdx);
     setEpisodeNum(initialEpisode);
-    setSelectedServer(initialServerIndex);
+    setSelectedServer(preferredIdx);
     setFilterMap({});
-    setFilterAlert(null);
-    setBypassEpisodeSrc(initialServerIndex > 0);
-    setManualBypassFault({});
+    setBypassEpisodeSrc(preferredIdx > 0);
     setBypassDirectUrlByServer({});
     setAllServersFailed(false);
-    setAutoplayBlocked(false);
+    setIsBuffering(false);
     setPlayerReloadKey(0);
     setShieldSessionOverrides({});
-    setSmartPlayState('initializing');
-    setSmartPlayDetail('');
-    setSmartOverlayDismissed(false);
     setShowMobileDetails(false);
     setIsMobileCinemaFill(false);
+    setShowInlineEpisodesDrawer(false);
+    setCurrentTimeSec(0);
+    setResumeToastText(null);
+    setAutoNextCountdown(null);
   }, [item?.id, initialEpisode, initialServerIndex, cleanupActiveMediaInstances]);
 
-  // Keep selectedServerRef synchronized
   useEffect(() => {
     selectedServerRef.current = selectedServer;
   }, [selectedServer]);
 
-  // Cleanup any load timer and active media instances on unmount
   useEffect(() => cleanupActiveMediaInstances, [cleanupActiveMediaInstances]);
 
-  // Smart Mode Fallback + Multi-Server Failover:
-  // Tries remaining compatible modes on the SAME server before abandoning the server (unless hard 404/not_video/blocked)
+  // Silent runtime mode fallback + next-server failover ONLY when an actual playback/load fault occurs
   const handleServerFaultFailover = useCallback(
     (
       faultIdx: number,
       reason: string,
       expectedToken?: number,
-      options?: { skipModeFallback?: boolean }
+      options?: { skipModeFallback?: boolean; allowAfterConfirmedPlayback?: boolean }
     ) => {
       if (!item) return;
       if (expectedToken !== undefined && attemptTokenRef.current !== expectedToken) return;
-      if (playbackConfirmedRef.current && hasStartedPlayingRef.current) return;
+      if (
+        !options?.allowAfterConfirmedPlayback &&
+        playbackConfirmedRef.current &&
+        hasStartedPlayingRef.current
+      ) {
+        return;
+      }
       if (modeTransitionLockRef.current) return;
 
       modeTransitionLockRef.current = true;
       cleanupActiveMediaInstances();
+      setIsBuffering(false);
 
+      const currentUrl = activeUrlForDiagnosticsRef.current;
       const isHardServerDeadFault =
         options?.skipModeFallback ||
         reason.includes('404') ||
@@ -817,6 +903,10 @@ export function PlayerModal({
       const currentMode = currentWatchModeRef.current;
       const modeChain = activeModeChainRef.current;
       const existingTriedModes = triedModesByServerRef.current[faultIdx] || new Set<WatchMode>();
+
+      if (currentUrl) {
+        clearRememberedWorkingMode(currentUrl);
+      }
 
       if (!isHardServerDeadFault && modeChain.length > 1) {
         const modeTransition = resolveNextModeOnFailure({
@@ -831,12 +921,7 @@ export function PlayerModal({
           attemptTokenRef.current += 1;
           playbackConfirmedRef.current = false;
           hasStartedPlayingRef.current = false;
-          iframeLoadedRef.current = false;
           userPausedRef.current = false;
-          setAutoplayBlocked(false);
-          setSmartOverlayDismissed(false);
-          setSmartPlayState('trying_mode');
-          setSmartPlayDetail('تعذر التشغيل بهذا الوضع، جاري تجربة وضع آخر...');
 
           if (currentMode === 'direct_media' && nextMode !== 'direct_media') {
             setBypassDirectUrlByServer((prev) => ({ ...prev, [faultIdx]: true }));
@@ -848,11 +933,7 @@ export function PlayerModal({
             }));
           }
           setPlayerReloadKey((k) => k + 1);
-          const nextModeInfo = getWatchModeDisplayInfo(nextMode);
-          setFilterAlert({
-            kind: 'switched',
-            message: `تعذر التشغيل بالوضع السابق — جاري تجربة ${nextModeInfo.label}.`,
-          });
+
           window.setTimeout(() => {
             modeTransitionLockRef.current = false;
           }, 80);
@@ -860,18 +941,33 @@ export function PlayerModal({
         }
       }
 
+      const isFrameBlockedReason = /iframe|x-frame|frame_blocked/i.test(reason);
+      if (currentUrl) {
+        recordPassivePlayerObservation({
+          url: currentUrl,
+          serverName: activeServerNameRef.current,
+          mediaId: item.id,
+          mediaTitle: item.title,
+          seasonNumber: item.seasons?.[seasonIdx]?.seasonNumber,
+          episodeNumber: item.seasons?.length ? episodeNum : undefined,
+          status: isFrameBlockedReason ? 'iframe_blocked' : 'broken',
+          failureReason: reason,
+          playbackConfirmed: false,
+          uid: isSignedIn ? userId : undefined,
+        });
+      }
+
       const epList = item.seasons?.[seasonIdx]?.episodes || item.seasons?.[0]?.episodes || [];
       const activeEp = epList.find((e) => e.number === episodeNum);
       const itemServers = Array.isArray(item.servers) ? item.servers : [];
       const effectiveServers =
         activeEp?.servers && activeEp.servers.length > 0 ? activeEp.servers : itemServers;
-      const total = effectiveServers.length;
 
       const prevMap = filterMapRef.current;
       const nextMap: Record<number, ServerFilterEntry> = {
         ...prevMap,
         [faultIdx]: {
-          url: prevMap[faultIdx]?.url || '',
+          url: prevMap[faultIdx]?.url || currentUrl || '',
           ok: false,
           faultType: reason.includes('403')
             ? '403'
@@ -879,7 +975,9 @@ export function PlayerModal({
               ? '404'
               : /sandbox/i.test(reason)
                 ? 'sandboxed_embed'
-                : 'error',
+                : isFrameBlockedReason
+                  ? 'frame_blocked'
+                  : 'error',
           httpStatus: reason.includes('403') ? 403 : reason.includes('404') ? 404 : 0,
           reason,
         },
@@ -889,7 +987,7 @@ export function PlayerModal({
 
       const transition = computeFaultFailoverTransition({
         faultIndex: faultIdx,
-        totalServers: total,
+        totalServers: effectiveServers.length,
         triedIndices: triedServersRef.current,
         filterMap: nextMap,
       });
@@ -901,269 +999,24 @@ export function PlayerModal({
         selectedServerRef.current = candidateIdx;
         playbackConfirmedRef.current = false;
         hasStartedPlayingRef.current = false;
-        iframeLoadedRef.current = false;
         userPausedRef.current = false;
-        setAutoplayBlocked(false);
         setAllServersFailed(false);
         setBypassEpisodeSrc(true);
-        setSmartPlayState('initializing');
-        setSmartPlayDetail('');
-        setSmartOverlayDismissed(false);
         setSelectedServer(candidateIdx);
-
-        const faultName = formatShortServerName(
-          effectiveServers[faultIdx]?.name,
-          faultIdx,
-          effectiveServers[faultIdx]?.url
-        );
-        const nextName = formatShortServerName(
-          effectiveServers[candidateIdx]?.name,
-          candidateIdx,
-          effectiveServers[candidateIdx]?.url
-        );
-        setFilterAlert({
-          kind: 'switched',
-          message: `${faultName} لم يستجب بعد تجربة الأوضاع المتاحة — تم التبديل تلقائياً إلى ${nextName}.`,
-        });
       } else {
-        setSmartPlayState('server_exhausted');
-        setSmartPlayDetail('لم نتمكن من تشغيل هذا السيرفر، يمكنك تجربة سيرفر آخر.');
-        setSmartOverlayDismissed(false);
         setAllServersFailed(true);
-        setFilterAlert({
-          kind: 'warning',
-          message: 'تعذر تشغيل المحتوى حاليًا — يمكنك تجربة سيرفر آخر أو إعادة المحاولة.',
-        });
       }
       window.setTimeout(() => {
         modeTransitionLockRef.current = false;
       }, 80);
     },
-    [item, seasonIdx, episodeNum, cleanupActiveMediaInstances]
+    [item, seasonIdx, episodeNum, isSignedIn, userId, cleanupActiveMediaInstances]
   );
-
-  // Mark iframe frame load separately: NEVER falsifies confirmed_playing on cross-origin frames!
-  const markIframeLoaded = useCallback(
-    (serverIdx: number, expectedToken?: number, sameOriginPlaying = false) => {
-      if (expectedToken !== undefined && attemptTokenRef.current !== expectedToken) return;
-      iframeLoadedRef.current = true;
-      clearLoadTimeout();
-      setAllServersFailed(false);
-      modeTransitionLockRef.current = false;
-      const existing = filterMapRef.current[serverIdx];
-      if (existing && !existing.ok && !manualBypassFault[serverIdx]) {
-        if (existing.faultType === 'sandboxed_embed') {
-          handleServerFaultFailover(serverIdx, existing.reason || 'رسالة Sandboxed embed', expectedToken);
-          return;
-        }
-        handleServerFaultFailover(serverIdx, existing.reason || 'السيرفر غير متاح', expectedToken, {
-          skipModeFallback:
-            existing.faultType === '404' ||
-            existing.faultType === 'not_video' ||
-            (existing.faultType === '403' && !existing.directStreamUrl),
-        });
-        return;
-      }
-      if (sameOriginPlaying) {
-        confirmServerLoadReady(serverIdx, expectedToken, { verifiedPlayback: true });
-      } else {
-        confirmServerLoadReady(serverIdx, expectedToken, { verifiedPlayback: false });
-      }
-    },
-    [clearLoadTimeout, confirmServerLoadReady, handleServerFaultFailover, manualBypassFault]
-  );
-
-  // Proactive Server Filtering scan on open / episode change / manual retry (backend + browser/Worker fallback)
-  useEffect(() => {
-    if (!item) return;
-
-    const episodesList = item.seasons?.[seasonIdx]?.episodes || item.seasons?.[0]?.episodes || [];
-    const activeEp = episodesList.find((e) => e.number === episodeNum);
-    const hasPerEpisodeServers = Boolean(activeEp?.servers && activeEp.servers.length > 0);
-    const targetServers = hasPerEpisodeServers
-      ? activeEp!.servers!
-      : Array.isArray(item.servers)
-        ? item.servers
-        : [];
-
-    const rawEpSrc =
-      hasPerEpisodeServers || bypassEpisodeSrc
-        ? null
-        : extractSafeStreamSrc(activeEp?.embedCode, activeEp?.watchUrl);
-    const epSrc = rawEpSrc && !isLikelyNonVideoWebsiteUrl(rawEpSrc) ? rawEpSrc : null;
-
-    const serverUrls = targetServers.map((srv) => extractSafeStreamSrc(srv.embedCode, srv.url) || '');
-    const allUrls = epSrc ? [...serverUrls, epSrc] : serverUrls;
-
-    if (allUrls.every((u) => !u)) return;
-
-    let cancelled = false;
-    setIsFiltering(true);
-
-    (async () => {
-      try {
-        let filterResults: ServerFilterEntry[] | null = null;
-
-        if (!shouldSkipBackendApiCalls()) {
-          try {
-            const res = await fetch(resolveApiEndpoint('/api/filter-servers'), {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ urls: allUrls }),
-            });
-            const contentType = res.headers.get('content-type') || '';
-            if (res.ok && contentType.includes('application/json')) {
-              const data = (await res.json()) as { ok?: boolean; results?: ServerFilterEntry[] };
-              if (data.ok && Array.isArray(data.results)) {
-                filterResults = data.results;
-              }
-            }
-          } catch {
-            // Static hosting -> fall through to browser/Worker filter
-          }
-        }
-
-        if (!filterResults) {
-          filterResults = await filterServersInBrowser(allUrls);
-        }
-
-        if (cancelled || !filterResults) return;
-
-        const nextMap: Record<number, ServerFilterEntry> = {};
-
-        targetServers.forEach((_, idx) => {
-          const entry = filterResults?.[idx];
-          if (entry) {
-            nextMap[idx] = entry;
-          }
-        });
-
-        const prev = filterMapRef.current;
-        const merged: Record<number, ServerFilterEntry> = { ...nextMap };
-        // Preserve runtime confirmations or runtime failures discovered while filter was running
-        Object.entries(prev).forEach(([k, v]) => {
-          const numIdx = Number(k);
-          if (!merged[numIdx] || (v && !v.ok)) {
-            merged[numIdx] = v;
-          }
-        });
-        filterMapRef.current = merged;
-        setFilterMap(merged);
-
-        const safeCurrentIdx =
-          selectedServerRef.current < targetServers.length ? selectedServerRef.current : 0;
-        const epResult = epSrc ? filterResults[targetServers.length] : null;
-        const decision = resolveProactiveFilterDecision({
-          currentIndex: safeCurrentIdx,
-          totalServers: targetServers.length,
-          triedIndices: triedServersRef.current,
-          filterMap: merged,
-          playbackConfirmed: playbackConfirmedRef.current,
-          manuallyBypassedCurrent: Boolean(manualBypassFault[safeCurrentIdx]),
-          hasEpisodeOverrideUrl: Boolean(epSrc),
-          episodeUrlOk: Boolean(epResult?.ok),
-        });
-
-        if (merged[safeCurrentIdx]?.ok && (merged[safeCurrentIdx]?.sandboxRejected || merged[safeCurrentIdx]?.faultType === 'sandboxed_embed')) {
-          if (currentWatchModeRef.current === 'strict_sandbox') {
-            triedModesByServerRef.current[safeCurrentIdx] = new Set([
-              ...(triedModesByServerRef.current[safeCurrentIdx] || []),
-              'strict_sandbox',
-            ]);
-            setShieldSessionOverrides((prev) => ({
-              ...prev,
-              [safeCurrentIdx]: 'direct_unrestricted',
-            }));
-            setSmartPlayState('trying_mode');
-            setSmartPlayDetail('جاري تجربة وضع التوافق المباشر...');
-            setSmartOverlayDismissed(false);
-            setPlayerReloadKey((k) => k + 1);
-          }
-        }
-
-        if (decision.action === 'switch') {
-          decision.nextTriedIndices.forEach((i) => triedServersRef.current.add(i));
-          triedServersRef.current.add(decision.nextIndex);
-          cleanupActiveMediaInstances();
-          attemptTokenRef.current += 1;
-          modeTransitionLockRef.current = false;
-          playbackConfirmedRef.current = false;
-          hasStartedPlayingRef.current = false;
-          iframeLoadedRef.current = false;
-          userPausedRef.current = false;
-          setAutoplayBlocked(false);
-          setAllServersFailed(false);
-          setSmartPlayState('initializing');
-          setSmartPlayDetail('');
-          setSmartOverlayDismissed(false);
-          if (decision.bypassEpisodeUrl) {
-            setBypassEpisodeSrc(true);
-          }
-          selectedServerRef.current = decision.nextIndex;
-          setSelectedServer(decision.nextIndex);
-
-          const currentName = formatShortServerName(
-            targetServers[safeCurrentIdx]?.name,
-            safeCurrentIdx,
-            targetServers[safeCurrentIdx]?.url
-          );
-          const nextName = formatShortServerName(
-            targetServers[decision.nextIndex]?.name,
-            decision.nextIndex,
-            targetServers[decision.nextIndex]?.url
-          );
-          setFilterAlert({
-            kind: 'switched',
-            message:
-              decision.bypassEpisodeUrl
-                ? `تم التبديل تلقائياً إلى ${nextName} لضمان تشغيل الحلقة.`
-                : `${currentName} غير متاح حالياً — تم التبديل تلقائياً إلى ${nextName}.`,
-          });
-        } else if (decision.action === 'all_failed') {
-          decision.nextTriedIndices.forEach((i) => triedServersRef.current.add(i));
-          cleanupActiveMediaInstances();
-          setAllServersFailed(true);
-          setSmartPlayState('server_exhausted');
-          setSmartPlayDetail('لم نتمكن من تشغيل هذا السيرفر، يمكنك تجربة سيرفر آخر.');
-          setSmartOverlayDismissed(false);
-          setFilterAlert({
-            kind: 'warning',
-            message: 'تعذر تشغيل المحتوى حاليًا — لم تستجب السيرفرات المتاحة.',
-          });
-        } else if (
-          iframeLoadedRef.current &&
-          merged[safeCurrentIdx]?.ok &&
-          (!epSrc || epResult?.ok)
-        ) {
-          confirmServerLoadReady(safeCurrentIdx, attemptTokenRef.current, {
-            verifiedPlayback: hasStartedPlayingRef.current,
-          });
-        }
-      } catch {
-        // Silent fallback
-      } finally {
-        if (!cancelled) setIsFiltering(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    item?.id,
-    seasonIdx,
-    episodeNum,
-    initialServerIndex,
-    retryAllNonce,
-    clearLoadTimeout,
-    confirmServerLoadReady,
-  ]);
 
   const effectiveShieldConfig = normalizePopupShieldConfig(
     popupShieldConfig || loadStoredPopupShieldConfig()
   );
 
-  // Derive active stream URL cleanly before runtime Shield effects
   const activeMediaEpisodes = item?.seasons?.[seasonIdx]?.episodes || item?.seasons?.[0]?.episodes || [];
   const activeEpPreview = activeMediaEpisodes.find((e) => e.number === episodeNum);
   const effectivePreviewServers =
@@ -1173,29 +1026,37 @@ export function PlayerModal({
   const previewServerIndex =
     selectedServer < effectivePreviewServers.length ? selectedServer : 0;
   const previewServerObj = effectivePreviewServers[previewServerIndex];
-  const rawPreviewEpSrc =
+  const rawPreviewEpSanitized =
     activeEpPreview?.servers && activeEpPreview.servers.length > 0
       ? null
       : bypassEpisodeSrc
         ? null
-        : extractSafeStreamSrc(activeEpPreview?.embedCode, activeEpPreview?.watchUrl);
+        : sanitizeAndRepairStreamUrl(activeEpPreview?.embedCode, activeEpPreview?.watchUrl);
+  const rawPreviewEpSrc = rawPreviewEpSanitized?.valid ? rawPreviewEpSanitized.url : null;
   const previewEpSrc =
     rawPreviewEpSrc && !isLikelyNonVideoWebsiteUrl(rawPreviewEpSrc) ? rawPreviewEpSrc : null;
-  const rawPreviewServerSrc = extractSafeStreamSrc(
+  const rawPreviewServerSanitized = sanitizeAndRepairStreamUrl(
     previewServerObj?.embedCode,
     previewServerObj?.url
   );
+  const rawPreviewServerSrc = rawPreviewServerSanitized.valid ? rawPreviewServerSanitized.url : null;
+  const cachedDirectUrl = rawPreviewServerSrc
+    ? serverHealthMap[rawPreviewServerSrc]?.diagnostics?.directStreamUrl || null
+    : null;
   const previewServerSrc =
-    (!bypassDirectUrlByServer[previewServerIndex] && filterMap[previewServerIndex]?.directStreamUrl) ||
+    (!bypassDirectUrlByServer[previewServerIndex] && (filterMap[previewServerIndex]?.directStreamUrl || cachedDirectUrl)) ||
     rawPreviewServerSrc;
   const currentActiveStreamSrc = previewEpSrc || previewServerSrc;
+  const cachedModeHint =
+    currentActiveStreamSrc && serverHealthMap[currentActiveStreamSrc]?.lastSuccessfulMode
+      ? (serverHealthMap[currentActiveStreamSrc].lastSuccessfulMode as Exclude<PopupShieldProfileMode, 'direct_media'>)
+      : null;
   const currentShieldDecision = resolveEffectiveShieldDecision(
     currentActiveStreamSrc,
     effectiveShieldConfig,
-    shieldSessionOverrides[previewServerIndex] || null
+    shieldSessionOverrides[previewServerIndex] || cachedModeHint || null
   );
 
-  // Sync active Shield player context for parent window guards (window.open / target=_blank)
   useEffect(() => {
     if (!item) return;
     setActiveShieldPlayerContext({
@@ -1215,7 +1076,6 @@ export function PlayerModal({
     currentShieldDecision.mode,
   ]);
 
-  // Passive cross-origin blur observation: NEVER pretends external unsandboxed popups were blocked
   useEffect(() => {
     if (!item || !currentActiveStreamSrc) return;
     if (
@@ -1258,7 +1118,7 @@ export function PlayerModal({
     previewServerIndex,
   ]);
 
-  // Listen for postMessage cues from embedded players reporting playback start, sandboxed embed, or errors
+  // Listen for postMessage signals from embedded players
   useEffect(() => {
     if (!item) return;
     const onMessage = (event: MessageEvent) => {
@@ -1269,7 +1129,7 @@ export function PlayerModal({
         );
       if (isPlaybackStartedSignal) {
         hasStartedPlayingRef.current = true;
-        confirmServerLoadReady(previewServerIndex, attemptTokenRef.current, {
+        confirmRuntimePlayback(previewServerIndex, attemptTokenRef.current, {
           verifiedPlayback: true,
         });
         return;
@@ -1287,14 +1147,10 @@ export function PlayerModal({
         attemptTokenRef.current += 1;
         playbackConfirmedRef.current = false;
         hasStartedPlayingRef.current = false;
-        iframeLoadedRef.current = false;
         triedModesByServerRef.current[previewServerIndex] = new Set([
           ...(triedModesByServerRef.current[previewServerIndex] || []),
           currentShieldDecision.mode,
         ]);
-        setSmartOverlayDismissed(false);
-        setSmartPlayState('trying_mode');
-        setSmartPlayDetail('جاري تجربة وضع التوافق المباشر...');
         setShieldSessionOverrides((prev) => ({
           ...prev,
           [previewServerIndex]: 'direct_unrestricted',
@@ -1309,24 +1165,6 @@ export function PlayerModal({
             lastTestedAt: new Date().toISOString(),
           });
         }
-        appendPopupShieldLog({
-          kind: 'sandbox_rejected_fallback',
-          prevented: false,
-          serverHost: currentShieldDecision.hostname || 'external-embed',
-          serverName: `سيرفر ${previewServerIndex + 1}`,
-          mediaTitle: item.title,
-          targetUrl: currentActiveStreamSrc || '',
-          detail: 'رفض السيرفر قيود sandbox — تم تبديله فوراً إلى التشغيل المتوافق دون تعطيل الفيديو.',
-        });
-        const resolvedShortName = formatShortServerName(
-          previewServerObj?.name,
-          previewServerIndex,
-          currentActiveStreamSrc || previewServerObj?.url
-        );
-        setFilterAlert({
-          kind: 'switched',
-          message: `تم ضبط التوافق لـ ${resolvedShortName} تلقائياً لضمان التشغيل.`,
-        });
         return;
       }
 
@@ -1349,7 +1187,7 @@ export function PlayerModal({
     effectiveShieldConfig.autoFallbackOnReject,
     onUpdateHostRule,
     handleServerFaultFailover,
-    confirmServerLoadReady,
+    confirmRuntimePlayback,
     cleanupActiveMediaInstances,
   ]);
 
@@ -1380,29 +1218,115 @@ export function PlayerModal({
   const activeServer = serversList[safeServerIndex] || serversList[0];
   const activeQuality = cleanQualityIdentifier(activeServer.quality, fallbackQuality);
 
-  const rawEpFallbackSrc =
+  const rawEpSanitized =
     activeEpisodeObj?.servers && activeEpisodeObj.servers.length > 0
       ? null
       : bypassEpisodeSrc
         ? null
-        : extractSafeStreamSrc(activeEpisodeObj?.embedCode, activeEpisodeObj?.watchUrl);
+        : sanitizeAndRepairStreamUrl(activeEpisodeObj?.embedCode, activeEpisodeObj?.watchUrl);
+  const rawEpFallbackSrc = rawEpSanitized?.valid ? rawEpSanitized.url : null;
   const episodeSpecificSrc =
     rawEpFallbackSrc && !isLikelyNonVideoWebsiteUrl(rawEpFallbackSrc) ? rawEpFallbackSrc : null;
 
   const activeFilterEntry = filterMap[safeServerIndex];
-  const rawOriginalServerSrc = extractSafeStreamSrc(activeServer.embedCode, activeServer.url);
+  const rawOriginalSanitized = sanitizeAndRepairStreamUrl(activeServer.embedCode, activeServer.url);
+  const rawOriginalServerSrc = rawOriginalSanitized.valid ? rawOriginalSanitized.url : null;
+  const cachedDirectForActive = rawOriginalServerSrc
+    ? serverHealthMap[rawOriginalServerSrc]?.diagnostics?.directStreamUrl || null
+    : null;
   const serverSrc =
-    (!bypassDirectUrlByServer[safeServerIndex] && activeFilterEntry?.directStreamUrl) ||
+    (!bypassDirectUrlByServer[safeServerIndex] &&
+      (activeFilterEntry?.directStreamUrl || cachedDirectForActive)) ||
     rawOriginalServerSrc;
   const finalStreamSrc = episodeSpecificSrc || serverSrc;
-  const isBlockedHomepageUrl = Boolean(
-    finalStreamSrc &&
-      (isLikelyNonVideoWebsiteUrl(finalStreamSrc) || activeFilterEntry?.faultType === 'not_video')
+  activeUrlForDiagnosticsRef.current = finalStreamSrc || '';
+  activeServerNameRef.current = formatShortServerName(
+    activeServer.name,
+    safeServerIndex,
+    finalStreamSrc || activeServer.url
   );
-  const isActiveServerFaulty = Boolean(
-    activeFilterEntry && !activeFilterEntry.ok && !manualBypassFault[safeServerIndex]
+
+  // Compute Next/Previous Episode targets (including cross-season transition)
+  const { prevEpisodeTarget, nextEpisodeTarget } = useMemo(() => {
+    if (!item || seasons.length === 0) {
+      return { prevEpisodeTarget: null, nextEpisodeTarget: null };
+    }
+    const curEps = seasons[seasonIdx]?.episodes || [];
+    const curEpIdx = curEps.findIndex((e) => e.number === episodeNum);
+    let prevTarget: { seasonIdx: number; episodeNumber: number; label: string } | null = null;
+    let nextTarget: { seasonIdx: number; episodeNumber: number; label: string } | null = null;
+
+    if (curEpIdx > 0) {
+      prevTarget = {
+        seasonIdx,
+        episodeNumber: curEps[curEpIdx - 1].number,
+        label: `الحلقة ${curEps[curEpIdx - 1].number}`,
+      };
+    } else if (seasonIdx > 0) {
+      const prevSeasonEps = seasons[seasonIdx - 1]?.episodes || [];
+      if (prevSeasonEps.length > 0) {
+        const lastPrev = prevSeasonEps[prevSeasonEps.length - 1];
+        prevTarget = {
+          seasonIdx: seasonIdx - 1,
+          episodeNumber: lastPrev.number,
+          label: `${seasons[seasonIdx - 1].label} · ح ${lastPrev.number}`,
+        };
+      }
+    }
+
+    if (curEpIdx >= 0 && curEpIdx < curEps.length - 1) {
+      nextTarget = {
+        seasonIdx,
+        episodeNumber: curEps[curEpIdx + 1].number,
+        label: `الحلقة ${curEps[curEpIdx + 1].number}`,
+      };
+    } else if (seasonIdx < seasons.length - 1) {
+      const nextSeasonEps = seasons[seasonIdx + 1]?.episodes || [];
+      if (nextSeasonEps.length > 0) {
+        nextTarget = {
+          seasonIdx: seasonIdx + 1,
+          episodeNumber: nextSeasonEps[0].number,
+          label: `${seasons[seasonIdx + 1].label} · ح ${nextSeasonEps[0].number}`,
+        };
+      }
+    }
+
+    return { prevEpisodeTarget: prevTarget, nextEpisodeTarget: nextTarget };
+  }, [item, seasons, seasonIdx, episodeNum]);
+
+  // Saved resume position for current movie / episode
+  const savedResumePositionSec = useMemo(() => {
+    if (!item) return 0;
+    const sNum = seasons.length > 0 ? seasons[seasonIdx]?.seasonNumber : undefined;
+    const epNum = seasons.length > 0 ? episodeNum : undefined;
+    const rec = findProgressForEpisode(item.id, sNum, epNum, watchProgressRecords);
+    if (rec && !rec.completed && rec.positionSec >= 5) {
+      return rec.positionSec;
+    }
+    if (typeof initialPositionSec === 'number' && initialPositionSec >= 5 && episodeNum === initialEpisode) {
+      return initialPositionSec;
+    }
+    return 0;
+  }, [item, seasons, seasonIdx, episodeNum, watchProgressRecords, initialPositionSec, initialEpisode]);
+
+  const activeSkipSegments = activeEpisodeObj?.skipSegments || item?.skipSegments;
+  const showSkipIntroButton = Boolean(
+    activeSkipSegments?.introEndSec !== undefined &&
+      currentTimeSec >= (activeSkipSegments.introStartSec ?? 0) &&
+      currentTimeSec < activeSkipSegments.introEndSec
   );
-  const friendlyServerError = getFriendlyServerError(activeFilterEntry);
+  const showSkipRecapButton = Boolean(
+    activeSkipSegments?.recapEndSec !== undefined &&
+      currentTimeSec >= (activeSkipSegments.recapStartSec ?? 0) &&
+      currentTimeSec < activeSkipSegments.recapEndSec
+  );
+  const showNextSceneButton = Boolean(
+    nextEpisodeTarget &&
+      activeSkipSegments?.nextSceneSec !== undefined &&
+      currentTimeSec >= activeSkipSegments.nextSceneSec
+  );
+
+  const isBlockedHomepageUrl = Boolean(finalStreamSrc && isLikelyNonVideoWebsiteUrl(finalStreamSrc));
   const isDashStream = Boolean(finalStreamSrc && /\.mpd(\?|$)/i.test(finalStreamSrc));
   const isHlsVideoStream = Boolean(finalStreamSrc && /\.m3u8(\?|$)/i.test(finalStreamSrc));
   const isDirectVideoFile = Boolean(finalStreamSrc && /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(finalStreamSrc));
@@ -1418,101 +1342,37 @@ export function PlayerModal({
           .then(() => {
             if (attemptTokenRef.current !== expectedToken) return;
             hasStartedPlayingRef.current = true;
-            setAutoplayBlocked(false);
-            confirmServerLoadReady(serverIdx, expectedToken, { verifiedPlayback: true });
+            confirmRuntimePlayback(serverIdx, expectedToken, { verifiedPlayback: true });
           })
           .catch((err) => {
             if (attemptTokenRef.current !== expectedToken) return;
             const kind = classifyAutoplayPlayError(err);
-            if (kind === 'autoplay_blocked') {
-              // Browser blocked unmuted autoplay: keep player ready & show Play action
-              setAutoplayBlocked(true);
-              setSmartPlayState('autoplay_blocked');
-              setSmartOverlayDismissed(false);
-              confirmServerLoadReady(serverIdx, expectedToken, { verifiedPlayback: false });
-            } else if (kind === 'playback_error') {
+            if (kind === 'playback_error') {
               handleServerFaultFailover(serverIdx, 'تعذر تشغيل ملف الفيديو', expectedToken);
             }
           });
       }
     },
-    [confirmServerLoadReady, handleServerFaultFailover]
+    [confirmRuntimePlayback, handleServerFaultFailover]
   );
 
-  // Ensure direct <video> triggers autoplay immediately if media metadata/frames are already ready
+  // Immediately fail over ONLY if the active source URL is missing or unsupported DASH/homepage
   useEffect(() => {
-    if (!item || !isDirectVideoFile || isHlsVideoStream || allServersFailed) return;
-    if (isBlockedHomepageUrl || isActiveServerFaulty) return;
-    const vid = videoElementRef.current;
-    if (vid && vid.readyState >= 2) {
-      attemptVideoAutoplay(vid, attemptTokenRef.current, safeServerIndex);
-    }
-  }, [
-    item?.id,
-    safeServerIndex,
-    finalStreamSrc,
-    playerReloadKey,
-    isDirectVideoFile,
-    isHlsVideoStream,
-    isBlockedHomepageUrl,
-    isActiveServerFaulty,
-    allServersFailed,
-    attemptVideoAutoplay,
-  ]);
-
-  // Automatic load timeout & invalid/DASH/faulty source failover for current server
-  useEffect(() => {
-    clearLoadTimeout();
     if (!item || allServersFailed) return;
-
     const currentToken = attemptTokenRef.current;
     triedServersRef.current.add(safeServerIndex);
 
-    if (!finalStreamSrc || isBlockedHomepageUrl || isDashStream || isActiveServerFaulty) {
+    if (!finalStreamSrc || isBlockedHomepageUrl || isDashStream) {
       const reason = !finalStreamSrc
         ? 'رابط التشغيل غير متوفر في السيرفر'
         : isBlockedHomepageUrl
           ? 'الرابط لا يحتوي على مشغل فيديو مباشر'
-          : isDashStream
-            ? 'صيغة البث غير مدعومة مباشرة'
-            : activeFilterEntry?.reason || 'السيرفر غير متاح';
+          : 'صيغة البث غير مدعومة مباشرة';
       const immediateTimer = window.setTimeout(() => {
         handleServerFaultFailover(safeServerIndex, reason, currentToken);
-      }, 60);
-      loadTimeoutRef.current = immediateTimer;
-      return () => {
-        window.clearTimeout(immediateTimer);
-        if (loadTimeoutRef.current === immediateTimer) {
-          loadTimeoutRef.current = null;
-        }
-      };
+      }, 40);
+      return () => window.clearTimeout(immediateTimer);
     }
-
-    if (playbackConfirmedRef.current || iframeLoadedRef.current) return;
-
-    const timeoutMs = isDirectVideoFile ? LOAD_TIMEOUT_DIRECT_MS : LOAD_TIMEOUT_IFRAME_MS;
-    const timerId = window.setTimeout(() => {
-      if (
-        attemptTokenRef.current !== currentToken ||
-        playbackConfirmedRef.current ||
-        iframeLoadedRef.current
-      ) {
-        return;
-      }
-      handleServerFaultFailover(
-        safeServerIndex,
-        'انتهت مهلة انتظار استجابة السيرفر',
-        currentToken
-      );
-    }, timeoutMs);
-    loadTimeoutRef.current = timerId;
-
-    return () => {
-      window.clearTimeout(timerId);
-      if (loadTimeoutRef.current === timerId) {
-        loadTimeoutRef.current = null;
-      }
-    };
   }, [
     item?.id,
     seasonIdx,
@@ -1521,16 +1381,12 @@ export function PlayerModal({
     finalStreamSrc,
     isBlockedHomepageUrl,
     isDashStream,
-    isActiveServerFaulty,
-    isDirectVideoFile,
     playerReloadKey,
     allServersFailed,
-    activeFilterEntry?.reason,
-    clearLoadTimeout,
     handleServerFaultFailover,
   ]);
 
-  // Dynamic HLS (.m3u8) Engine Loader — only fetched when playing an .m3u8 stream on non-native browsers
+  // Dynamic HLS (.m3u8) Engine Loader
   useEffect(() => {
     const videoEl = videoElementRef.current;
     setHlsLevels([]);
@@ -1548,12 +1404,11 @@ export function PlayerModal({
     }
 
     if (!item || !finalStreamSrc || !isHlsVideoStream || !videoEl) return;
-    if (isBlockedHomepageUrl || isActiveServerFaulty || allServersFailed) return;
+    if (isBlockedHomepageUrl || allServersFailed) return;
 
     const expectedToken = attemptTokenRef.current;
     const currentIdx = safeServerIndex;
 
-    // Safari / iOS supports HLS natively
     if (
       videoEl.canPlayType('application/vnd.apple.mpegurl') !== '' ||
       videoEl.canPlayType('application/x-mpegURL') !== ''
@@ -1594,7 +1449,6 @@ export function PlayerModal({
             label: tr.name || tr.lang || `ترجمة ${idx + 1}`,
           }));
           setHlsSubtitles(subs);
-          confirmServerLoadReady(currentIdx, expectedToken, { verifiedPlayback: false });
           attemptVideoAutoplay(videoElementRef.current, expectedToken, currentIdx);
         });
 
@@ -1617,7 +1471,9 @@ export function PlayerModal({
             hls.recoverMediaError();
           } else {
             hls.destroy();
-            handleServerFaultFailover(currentIdx, 'تعذر تشغيل بث HLS', expectedToken);
+            handleServerFaultFailover(currentIdx, 'تعذر تشغيل بث HLS', expectedToken, {
+              allowAfterConfirmedPlayback: true,
+            });
           }
         });
       } catch {
@@ -1643,16 +1499,14 @@ export function PlayerModal({
     finalStreamSrc,
     isHlsVideoStream,
     isBlockedHomepageUrl,
-    isActiveServerFaulty,
     allServersFailed,
     playerReloadKey,
     safeServerIndex,
-    confirmServerLoadReady,
     attemptVideoAutoplay,
     handleServerFaultFailover,
   ]);
 
-  // Keyboard & Remote Control Player Shortcuts (f = Fullscreen, Space/k = Play/Pause, Arrows = Seek ±10s)
+  // Keyboard & Remote/TV D-Pad Player Shortcuts
   useEffect(() => {
     if (!item) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1676,34 +1530,87 @@ export function PlayerModal({
         return;
       }
 
-      if (e.key === ' ' || e.key === 'k' || e.key === 'K') {
-        if (target === vid || target?.closest('[data-rtv-player-stage="true"]')) {
+      const insideStage = target === vid || Boolean(target?.closest('[data-rtv-player-stage="true"]'));
+      if (!insideStage) return;
+
+      if (e.key === ' ' || e.key === 'k' || e.key === 'K' || e.key === 'Enter') {
+        if (target?.tagName?.toLowerCase() !== 'button') {
           e.preventDefault();
           if (vid.paused) void vid.play();
           else vid.pause();
         }
       } else if (e.key === 'ArrowRight') {
-        if (target === vid || target?.closest('[data-rtv-player-stage="true"]')) {
-          e.preventDefault();
-          vid.currentTime = Math.min(vid.duration || vid.currentTime + 10, vid.currentTime + 10);
-        }
+        e.preventDefault();
+        vid.currentTime = Math.min(vid.duration || vid.currentTime + 10, vid.currentTime + 10);
       } else if (e.key === 'ArrowLeft') {
-        if (target === vid || target?.closest('[data-rtv-player-stage="true"]')) {
-          e.preventDefault();
-          vid.currentTime = Math.max(0, vid.currentTime - 10);
-        }
+        e.preventDefault();
+        vid.currentTime = Math.max(0, vid.currentTime - 10);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        vid.volume = Math.min(1, Math.round((vid.volume + 0.1) * 10) / 10);
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        vid.volume = Math.max(0, Math.round((vid.volume - 0.1) * 10) / 10);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [item, isDirectVideoFile, handleToggleFullscreen]);
 
-  // Keep playbackRate synced cleanly on the direct <video> element
   useEffect(() => {
     if (videoElementRef.current) {
       videoElementRef.current.playbackRate = playbackRate;
     }
   }, [playbackRate, finalStreamSrc, playerReloadKey]);
+
+  const handleSelectEpisodeOrSeason = useCallback(
+    (nextSeasonIdx: number, nextEpisodeNum: number) => {
+      flushWatchProgressNow(true);
+      cleanupActiveMediaInstances();
+      modeTransitionLockRef.current = false;
+      attemptTokenRef.current += 1;
+      triedServersRef.current = new Set([0]);
+      triedModesByServerRef.current = {};
+      selectedServerRef.current = 0;
+      playbackConfirmedRef.current = false;
+      hasStartedPlayingRef.current = false;
+      filterMapRef.current = {};
+      userPausedRef.current = false;
+      resumedOnceKeyRef.current = '';
+      completedAnalyticsKeyRef.current = '';
+      setAllServersFailed(false);
+      setIsBuffering(false);
+      setBypassEpisodeSrc(false);
+      setBypassDirectUrlByServer({});
+      setShieldSessionOverrides({});
+      setSeasonIdx(nextSeasonIdx);
+      setEpisodeNum(nextEpisodeNum);
+      setSelectedServer(0);
+      setFilterMap({});
+      setAutoNextCountdown(null);
+      setCurrentTimeSec(0);
+      setResumeToastText(null);
+      setShowInlineEpisodesDrawer(false);
+      setPlayerReloadKey((k) => k + 1);
+    },
+    [flushWatchProgressNow, cleanupActiveMediaInstances]
+  );
+
+  // Auto Next Episode countdown timer
+  useEffect(() => {
+    if (autoNextCountdown === null) return;
+    if (autoNextCountdown <= 0) {
+      setAutoNextCountdown(null);
+      if (nextEpisodeTarget) {
+        handleSelectEpisodeOrSeason(nextEpisodeTarget.seasonIdx, nextEpisodeTarget.episodeNumber);
+      }
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setAutoNextCountdown((c) => (c !== null ? c - 1 : null));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [autoNextCountdown, nextEpisodeTarget, handleSelectEpisodeOrSeason]);
 
   if (!item) return null;
 
@@ -1711,10 +1618,7 @@ export function PlayerModal({
     const vid = videoElementRef.current;
     if (!vid || !isDirectVideoFile) return;
     const now = Date.now();
-    if (
-      doubleTapRef.current.side === side &&
-      now - doubleTapRef.current.lastTime < 350
-    ) {
+    if (doubleTapRef.current.side === side && now - doubleTapRef.current.lastTime < 350) {
       const delta = side === 'left' ? -10 : 10;
       vid.currentTime = Math.max(0, Math.min(vid.duration || vid.currentTime + 10, vid.currentTime + delta));
       setSeekFeedback(delta > 0 ? 'forward' : 'backward');
@@ -1741,137 +1645,36 @@ export function PlayerModal({
         await vid.requestPictureInPicture();
       }
     } catch {
-      // Browser declined PiP (e.g., audio-only or gesture restriction)
+      // Browser declined PiP
     }
   };
 
-  const shieldDecision = resolveEffectiveShieldDecision(
-    finalStreamSrc,
+  const iframePresentation = resolveSafeIframePresentation(
+    finalStreamSrc || '',
     effectiveShieldConfig,
-    shieldSessionOverrides[safeServerIndex] || null
+    shieldSessionOverrides[safeServerIndex] || cachedModeHint || null
   );
 
   const hasDirectStreamFallback = Boolean(
-    activeFilterEntry?.directStreamUrl &&
+    (activeFilterEntry?.directStreamUrl || cachedDirectForActive) &&
       rawOriginalServerSrc &&
-      activeFilterEntry.directStreamUrl !== rawOriginalServerSrc
+      (activeFilterEntry?.directStreamUrl || cachedDirectForActive) !== rawOriginalServerSrc
   );
   const rawServerIsDirectMedia = Boolean(
     rawOriginalServerSrc &&
       /\.(mp4|webm|ogg|m3u8)(\?|$)/i.test(rawOriginalServerSrc) &&
       !hasDirectStreamFallback
   );
-  const modeChainForServer = buildCompatibleModeChain({
-    primaryMode: shieldDecision.mode,
+  const { modeChain: modeChainForServer } = buildSmartModeChainWithMemory({
+    serverUrl: finalStreamSrc || '',
+    primaryMode: iframePresentation.mode,
     isDirectMedia: rawServerIsDirectMedia && !episodeSpecificSrc,
-    antiSandboxDetected: Boolean(
-      activeFilterEntry?.sandboxRejected || activeFilterEntry?.faultType === 'sandboxed_embed'
-    ),
+    antiSandboxDetected: Boolean(activeFilterEntry?.sandboxRejected),
     hasDirectStreamFallback,
   });
-  const activeWatchMode: WatchMode = isDirectVideoFile ? 'direct_media' : shieldDecision.mode;
+  const activeWatchMode: WatchMode = isDirectVideoFile ? 'direct_media' : iframePresentation.mode;
   activeModeChainRef.current = modeChainForServer;
   currentWatchModeRef.current = activeWatchMode;
-  const activeModeInfo = getWatchModeDisplayInfo(activeWatchMode);
-  const activeModeIndex = Math.max(0, modeChainForServer.indexOf(activeWatchMode));
-
-  const applyWatchModeSwitch = (nextMode: WatchMode) => {
-    cleanupActiveMediaInstances();
-    modeTransitionLockRef.current = false;
-    attemptTokenRef.current += 1;
-    playbackConfirmedRef.current = false;
-    hasStartedPlayingRef.current = false;
-    iframeLoadedRef.current = false;
-    userPausedRef.current = false;
-    setAutoplayBlocked(false);
-    setSmartOverlayDismissed(false);
-    setSmartPlayState('trying_mode');
-    setSmartPlayDetail(
-      nextMode === 'direct_unrestricted'
-        ? 'جاري تجربة وضع التوافق المباشر...'
-        : `جاري تجربة ${getWatchModeDisplayInfo(nextMode).label}...`
-    );
-
-    if (nextMode === 'direct_media') {
-      setBypassDirectUrlByServer((prev) => {
-        const next = { ...prev };
-        delete next[safeServerIndex];
-        return next;
-      });
-    } else {
-      if (hasDirectStreamFallback) {
-        setBypassDirectUrlByServer((prev) => ({ ...prev, [safeServerIndex]: true }));
-      }
-      setShieldSessionOverrides((prev) => ({ ...prev, [safeServerIndex]: nextMode }));
-      if (shieldDecision.hostname && onUpdateHostRule) {
-        onUpdateHostRule({
-          hostname: shieldDecision.hostname,
-          mode: nextMode,
-          compatibility:
-            nextMode === 'strict_sandbox'
-              ? 'compatible'
-              : nextMode === 'redirect_guard'
-                ? 'partial'
-                : 'incompatible',
-          note: 'تم تعديله من شريط أوضاع المشغّل',
-          lastTestedAt: new Date().toISOString(),
-        });
-      }
-    }
-    setPlayerReloadKey((k) => k + 1);
-  };
-
-  const handleStepWatchMode = (direction: 'next' | 'prev') => {
-    if (modeChainForServer.length <= 1) return;
-    const nextMode = resolveManualModeStep({
-      modeChain: modeChainForServer,
-      currentMode: activeWatchMode,
-      direction,
-    });
-    if (nextMode === activeWatchMode) {
-      handleReloadCurrentServer();
-      return;
-    }
-    applyWatchModeSwitch(nextMode);
-  };
-
-  const handleCycleShieldMode = () => {
-    handleStepWatchMode('next');
-  };
-
-  const handleSmartPlayPrimaryAction = () => {
-    if (isDirectVideoFile && videoElementRef.current) {
-      const vid = videoElementRef.current;
-      userPausedRef.current = false;
-      setAutoplayBlocked(false);
-      void vid
-        .play()
-        .then(() => {
-          hasStartedPlayingRef.current = true;
-          confirmServerLoadReady(safeServerIndex, attemptTokenRef.current, {
-            verifiedPlayback: true,
-          });
-        })
-        .catch(() => {
-          setAutoplayBlocked(true);
-          setSmartPlayState('autoplay_blocked');
-        });
-      return;
-    }
-    if (smartPlayState === 'server_exhausted') {
-      handleSwitchToNextServer();
-      return;
-    }
-    if (smartPlayState === 'page_loaded_ready') {
-      setSmartOverlayDismissed(true);
-      return;
-    }
-    if (modeChainForServer.length > 1) {
-      handleStepWatchMode('next');
-    } else {
-      setSmartOverlayDismissed(true);
-    }
-  };
 
   const handleManualServerSelect = (idx: number) => {
     cleanupActiveMediaInstances();
@@ -1882,23 +1685,15 @@ export function PlayerModal({
     selectedServerRef.current = idx;
     playbackConfirmedRef.current = false;
     hasStartedPlayingRef.current = false;
-    iframeLoadedRef.current = false;
     userPausedRef.current = false;
-    setAutoplayBlocked(false);
     setAllServersFailed(false);
+    setIsBuffering(false);
     setBypassEpisodeSrc(idx > 0);
     setBypassDirectUrlByServer((prev) => {
       const next = { ...prev };
       delete next[idx];
       return next;
     });
-    setSmartPlayState('initializing');
-    setSmartPlayDetail('');
-    setSmartOverlayDismissed(false);
-    setFilterAlert(null);
-    if (filterMapRef.current[idx] && !filterMapRef.current[idx].ok) {
-      setManualBypassFault((prev) => ({ ...prev, [idx]: true }));
-    }
     setSelectedServer(idx);
     setPlayerReloadKey((k) => k + 1);
   };
@@ -1928,51 +1723,15 @@ export function PlayerModal({
     selectedServerRef.current = startIdx;
     playbackConfirmedRef.current = false;
     hasStartedPlayingRef.current = false;
-    iframeLoadedRef.current = false;
     filterMapRef.current = {};
     userPausedRef.current = false;
-    setAutoplayBlocked(false);
     setAllServersFailed(false);
-    setFilterAlert(null);
+    setIsBuffering(false);
     setBypassEpisodeSrc(startIdx > 0);
     setBypassDirectUrlByServer({});
-    setManualBypassFault({});
     setShieldSessionOverrides({});
     setFilterMap({});
-    setSmartPlayState('initializing');
-    setSmartPlayDetail('');
-    setSmartOverlayDismissed(false);
     setSelectedServer(startIdx);
-    setPlayerReloadKey((k) => k + 1);
-    setRetryAllNonce((n) => n + 1);
-  };
-
-  const handleSelectEpisodeOrSeason = (nextSeasonIdx: number, nextEpisodeNum: number) => {
-    cleanupActiveMediaInstances();
-    modeTransitionLockRef.current = false;
-    attemptTokenRef.current += 1;
-    triedServersRef.current = new Set([0]);
-    triedModesByServerRef.current = {};
-    selectedServerRef.current = 0;
-    playbackConfirmedRef.current = false;
-    hasStartedPlayingRef.current = false;
-    iframeLoadedRef.current = false;
-    filterMapRef.current = {};
-    userPausedRef.current = false;
-    setAutoplayBlocked(false);
-    setAllServersFailed(false);
-    setBypassEpisodeSrc(false);
-    setBypassDirectUrlByServer({});
-    setShieldSessionOverrides({});
-    setSeasonIdx(nextSeasonIdx);
-    setEpisodeNum(nextEpisodeNum);
-    setSelectedServer(0);
-    setFilterMap({});
-    setFilterAlert(null);
-    setManualBypassFault({});
-    setSmartPlayState('initializing');
-    setSmartPlayDetail('');
-    setSmartOverlayDismissed(false);
     setPlayerReloadKey((k) => k + 1);
   };
 
@@ -1986,12 +1745,8 @@ export function PlayerModal({
     attemptTokenRef.current += 1;
     playbackConfirmedRef.current = false;
     hasStartedPlayingRef.current = false;
-    iframeLoadedRef.current = false;
     userPausedRef.current = false;
-    setAutoplayBlocked(false);
-    setSmartPlayState('trying_mode');
-    setSmartPlayDetail('');
-    setSmartOverlayDismissed(false);
+    setIsBuffering(false);
     setPlayerReloadKey((k) => k + 1);
   };
 
@@ -2009,7 +1764,7 @@ export function PlayerModal({
         });
         return;
       } catch {
-        // User cancelled or share unsupported in embedded frame -> fallback to copy
+        // Fallback to copy
       }
     }
     await safeCopyToClipboard(urlToShare);
@@ -2018,10 +1773,6 @@ export function PlayerModal({
 
   const theme = normalizePlayerTheme(playerTheme || loadStoredPlayerTheme());
   const themeVars = buildPlayerThemeVars(theme);
-
-  const healthyNextIdx = serversList.findIndex(
-    (_, idx) => idx !== safeServerIndex && filterMap[idx]?.ok !== false
-  );
 
   const activeServerLabel = formatShortServerName(
     activeServer.name,
@@ -2038,7 +1789,7 @@ export function PlayerModal({
       className="fixed inset-0 z-[55] flex items-stretch lg:items-center justify-center p-0 lg:p-4 overflow-x-hidden"
       style={themeVars}
     >
-      <div className="fixed inset-0 bg-black/95 lg:bg-black/90 lg:backdrop-blur-md" onClick={onClose} />
+      <div className="fixed inset-0 bg-black/95 lg:bg-black/90 lg:backdrop-blur-md" onClick={handleCloseWithFlush} />
       <div
         className="rtv-mobile-watch-modal relative z-10 w-full lg:w-[96vw] lg:max-w-[1340px] border-0 lg:border border-white/[0.09] shadow-2xl overflow-hidden lg:max-h-[95vh] flex flex-col"
         style={{
@@ -2054,7 +1805,7 @@ export function PlayerModal({
           <div className="flex items-center gap-1.5 min-w-0">
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleCloseWithFlush}
               className="inline-flex min-h-[44px] min-w-[44px] max-lg:landscape:min-h-[36px] max-lg:landscape:min-w-[36px] items-center justify-center rounded-lg text-white active:scale-95 transition-transform cursor-pointer shrink-0"
               aria-label="إغلاق المشغل"
             >
@@ -2120,58 +1871,74 @@ export function PlayerModal({
             <div className="min-w-0">
               <h3 className="font-display text-sm font-extrabold text-white truncate">
                 {item.title}
-                {item.kind === 'series' ? ` — الحلقة ${String(episodeNum).padStart(2, '0')}` : ''}
+                {episodes.length > 0 ? ` — الحلقة ${String(episodeNum).padStart(2, '0')}` : ''}
               </h3>
               <p className="text-[11px] text-[#9fb2d4] flex items-center gap-1.5 tabular-nums">
-                <span className="font-extrabold text-white">سيرفر {safeServerIndex + 1}</span>
+                <span className="font-extrabold text-white">{activeServerLabel}</span>
                 <span>·</span>
                 <span className="font-latin font-black text-[#f9c400]">{activeQuality}</span>
-                {isFiltering && (
-                  <>
-                    <span>·</span>
-                    <span className="inline-flex items-center gap-1 text-[10px] font-bold" style={{ color: 'var(--pt-accent)' }}>
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      <span>فحص السيرفرات...</span>
-                    </span>
-                  </>
-                )}
               </p>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/[0.06] border border-white/10 text-white/85 hover:bg-white/15 hover:text-white transition-colors cursor-pointer shrink-0"
-            aria-label="إغلاق المشغل"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+          <div className="flex items-center gap-2">
+            {episodes.length > 0 && (
+              <>
+                {prevEpisodeTarget && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleSelectEpisodeOrSeason(
+                        prevEpisodeTarget.seasonIdx,
+                        prevEpisodeTarget.episodeNumber
+                      )
+                    }
+                    className="inline-flex h-8 items-center gap-1 rounded-lg bg-white/[0.06] border border-white/10 px-2.5 text-[11px] font-bold text-white/90 hover:bg-white/15 cursor-pointer"
+                  >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                    <span>الحلقة السابقة</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowInlineEpisodesDrawer((v) => !v)}
+                  className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-bold transition-colors cursor-pointer ${
+                    showInlineEpisodesDrawer
+                      ? 'bg-[#D92321] border-[#ff5a58] text-white'
+                      : 'bg-white/[0.06] border-white/10 text-white/90 hover:bg-white/15'
+                  }`}
+                >
+                  <ListVideo className="w-3.5 h-3.5" />
+                  <span>الحلقات</span>
+                </button>
+                {nextEpisodeTarget && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleSelectEpisodeOrSeason(
+                        nextEpisodeTarget.seasonIdx,
+                        nextEpisodeTarget.episodeNumber
+                      )
+                    }
+                    className="inline-flex h-8 items-center gap-1 rounded-lg bg-white/[0.06] border border-white/10 px-2.5 text-[11px] font-bold text-white/90 hover:bg-white/15 cursor-pointer"
+                  >
+                    <span>الحلقة التالية</span>
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </>
+            )}
 
-        {/* Desktop Auto Server Filtering Alert Banner */}
-        {filterAlert && (
-          <div
-            className={`hidden lg:flex items-center justify-between gap-2 px-4 py-2 text-xs font-bold border-b shrink-0 ${
-              filterAlert.kind === 'switched'
-                ? 'bg-[#f9c400]/10 border-[#f9c400]/25 text-[#f9c400]'
-                : 'bg-[#D92321]/12 border-[#D92321]/25 text-[#ff9b99]'
-            }`}
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              <span>{filterAlert.message}</span>
-            </div>
             <button
               type="button"
-              onClick={() => setFilterAlert(null)}
-              className="rounded p-1 hover:bg-white/10 cursor-pointer shrink-0"
-              aria-label="إخفاء التنبيه"
+              onClick={handleCloseWithFlush}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/[0.06] border border-white/10 text-white/85 hover:bg-white/15 hover:text-white transition-colors cursor-pointer shrink-0"
+              aria-label="إغلاق المشغل"
             >
-              <X className="w-3.5 h-3.5" />
+              <X className="w-4 h-4" />
             </button>
           </div>
-        )}
+        </div>
 
         {/* Main Body: Mobile Edge-to-Edge Watch First | Desktop Server Rail + Video Stage */}
         <div className="rtv-mobile-watch-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-0 lg:p-4">
@@ -2192,17 +1959,9 @@ export function PlayerModal({
                     <Server className="w-3.5 h-3.5" style={{ color: 'var(--pt-accent)' }} />
                     <span>سيرفرات المشاهدة</span>
                   </span>
-                  <div className="flex items-center gap-2">
-                    {isFiltering && (
-                      <span className="lg:hidden inline-flex items-center gap-1 text-[10px] font-bold text-[#9fb2d4]">
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                        <span>فحص</span>
-                      </span>
-                    )}
-                    <span className="font-latin tabular-nums text-[11px] font-black text-[#b7c9ef]">
-                      {serversList.length}
-                    </span>
-                  </div>
+                  <span className="font-latin tabular-nums text-[11px] font-black text-[#b7c9ef]">
+                    {serversList.length}
+                  </span>
                 </div>
 
                 <div className="grid grid-cols-2 min-[480px]:grid-cols-3 lg:grid-cols-1 gap-2 lg:gap-1.5 lg:max-h-[580px] lg:overflow-y-auto">
@@ -2210,7 +1969,6 @@ export function PlayerModal({
                     const isActive = safeServerIndex === idx;
                     const srvFilter = filterMap[idx];
                     const isBroken = Boolean(srvFilter && !srvFilter.ok);
-                    const isVerifiedOk = Boolean(srvFilter && srvFilter.ok);
                     const qualityLabel = cleanQualityIdentifier(srv.quality, item.quality);
                     const shortLabel = formatShortServerName(srv.name, idx, srv.url);
 
@@ -2219,11 +1977,7 @@ export function PlayerModal({
                         key={srv.id || idx}
                         type="button"
                         onClick={() => handleManualServerSelect(idx)}
-                        title={
-                          isBroken
-                            ? `${shortLabel} غير متاح حالياً`
-                            : `${shortLabel} · ${qualityLabel}`
-                        }
+                        title={`${shortLabel} · ${qualityLabel}`}
                         style={{
                           animationDelay: `${idx * 35}ms`,
                           ...(isActive
@@ -2238,7 +1992,7 @@ export function PlayerModal({
                           isActive
                             ? 'shadow-lg font-black ring-2 ring-white/30 lg:ring-0'
                             : isBroken
-                              ? 'bg-[#D92321]/10 border-[#D92321]/25 text-[#ff9d9b] opacity-75 hover:opacity-100'
+                              ? 'bg-white/[0.02] border-white/[0.05] text-white/50 hover:text-white/80 hover:bg-white/[0.06]'
                               : 'bg-white/[0.04] border-white/[0.07] text-white/90 hover:bg-white/[0.09] hover:border-white/20'
                         }`}
                       >
@@ -2247,9 +2001,7 @@ export function PlayerModal({
                             className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md transition-colors ${
                               isActive
                                 ? 'bg-black/20 text-current'
-                                : isBroken
-                                  ? 'bg-[#D92321]/20 text-[#ff8a88]'
-                                  : 'bg-white/[0.07] text-white/80'
+                                : 'bg-white/[0.07] text-white/80'
                             }`}
                           >
                             <Play className="w-2.5 h-2.5 fill-current" />
@@ -2258,12 +2010,6 @@ export function PlayerModal({
                           <span className="text-xs font-extrabold truncate">
                             {shortLabel}
                           </span>
-
-                          {isBroken ? (
-                            <AlertTriangle className="w-3 h-3 text-[#f9c400] shrink-0" />
-                          ) : isVerifiedOk && !isActive ? (
-                            <CheckCircle2 className="w-3 h-3 text-[#4CAF50] shrink-0" />
-                          ) : null}
                         </div>
 
                         <span
@@ -2313,7 +2059,7 @@ export function PlayerModal({
                       )}
                       <div className="flex items-center gap-1.5 text-xs min-w-0">
                         <span className="font-extrabold text-white/95 tabular-nums">
-                          سيرفر {safeServerIndex + 1}
+                          {activeServerLabel}
                         </span>
                         <span className="text-white/25">·</span>
                         <span className="font-latin font-bold text-[#f9c400] text-[11px]">
@@ -2322,36 +2068,8 @@ export function PlayerModal({
                       </div>
                     </div>
 
-                    {/* Sleek Unified Controls */}
+                    {/* Clean Viewer Controls */}
                     <div className="flex items-center gap-1.5">
-                      {effectiveShieldConfig.showPlayerBadge && finalStreamSrc && (
-                        <button
-                          type="button"
-                          onClick={handleCycleShieldMode}
-                          disabled={shieldDecision.mode === 'direct_media'}
-                          title={`${shieldDecision.label} — ${shieldDecision.description}${
-                            shieldDecision.mode !== 'direct_media'
-                              ? ' (اضغط لتبديل وضع التوافق لهذا السيرفر)'
-                              : ''
-                          }`}
-                          className={`hidden sm:inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[10px] font-extrabold transition-colors cursor-pointer disabled:cursor-default ${
-                            shieldDecision.mode === 'strict_sandbox' ||
-                            shieldDecision.mode === 'direct_media'
-                              ? 'bg-[#4CAF50]/15 border-[#4CAF50]/35 text-[#4CAF50] hover:bg-[#4CAF50]/25'
-                              : shieldDecision.mode === 'redirect_guard'
-                                ? 'bg-[#f9c400]/15 border-[#f9c400]/35 text-[#f9c400] hover:bg-[#f9c400]/25'
-                                : 'bg-sky-500/15 border-sky-400/35 text-sky-300 hover:bg-sky-500/25'
-                          }`}
-                        >
-                          {shieldDecision.mode === 'direct_unrestricted' ? (
-                            <ShieldAlert className="w-3 h-3 shrink-0" />
-                          ) : (
-                            <ShieldCheck className="w-3 h-3 shrink-0" />
-                          )}
-                          <span>{shieldDecision.shortLabel}</span>
-                        </button>
-                      )}
-
                       <button
                         type="button"
                         disabled={safeServerIndex <= 0}
@@ -2430,142 +2148,18 @@ export function PlayerModal({
                   </div>
                 )}
 
-                {/* Pure Edge-to-Edge 16:9 Video Stage (Landscape-Safe on Mobile) */}
+                {/* Pure Edge-to-Edge 16:9 Video Stage (Mounts IMMEDIATELY with zero pre-check gate) */}
                 <div className="rtv-mobile-player-shell w-full bg-black">
                   <div
                     className={`rtv-mobile-player-stage relative aspect-video w-full bg-black overflow-hidden ${
                       isMobileCinemaFill ? 'rtv-mobile-cinema-fill' : ''
                     }`}
                   >
-                    {allServersFailed ? (
-                      <div className="h-full w-full flex flex-col items-center justify-center p-4 sm:p-6 text-center bg-[#090d14] gap-2.5">
-                        <div
-                          className="inline-flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl border shrink-0"
-                          style={{
-                            backgroundColor: 'var(--pt-accent-12)',
-                            borderColor: 'var(--pt-accent-35)',
-                            color: 'var(--pt-accent)',
-                          }}
-                        >
-                          <AlertTriangle className="w-6 h-6 sm:w-7 sm:h-7" />
-                        </div>
-                        <h4 className="font-display text-sm sm:text-base font-extrabold text-white">
-                          تعذر تشغيل المحتوى حاليًا
-                        </h4>
-                        <p className="max-w-md text-xs text-[#b7c9ef] leading-relaxed">
-                          لم تستجب سيرفرات المشاهدة المتاحة حاليًا. يمكنك إعادة المحاولة مرة أخرى.
-                        </p>
-                        <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
-                          <button
-                            type="button"
-                            onClick={handleRetryAllServers}
-                            className="inline-flex items-center gap-1.5 rounded-xl px-4 min-h-[42px] py-2 text-xs font-extrabold cursor-pointer"
-                            style={{
-                              backgroundColor: 'var(--pt-accent)',
-                              color: 'var(--pt-accent-contrast)',
-                            }}
-                          >
-                            <RotateCw className="w-3.5 h-3.5" />
-                            <span>إعادة المحاولة</span>
-                          </button>
-                        </div>
-                      </div>
-                    ) : isBlockedHomepageUrl || isActiveServerFaulty ? (
-                      <div className="h-full w-full flex flex-col items-center justify-center p-2.5 sm:p-6 text-center bg-[#090d14] gap-1.5 sm:gap-3">
-                        <div
-                          className="inline-flex h-8 w-8 sm:h-14 sm:w-14 items-center justify-center rounded-xl sm:rounded-2xl border shrink-0"
-                          style={{
-                            backgroundColor: 'var(--pt-accent-12)',
-                            borderColor: 'var(--pt-accent-35)',
-                            color: 'var(--pt-accent)',
-                          }}
-                        >
-                          <AlertTriangle className="w-4 h-4 sm:w-7 sm:h-7" />
-                        </div>
-                        <h4 className="font-display text-xs sm:text-base font-extrabold text-white leading-tight">
-                          {isBlockedHomepageUrl
-                            ? 'الرابط غير صالح للمشاهدة'
-                            : friendlyServerError.title}
-                        </h4>
-                        <p className="max-w-md text-[11px] sm:text-xs text-[#b7c9ef] leading-snug line-clamp-2">
-                          {isBlockedHomepageUrl
-                            ? `${activeServerLabel} لا يعرض فيديو مباشراً. يمكنك تجربة سيرفر آخر.`
-                            : friendlyServerError.subtitle}
-                        </p>
-                        <div className="flex flex-wrap items-center justify-center gap-2 pt-0.5 sm:pt-1">
-                          {serversList.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleManualServerSelect(
-                                  healthyNextIdx !== -1
-                                    ? healthyNextIdx
-                                    : (safeServerIndex + 1) % serversList.length
-                                )
-                              }
-                              className="inline-flex items-center gap-1.5 rounded-xl px-3.5 sm:px-4 min-h-[38px] sm:min-h-[44px] py-1.5 text-[11px] sm:text-xs font-extrabold cursor-pointer"
-                              style={{
-                                backgroundColor: 'var(--pt-accent)',
-                                color: 'var(--pt-accent-contrast)',
-                              }}
-                            >
-                              <RefreshCw className="w-3.5 h-3.5" />
-                              <span>تجربة سيرفر آخر</span>
-                            </button>
-                          )}
-                          {!isBlockedHomepageUrl && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setManualBypassFault((prev) => ({
-                                  ...prev,
-                                  [safeServerIndex]: true,
-                                }));
-                                setPlayerReloadKey((k) => k + 1);
-                              }}
-                              className="inline-flex items-center gap-1.5 rounded-xl bg-white/[0.08] border border-white/15 px-3 sm:px-3.5 min-h-[38px] sm:min-h-[44px] py-1.5 text-[11px] sm:text-xs font-bold text-white/90 hover:bg-white/15 cursor-pointer"
-                            >
-                              <RotateCw className="w-3.5 h-3.5" />
-                              <span>إعادة المحاولة</span>
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ) : finalStreamSrc ? (
-                      isDashStream ? (
-                        <div className="h-full w-full flex flex-col items-center justify-center p-4 sm:p-6 text-center bg-[#090d14] gap-2.5">
-                          <div
-                            className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border shrink-0"
-                            style={{
-                              backgroundColor: 'var(--pt-accent-12)',
-                              borderColor: 'var(--pt-accent-35)',
-                              color: 'var(--pt-accent)',
-                            }}
-                          >
-                            <AlertTriangle className="w-6 h-6" />
-                          </div>
-                          <h4 className="font-display text-sm sm:text-base font-extrabold text-white">
-                            بث MPEG-DASH (.mpd) يتطلب سيرفراً بديلاً
-                          </h4>
-                          <p className="max-w-md text-xs text-[#b7c9ef] leading-relaxed">
-                            المشغل المدمج يدعم HLS (.m3u8) و MP4/WebM مباشرة. اختر سيرفراً آخر للمتابعة فوراً.
-                          </p>
-                          {serversList.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={handleSwitchToNextServer}
-                              className="inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-extrabold cursor-pointer"
-                              style={{
-                                backgroundColor: 'var(--pt-accent)',
-                                color: 'var(--pt-accent-contrast)',
-                              }}
-                            >
-                              <RefreshCw className="w-3.5 h-3.5" />
-                              <span>الانتقال للسيرفر التالي</span>
-                            </button>
-                          )}
-                        </div>
-                      ) : isDirectVideoFile ? (
+                    {finalStreamSrc &&
+                      !allServersFailed &&
+                      !isBlockedHomepageUrl &&
+                      !isDashStream &&
+                      (isDirectVideoFile ? (
                         <div data-rtv-player-stage="true" data-rtv-player-controls="true" className="relative h-full w-full bg-black">
                           <video
                             ref={videoElementRef}
@@ -2577,42 +2171,116 @@ export function PlayerModal({
                             muted={isMuted}
                             crossOrigin={customVttUrl ? 'anonymous' : undefined}
                             onVolumeChange={(e) => setIsMuted(e.currentTarget.muted)}
-                            onLoadedData={() => {
-                              confirmServerLoadReady(safeServerIndex, attemptTokenRef.current, {
-                                verifiedPlayback: false,
-                              });
+                            onLoadedMetadata={(e) => {
+                              const vid = e.currentTarget;
+                              const resumeKey = `${item.id}::${seasonIdx}::${episodeNum}`;
+                              if (
+                                savedResumePositionSec >= 5 &&
+                                resumedOnceKeyRef.current !== resumeKey &&
+                                (!vid.duration || savedResumePositionSec < vid.duration - 10)
+                              ) {
+                                resumedOnceKeyRef.current = resumeKey;
+                                try {
+                                  vid.currentTime = savedResumePositionSec;
+                                  setResumeToastText(`تم الاستئناف من ${formatSeekTimeLabel(savedResumePositionSec)}`);
+                                  window.setTimeout(() => setResumeToastText(null), 3200);
+                                } catch {
+                                  // ignore seek constraint
+                                }
+                              }
                             }}
                             onCanPlay={(e) => {
-                              const expectedToken = attemptTokenRef.current;
-                              confirmServerLoadReady(safeServerIndex, expectedToken, {
-                                verifiedPlayback: false,
-                              });
-                              attemptVideoAutoplay(e.currentTarget, expectedToken, safeServerIndex);
+                              setIsBuffering(false);
+                              attemptVideoAutoplay(e.currentTarget, attemptTokenRef.current, safeServerIndex);
                             }}
+                            onWaiting={() => setIsBuffering(true)}
                             onPlay={() => {
+                              setIsBuffering(false);
                               hasStartedPlayingRef.current = true;
-                              setAutoplayBlocked(false);
-                              confirmServerLoadReady(safeServerIndex, attemptTokenRef.current, {
+                              confirmRuntimePlayback(safeServerIndex, attemptTokenRef.current, {
                                 verifiedPlayback: true,
                               });
                             }}
                             onPlaying={() => {
+                              setIsBuffering(false);
                               hasStartedPlayingRef.current = true;
-                              setAutoplayBlocked(false);
-                              confirmServerLoadReady(safeServerIndex, attemptTokenRef.current, {
+                              confirmRuntimePlayback(safeServerIndex, attemptTokenRef.current, {
                                 verifiedPlayback: true,
                               });
+                            }}
+                            onTimeUpdate={(e) => {
+                              const vid = e.currentTarget;
+                              const pos = Number(vid.currentTime || 0);
+                              const dur = Number(vid.duration || 0);
+                              setCurrentTimeSec(pos);
+                              const sNum = seasons.length > 0 ? seasons[seasonIdx]?.seasonNumber : undefined;
+                              const epNum = seasons.length > 0 ? episodeNum : undefined;
+
+                              if (pos >= 2) {
+                                const rec = computeWatchProgressPayload({
+                                  userId,
+                                  profileId: activeProfileId,
+                                  media: item,
+                                  seasonNumber: sNum,
+                                  episodeNumber: epNum,
+                                  positionSec: pos,
+                                  durationSec: Number.isFinite(dur) ? dur : 0,
+                                  lastServerUrl: finalStreamSrc,
+                                });
+                                onSaveWatchProgress?.(rec);
+                                void saveWatchProgressEntry(rec, {
+                                  throttleMs: 7000,
+                                  isSignedIn,
+                                });
+                              }
+
+                              const compKey = `${item.id}::${seasonIdx}::${episodeNum}`;
+                              if (
+                                dur > 20 &&
+                                pos / dur >= 0.85 &&
+                                completedAnalyticsKeyRef.current !== compKey
+                              ) {
+                                completedAnalyticsKeyRef.current = compKey;
+                                void recordRealAnalyticsEvent({
+                                  kind: 'playback_complete',
+                                  mediaId: item.id,
+                                  seasonNumber: sNum,
+                                  episodeNumber: epNum,
+                                  genres: item.genres,
+                                  isSignedIn,
+                                });
+                              }
                             }}
                             onPause={() => {
                               if (hasStartedPlayingRef.current) {
                                 userPausedRef.current = true;
+                              }
+                              flushWatchProgressNow(true);
+                            }}
+                            onEnded={() => {
+                              flushWatchProgressNow(true);
+                              const compKey = `${item.id}::${seasonIdx}::${episodeNum}`;
+                              if (completedAnalyticsKeyRef.current !== compKey) {
+                                completedAnalyticsKeyRef.current = compKey;
+                                void recordRealAnalyticsEvent({
+                                  kind: 'playback_complete',
+                                  mediaId: item.id,
+                                  seasonNumber: seasons.length > 0 ? seasons[seasonIdx]?.seasonNumber : undefined,
+                                  episodeNumber: seasons.length > 0 ? episodeNum : undefined,
+                                  genres: item.genres,
+                                  isSignedIn,
+                                });
+                              }
+                              if (nextEpisodeTarget) {
+                                setAutoNextCountdown(10);
                               }
                             }}
                             onError={() =>
                               handleServerFaultFailover(
                                 safeServerIndex,
                                 'تعذر تحميل ملف الفيديو',
-                                attemptTokenRef.current
+                                attemptTokenRef.current,
+                                { allowAfterConfirmedPlayback: true }
                               )
                             }
                             className="h-full w-full max-w-full block bg-black"
@@ -2623,9 +2291,75 @@ export function PlayerModal({
                                 label="ترجمة مخصصة"
                                 src={customVttUrl.trim()}
                                 default
+                                onError={() => setCustomVttUrl('')}
                               />
                             )}
                           </video>
+
+                          {/* Minimal Buffering Spinner ONLY during genuine video buffering */}
+                          {isBuffering && (
+                            <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
+                              <span className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-black/70 border border-white/15 text-white">
+                                <Loader2 className="w-5 h-5 animate-spin text-[#f9c400]" />
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Resume Position Toast */}
+                          {resumeToastText && (
+                            <div className="pointer-events-none absolute bottom-16 right-4 z-20 rounded-xl bg-black/85 border border-white/15 px-3 py-1.5 text-xs font-extrabold text-white shadow-lg">
+                              {resumeToastText}
+                            </div>
+                          )}
+
+                          {/* Strictly Admin-Configured Skip Intro / Skip Recap / Next Scene Buttons */}
+                          {(showSkipIntroButton || showSkipRecapButton || showNextSceneButton) && (
+                            <div className="absolute bottom-16 left-4 z-20 flex flex-col gap-2">
+                              {showSkipIntroButton && activeSkipSegments?.introEndSec !== undefined && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (videoElementRef.current) {
+                                      videoElementRef.current.currentTime = activeSkipSegments.introEndSec!;
+                                    }
+                                  }}
+                                  className="inline-flex items-center gap-1.5 rounded-xl bg-black/85 hover:bg-[#D92321] border border-white/25 px-3.5 py-2 text-xs font-extrabold text-white shadow-xl transition-colors cursor-pointer"
+                                >
+                                  <SkipForward className="w-3.5 h-3.5" />
+                                  <span>تخطي المقدمة</span>
+                                </button>
+                              )}
+                              {showSkipRecapButton && activeSkipSegments?.recapEndSec !== undefined && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (videoElementRef.current) {
+                                      videoElementRef.current.currentTime = activeSkipSegments.recapEndSec!;
+                                    }
+                                  }}
+                                  className="inline-flex items-center gap-1.5 rounded-xl bg-black/85 hover:bg-[#D92321] border border-white/25 px-3.5 py-2 text-xs font-extrabold text-white shadow-xl transition-colors cursor-pointer"
+                                >
+                                  <Forward className="w-3.5 h-3.5" />
+                                  <span>تخطي الملخص</span>
+                                </button>
+                              )}
+                              {showNextSceneButton && nextEpisodeTarget && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleSelectEpisodeOrSeason(
+                                      nextEpisodeTarget.seasonIdx,
+                                      nextEpisodeTarget.episodeNumber
+                                    )
+                                  }
+                                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] border border-white/25 px-3.5 py-2 text-xs font-extrabold text-white shadow-xl transition-colors cursor-pointer"
+                                >
+                                  <Play className="w-3.5 h-3.5 fill-current" />
+                                  <span>{nextEpisodeTarget.label}</span>
+                                </button>
+                              )}
+                            </div>
+                          )}
 
                           {/* Mobile Double-Tap ±10s Seek Hotzones */}
                           <div
@@ -2792,12 +2526,12 @@ export function PlayerModal({
                       ) : (
                         <iframe
                           ref={iframeElementRef}
-                          key={`${safeServerIndex}-${finalStreamSrc}-${shieldDecision.mode}-${playerReloadKey}`}
+                          key={`${safeServerIndex}-${finalStreamSrc}-${iframePresentation.mode}-${playerReloadKey}`}
                           src={finalStreamSrc}
                           title={`${item.title} - ${activeServerLabel}`}
-                          sandbox={shieldDecision.sandboxAttr}
+                          sandbox={iframePresentation.sandboxAttr}
                           allowFullScreen
-                          referrerPolicy="no-referrer"
+                          referrerPolicy={iframePresentation.referrerPolicy}
                           onLoad={(e) => {
                             const expectedToken = attemptTokenRef.current;
                             let sameOriginError = false;
@@ -2826,7 +2560,7 @@ export function PlayerModal({
                                 }
                               }
                             } catch {
-                              // Cross-origin frame: SOP prevents reading contentDocument (never treated as server failure)
+                              // Cross-origin frame: normal behavior
                             }
                             if (sameOriginError) {
                               handleServerFaultFailover(
@@ -2840,7 +2574,9 @@ export function PlayerModal({
                                 { skipModeFallback: sameOrigin404 }
                               );
                             } else {
-                              markIframeLoaded(safeServerIndex, expectedToken, sameOriginPlaying);
+                              confirmRuntimePlayback(safeServerIndex, expectedToken, {
+                                verifiedPlayback: sameOriginPlaying,
+                              });
                             }
                           }}
                           onError={() =>
@@ -2850,190 +2586,112 @@ export function PlayerModal({
                               attemptTokenRef.current
                             )
                           }
-                          allow="autoplay; fullscreen; encrypted-media; picture-in-picture; accelerometer; gyroscope"
+                          allow={iframePresentation.allowAttr}
                           className="h-full w-full max-w-full block border-0 bg-black"
                         />
-                      )
-                    ) : (
-                      <div className="h-full w-full flex flex-col items-center justify-center p-4 sm:p-6 text-center bg-[#090d14] gap-2.5">
-                        <div
-                          className="inline-flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl border shrink-0"
-                          style={{
-                            backgroundColor: 'var(--pt-accent-12)',
-                            borderColor: 'var(--pt-accent-35)',
-                            color: 'var(--pt-accent)',
-                          }}
-                        >
-                          <Server className="w-6 h-6 sm:w-7 sm:h-7" />
-                        </div>
-                        <h4 className="font-display text-sm sm:text-base font-extrabold text-white">
-                          لا توجد روابط تشغيل صالحة متوفرة لهذا العرض حالياً
-                        </h4>
-                        <p className="max-w-md text-xs text-[#b7c9ef] leading-relaxed">
-                          لم يتم العثور على رابط فيديو أو كود تضمين صالح في السيرفر المحدد. جرّب التبديل إلى سيرفر آخر أو إعادة التحميل.
-                        </p>
-                        <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
-                          {serversList.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={handleSwitchToNextServer}
-                              className="inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-extrabold cursor-pointer"
-                              style={{
-                                backgroundColor: 'var(--pt-accent)',
-                                color: 'var(--pt-accent-contrast)',
-                              }}
-                            >
-                              <RefreshCw className="w-3.5 h-3.5" />
-                              <span>تجربة سيرفر آخر</span>
-                            </button>
-                          )}
+                      ))}
+
+                    {/* Inline Episodes Overlay Drawer Inside Player */}
+                    {showInlineEpisodesDrawer && episodes.length > 0 && (
+                      <div className="absolute inset-y-0 left-0 z-30 w-72 max-w-[85%] bg-[#0c1821]/95 border-r border-white/15 p-3.5 overflow-y-auto shadow-2xl space-y-2.5">
+                        <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                          <span className="text-xs font-extrabold text-white">قائمة الحلقات</span>
                           <button
                             type="button"
-                            onClick={handleRetryAllServers}
-                            className="inline-flex items-center gap-1.5 rounded-xl bg-white/[0.08] border border-white/15 px-3.5 py-2 text-xs font-bold text-white hover:bg-white/15 cursor-pointer"
+                            onClick={() => setShowInlineEpisodesDrawer(false)}
+                            className="text-[#b7c9ef] hover:text-white cursor-pointer"
+                            aria-label="إغلاق قائمة الحلقات"
                           >
-                            <RotateCw className="w-3.5 h-3.5" />
-                            <span>إعادة المحاولة</span>
+                            <X className="w-4 h-4" />
                           </button>
+                        </div>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          {episodes.map((ep) => (
+                            <button
+                              key={ep.number}
+                              type="button"
+                              onClick={() => handleSelectEpisodeOrSeason(seasonIdx, ep.number)}
+                              className={`rounded-lg py-2 text-xs font-extrabold border cursor-pointer ${
+                                episodeNum === ep.number
+                                  ? 'bg-[#D92321] border-transparent text-white'
+                                  : 'bg-white/5 border-white/10 text-[#b7c9ef] hover:text-white'
+                              }`}
+                            >
+                              ح {String(ep.number).padStart(2, '0')}
+                            </button>
+                          ))}
                         </div>
                       </div>
                     )}
 
-                    {/* Center-Screen Smart Play Overlay + Mode Fallback Bar */}
-                    {finalStreamSrc &&
-                      !allServersFailed &&
-                      !isBlockedHomepageUrl &&
-                      !isActiveServerFaulty &&
-                      !isDashStream &&
-                      smartPlayState !== 'confirmed_playing' &&
-                      (!smartOverlayDismissed ? (
-                        <div className="pointer-events-auto absolute inset-0 z-30 flex items-center justify-center bg-black/68 backdrop-blur-[3px] p-3 sm:p-5">
-                          <div className="w-full max-w-sm rounded-2xl border border-white/15 bg-[#09121b]/95 p-3.5 sm:p-4 text-center shadow-2xl space-y-3">
-                            <div className="flex flex-col items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={handleSmartPlayPrimaryAction}
-                                aria-label="تشغيل الفيديو"
-                                className="inline-flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-2xl border border-white/25 shadow-xl transition-transform hover:scale-105 active:scale-95 cursor-pointer"
-                                style={{
-                                  backgroundColor: 'var(--pt-accent)',
-                                  color: 'var(--pt-accent-contrast)',
-                                }}
-                              >
-                                {smartPlayState === 'initializing' || smartPlayState === 'trying_mode' ? (
-                                  <Loader2 className="w-7 h-7 animate-spin" />
-                                ) : (
-                                  <Play className="w-7 h-7 fill-current translate-x-0.5" />
-                                )}
-                              </button>
-
-                              <div className="space-y-1">
-                                <p className="text-xs sm:text-sm font-extrabold text-white leading-snug">
-                                  {getSmartPlayStatusMessage(smartPlayState, activeWatchMode, smartPlayDetail)}
-                                </p>
-                                <div className="inline-flex flex-wrap items-center justify-center gap-1.5 text-[10px] sm:text-[11px] text-[#9fb2d4]">
-                                  <span className="font-bold text-white/90">{activeServerLabel}</span>
-                                  <span>·</span>
-                                  <span className="font-extrabold text-[#f9c400]">
-                                    {activeModeInfo.label}
-                                  </span>
-                                  {modeChainForServer.length > 1 && (
-                                    <span className="font-latin text-[#88a0c7]">
-                                      ({activeModeIndex + 1}/{modeChainForServer.length})
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Quick Action Strip: Mode Prev / Retry / Mode Next / Next Server */}
-                            <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
-                              {smartPlayState === 'page_loaded_ready' && !autoplayBlocked && (
-                                <button
-                                  type="button"
-                                  onClick={() => setSmartOverlayDismissed(true)}
-                                  className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-extrabold cursor-pointer transition-opacity hover:opacity-90"
-                                  style={{
-                                    backgroundColor: 'var(--pt-accent)',
-                                    color: 'var(--pt-accent-contrast)',
-                                  }}
-                                >
-                                  <Play className="w-3 h-3 fill-current" />
-                                  <span>بدء المشاهدة</span>
-                                </button>
-                              )}
-
-                              {modeChainForServer.length > 1 && (
-                                <>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleStepWatchMode('prev')}
-                                    className="inline-flex items-center gap-1 rounded-lg bg-white/[0.08] border border-white/15 px-2.5 py-1.5 text-[10px] sm:text-[11px] font-bold text-white/90 hover:bg-white/15 cursor-pointer"
-                                  >
-                                    <ChevronRight className="w-3 h-3" />
-                                    <span>الوضع السابق</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleStepWatchMode('next')}
-                                    className="inline-flex items-center gap-1 rounded-lg bg-white/[0.08] border border-white/15 px-2.5 py-1.5 text-[10px] sm:text-[11px] font-bold text-white/90 hover:bg-white/15 cursor-pointer"
-                                  >
-                                    <span>الوضع التالي</span>
-                                    <ChevronLeft className="w-3 h-3" />
-                                  </button>
-                                </>
-                              )}
-
-                              <button
-                                type="button"
-                                onClick={handleReloadCurrentServer}
-                                className="inline-flex items-center gap-1 rounded-lg bg-white/[0.08] border border-white/15 px-2.5 py-1.5 text-[10px] sm:text-[11px] font-bold text-white/90 hover:bg-white/15 cursor-pointer"
-                              >
-                                <RotateCw className="w-3 h-3" />
-                                <span>إعادة المحاولة</span>
-                              </button>
-
-                              {serversList.length > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={handleSwitchToNextServer}
-                                  className="inline-flex items-center gap-1 rounded-lg bg-white/[0.08] border border-white/15 px-2.5 py-1.5 text-[10px] sm:text-[11px] font-bold text-[#f9c400] hover:bg-white/15 cursor-pointer"
-                                >
-                                  <RefreshCw className="w-3 h-3" />
-                                  <span>تبديل السيرفر</span>
-                                </button>
-                              )}
-                            </div>
+                    {/* Auto Next Episode 10s Countdown Overlay */}
+                    {autoNextCountdown !== null && nextEpisodeTarget && (
+                      <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+                        <div className="w-full max-w-sm rounded-2xl bg-[#0c1821] border border-white/15 p-5 text-center space-y-3 shadow-2xl">
+                          <p className="text-xs font-bold text-[#f9c400]">التالي تلقائياً خلال {autoNextCountdown} ثوانٍ</p>
+                          <h4 className="font-display text-base font-extrabold text-white">
+                            {item.title} — {nextEpisodeTarget.label}
+                          </h4>
+                          <div className="flex items-center justify-center gap-2.5 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAutoNextCountdown(null);
+                                handleSelectEpisodeOrSeason(
+                                  nextEpisodeTarget.seasonIdx,
+                                  nextEpisodeTarget.episodeNumber
+                                );
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-4 py-2 text-xs font-extrabold text-white cursor-pointer"
+                            >
+                              <Play className="w-3.5 h-3.5 fill-current" />
+                              <span>مشاهدة الآن</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setAutoNextCountdown(null)}
+                              className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-2 text-xs font-bold text-white cursor-pointer"
+                            >
+                              إلغاء
+                            </button>
                           </div>
                         </div>
-                      ) : (
-                        !isDirectVideoFile && (
-                          <div className="pointer-events-none absolute top-2.5 left-2.5 right-2.5 z-20 flex items-center justify-between gap-2">
-                            <div className="pointer-events-auto inline-flex flex-wrap items-center gap-1.5 rounded-lg bg-black/75 border border-white/15 px-2 py-1 backdrop-blur-sm">
-                              <span className="text-[10px] font-bold text-[#9fb2d4]">
-                                {activeModeInfo.shortLabel}
-                              </span>
-                              {modeChainForServer.length > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleStepWatchMode('next')}
-                                  className="inline-flex items-center gap-1 rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-extrabold text-[#f9c400] hover:bg-white/20 cursor-pointer"
-                                >
-                                  <RefreshCw className="w-2.5 h-2.5" />
-                                  <span>تجربة وضع آخر</span>
-                                </button>
-                              )}
+                      </div>
+                    )}
+
+                    {/* Clean Minimal Error Recovery Banner ONLY when all servers fail at runtime */}
+                    {allServersFailed && (
+                      <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#06131c]/95 p-5 text-center">
+                        <div className="max-w-sm space-y-3">
+                          <AlertTriangle className="w-9 h-9 mx-auto text-[#f9c400]" />
+                          <p className="text-sm font-extrabold text-white">
+                            تعذر تشغيل المشغل على السيرفر الحالي
+                          </p>
+                          <p className="text-xs text-[#b7c9ef]">
+                            يمكنك إعادة المحاولة أو التبديل إلى سيرفر بديل من القائمة.
+                          </p>
+                          <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={handleRetryAllServers}
+                              className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] px-4 py-2 text-xs font-extrabold text-white cursor-pointer"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              <span>إعادة المحاولة</span>
+                            </button>
+                            {serversList.length > 1 && (
                               <button
                                 type="button"
-                                onClick={() => setSmartOverlayDismissed(false)}
-                                className="inline-flex items-center gap-1 rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-white/85 hover:bg-white/20 cursor-pointer"
+                                onClick={handleSwitchToNextServer}
+                                className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-2 text-xs font-extrabold text-white cursor-pointer"
                               >
-                                <span>خيارات التشغيل</span>
+                                تجربة السيرفر التالي
                               </button>
-                            </div>
+                            )}
                           </div>
-                        )
-                      ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -3046,7 +2704,7 @@ export function PlayerModal({
                     <div className="flex items-center gap-2 text-[#9fb2d4]">
                       <ShieldCheck className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--pt-accent)' }} />
                       <span>
-                        مشغّل <strong className="text-white">{theme.brandLabel}</strong> المحمي — إذا تعذر التحميل بدّل للسيرفر التالي
+                        مشغّل <strong className="text-white">{theme.brandLabel}</strong> — إذا تعذر التشغيل بدّل للسيرفر التالي
                       </span>
                     </div>
                     {serversList.length > 1 && (
@@ -3080,18 +2738,6 @@ export function PlayerModal({
                   <span className="font-latin font-black text-[#f9c400] text-[11px] shrink-0">
                     {activeQuality}
                   </span>
-                  {activeFilterEntry && (
-                    <>
-                      <span className="text-white/30">·</span>
-                      <span
-                        className={`text-[11px] font-bold shrink-0 ${
-                          activeFilterEntry.ok ? 'text-[#4CAF50]' : 'text-[#ff8a88]'
-                        }`}
-                      >
-                        {activeFilterEntry.ok ? 'متاح' : friendlyServerError.shortStatus}
-                      </span>
-                    </>
-                  )}
                 </div>
 
                 <button
@@ -3104,33 +2750,9 @@ export function PlayerModal({
                   }}
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  <span>{serversList.length > 1 ? 'تغيير السيرفر' : 'إعادة التحميل'}</span>
+                  <span>{serversList.length > 1 ? 'تغيير السيرفر' : 'إعادة المحاولة'}</span>
                 </button>
               </div>
-
-              {/* Mobile Non-Intrusive Auto-Switch Alert (Placed Below Player) */}
-              {filterAlert && (
-                <div
-                  className={`flex lg:hidden items-center justify-between gap-2 mx-3 mt-2.5 rounded-xl px-3 py-2 text-[11px] font-bold border ${
-                    filterAlert.kind === 'switched'
-                      ? 'bg-[#f9c400]/10 border-[#f9c400]/25 text-[#f9c400]'
-                      : 'bg-[#D92321]/12 border-[#D92321]/25 text-[#ff9b99]'
-                  }`}
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                    <span className="leading-snug">{filterAlert.message}</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setFilterAlert(null)}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg hover:bg-white/10 cursor-pointer shrink-0"
-                    aria-label="إخفاء التنبيه"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              )}
 
               {/* Desktop Series Episodes Switcher */}
               {episodes.length > 0 && (
@@ -3194,7 +2816,7 @@ export function PlayerModal({
                         <span className="text-white/30">·</span>
                         <span className="inline-flex items-center gap-1 font-latin tabular-nums text-[#f9c400]">
                           <Star className="w-3.5 h-3.5 fill-current" />
-                          <span dir="ltr">{item.communityRating.average.toFixed(1)}/5</span>
+                          <span dir="ltr">{item.communityRating.average.toFixed(1)}/10</span>
                         </span>
                       </>
                     )}

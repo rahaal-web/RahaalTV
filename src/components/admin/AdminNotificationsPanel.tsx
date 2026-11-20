@@ -20,13 +20,15 @@ import {
 } from '../../lib/adminPreferences';
 import { runCatalogContentAudit } from '../../lib/contentAudit';
 import { loadCrawlTasks, subscribeCrawlTasks } from '../../lib/crawlTasksDb';
-import { MediaItem, VisitorRequest } from '../../types/media';
+import { createNotificationInFirestore } from '../../lib/firebase';
+import { MediaItem, NotificationCategory, VisitorRequest } from '../../types/media';
 import type { AdminTab } from './adminNavigation';
 import { EmptyState } from './AdminSharedUi';
 
 interface AdminNotificationsPanelProps {
   catalog: MediaItem[];
   requests: VisitorRequest[];
+  adminUid?: string;
   isOwner: boolean;
   isFirestoreSeeded: boolean;
   onNavigateTab: (tab: AdminTab) => void;
@@ -45,6 +47,7 @@ interface ComputedSystemAlert {
 export function AdminNotificationsPanel({
   catalog,
   requests,
+  adminUid = '',
   isOwner,
   isFirestoreSeeded,
   onNavigateTab,
@@ -54,11 +57,43 @@ export function AdminNotificationsPanel({
     loadAdminNotifications()
   );
   const [crawlTasks, setCrawlTasks] = useState(() => loadCrawlTasks());
+  const [broadcastTitle, setBroadcastTitle] = useState('');
+  const [broadcastBody, setBroadcastBody] = useState('');
+  const [broadcastCategory, setBroadcastCategory] =
+    useState<NotificationCategory>('custom_announcement');
+  const [broadcastMediaId, setBroadcastMediaId] = useState('');
+  const [sendingBroadcast, setSendingBroadcast] = useState(false);
 
   useEffect(() => {
     setCrawlTasks(loadCrawlTasks());
     return subscribeCrawlTasks(() => setCrawlTasks(loadCrawlTasks()));
   }, []);
+
+  const handlePublishAudienceNotification = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!broadcastTitle.trim() || !broadcastBody.trim()) {
+      onNotify('يرجى إدخال عنوان ونص الإشعار قبل الإرسال.');
+      return;
+    }
+    setSendingBroadcast(true);
+    try {
+      await createNotificationInFirestore({
+        title: broadcastTitle.trim(),
+        message: broadcastBody.trim(),
+        category: broadcastCategory,
+        mediaId: broadcastMediaId || undefined,
+        createdBy: adminUid || 'admin',
+      });
+      setBroadcastTitle('');
+      setBroadcastBody('');
+      setBroadcastMediaId('');
+      onNotify('تم إرسال الإشعار للجمهور ونشره في جرس التنبيهات بنجاح.');
+    } catch {
+      onNotify('تعذر نشر الإشعار — تأكد من الصلاحيات والاتصال بقاعدة البيانات.');
+    } finally {
+      setSendingBroadcast(false);
+    }
+  };
 
   const auditReport = useMemo(() => runCatalogContentAudit(catalog), [catalog]);
   const clientErrors = useMemo(() => loadClientErrorLogs(), []);
@@ -188,6 +223,87 @@ export function AdminNotificationsPanel({
           )}
         </div>
       </div>
+
+      {/* Audience Notification Broadcaster */}
+      <form
+        onSubmit={handlePublishAudienceNotification}
+        className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 space-y-3.5"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+          <div>
+            <h3 className="font-display text-sm font-extrabold text-white flex items-center gap-2">
+              <Bell className="w-4 h-4 text-[#f9c400]" />
+              <span>إرسال إشعار للجمهور (يظهر في جرس الإشعارات بالمنصة)</span>
+            </h3>
+            <p className="text-[11px] text-[#9fb2d4] mt-0.5">
+              انشر تنبيهاً عن فيلم جديد أو حلقة جديدة أو إعلان عام للمشاهدين.
+            </p>
+          </div>
+          <button
+            type="submit"
+            disabled={sendingBroadcast}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[#D92321] hover:bg-[#dc0e30] disabled:opacity-50 px-4 py-2 text-xs font-extrabold text-white cursor-pointer"
+          >
+            <span>{sendingBroadcast ? 'جاري النشر...' : 'نشر الإشعار الآن'}</span>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">تصنيف الإشعار</label>
+            <select
+              value={broadcastCategory}
+              onChange={(e) => setBroadcastCategory(e.target.value as NotificationCategory)}
+              className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2 text-xs font-bold text-white"
+            >
+              <option value="new_release">إصدار جديد</option>
+              <option value="new_episode">حلقة جديدة</option>
+              <option value="system_alert">تنبيه منصة</option>
+              <option value="custom_announcement">إعلان عام</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">
+              ربط بعمل محدد (اختياري)
+            </label>
+            <select
+              value={broadcastMediaId}
+              onChange={(e) => setBroadcastMediaId(e.target.value)}
+              className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2 text-xs font-bold text-white"
+            >
+              <option value="">-- بدون ربط بعمل --</option>
+              {catalog.slice(0, 80).map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.title} ({m.year})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">عنوان الإشعار</label>
+            <input
+              type="text"
+              maxLength={100}
+              value={broadcastTitle}
+              onChange={(e) => setBroadcastTitle(e.target.value)}
+              placeholder="مثال: تتوفر الآن الحلقة الأخيرة"
+              className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2 text-xs text-white"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-[11px] font-bold text-[#b7c9ef] mb-1">تفاصيل الإشعار</label>
+          <textarea
+            rows={2}
+            maxLength={300}
+            value={broadcastBody}
+            onChange={(e) => setBroadcastBody(e.target.value)}
+            placeholder="اكتب نص الإشعار الذي سيظهر للمشاهدين..."
+            className="w-full rounded-xl bg-[#1a242e] border border-white/10 px-3 py-2 text-xs text-white"
+          />
+        </div>
+      </form>
 
       {/* Live Computed Operational Alerts */}
       <div className="rounded-3xl bg-[#0c1821] border border-white/[0.08] p-5 space-y-3">

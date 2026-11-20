@@ -44,6 +44,7 @@ import {
   createTimeoutReport,
   evaluateHttpProbeResult,
   isDirectMediaExtensionUrl,
+  validateRedirectHopUrl,
   type ServerHealthReport,
 } from './src/lib/serverHealthCore.ts';
 
@@ -69,6 +70,84 @@ function isBlockedHost(hostname: string): boolean {
     if (second >= 16 && second <= 31) return true;
   }
   return false;
+}
+
+async function readBoundedResponseText(response: Response, maxBytes = 32768): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    try {
+      return (await response.text()).slice(0, maxBytes);
+    } catch {
+      return '';
+    }
+  }
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { value, done } = await reader.read();
+      if (done || !value) break;
+      const buf = Buffer.from(value);
+      const remaining = maxBytes - total;
+      chunks.push(buf.length > remaining ? buf.subarray(0, remaining) : buf);
+      total += buf.length;
+    }
+    try {
+      await reader.cancel();
+    } catch {
+      // ignore stream cancel error
+    }
+    return Buffer.concat(chunks).toString('utf8');
+  } catch {
+    return Buffer.concat(chunks).toString('utf8');
+  }
+}
+
+async function safeProbeFetchWithRedirects(
+  initialUrl: string,
+  init: RequestInit,
+  maxRedirects = 5
+): Promise<{ response: Response; finalUrl: string; redirectChain: string[] }> {
+  let currentUrl = initialUrl;
+  const redirectChain: string[] = [currentUrl];
+
+  for (let hop = 0; hop <= maxRedirects; hop += 1) {
+    const response = await fetch(currentUrl, {
+      ...init,
+      redirect: 'manual',
+    });
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location') || '';
+      try {
+        await response.body?.cancel();
+      } catch {
+        // ignore cancel error
+      }
+      if (!location) {
+        return { response, finalUrl: currentUrl, redirectChain };
+      }
+      const check = validateRedirectHopUrl(
+        location,
+        currentUrl,
+        (hostname) => isBlockedHost(hostname) || isBlockedHostEnhanced(hostname)
+      );
+      if (!check.ok) {
+        throw new Error(`SSRF_REDIRECT_BLOCKED: ${check.reason}`);
+      }
+      currentUrl = check.nextUrl;
+      redirectChain.push(currentUrl);
+      continue;
+    }
+
+    return {
+      response,
+      finalUrl: response.url || currentUrl,
+      redirectChain,
+    };
+  }
+
+  throw new Error('TOO_MANY_REDIRECTS');
 }
 
 function cleanText(val: string | undefined | null): string {
@@ -1001,6 +1080,10 @@ export interface ServerResolvedMediaRating {
   id?: string;
   imdb: number;
   imdbId?: string;
+  tmdbId?: number;
+  director?: string;
+  writer?: string;
+  ageRating?: string;
   votes?: string;
   matchedTitle?: string;
   year?: string;
@@ -1176,9 +1259,14 @@ async function queryTmdbRatingServer(params: {
       let imdbId = '';
       let voteAverage = best.entry.vote_average;
       let voteCount = best.entry.vote_count || 0;
+      let director = '';
+      let writer = '';
+      let ageRating = '';
       try {
         const detailsRes = await fetch(
-          buildUrl(`/${searchType}/${best.entry.id}?append_to_response=external_ids`),
+          buildUrl(
+            `/${searchType}/${best.entry.id}?append_to_response=external_ids,credits,release_dates,content_ratings`
+          ),
           { headers, signal: AbortSignal.timeout(6000) }
         );
         if (detailsRes.ok) {
@@ -1187,10 +1275,97 @@ async function queryTmdbRatingServer(params: {
             vote_average?: number;
             vote_count?: number;
             external_ids?: { imdb_id?: string };
+            created_by?: Array<{ name?: string }>;
+            credits?: {
+              crew?: Array<{ name?: string; job?: string; department?: string }>;
+            };
+            release_dates?: {
+              results?: Array<{
+                iso_3166_1?: string;
+                release_dates?: Array<{ certification?: string }>;
+              }>;
+            };
+            content_ratings?: {
+              results?: Array<{ iso_3166_1?: string; rating?: string }>;
+            };
           };
           imdbId = detailsJson.imdb_id || detailsJson.external_ids?.imdb_id || '';
           if (typeof detailsJson.vote_average === 'number') voteAverage = detailsJson.vote_average;
           if (typeof detailsJson.vote_count === 'number') voteCount = detailsJson.vote_count;
+
+          const crew = Array.isArray(detailsJson.credits?.crew) ? detailsJson.credits.crew : [];
+          const directorNames = crew
+            .filter((c) => c.job === 'Director' && c.name)
+            .map((c) => String(c.name).trim())
+            .filter(Boolean);
+          if (directorNames.length > 0) {
+            director = Array.from(new Set(directorNames)).slice(0, 3).join('، ');
+          } else if (Array.isArray(detailsJson.created_by) && detailsJson.created_by.length > 0) {
+            director = detailsJson.created_by
+              .map((c) => String(c?.name || '').trim())
+              .filter(Boolean)
+              .slice(0, 3)
+              .join('، ');
+          }
+
+          const writerNames = crew
+            .filter(
+              (c) =>
+                c.name &&
+                (c.job === 'Writer' ||
+                  c.job === 'Screenplay' ||
+                  c.job === 'Story' ||
+                  c.department === 'Writing')
+            )
+            .map((c) => String(c.name).trim())
+            .filter(Boolean);
+          if (writerNames.length > 0) {
+            writer = Array.from(new Set(writerNames)).slice(0, 3).join('، ');
+          }
+
+          if (searchType === 'movie' && Array.isArray(detailsJson.release_dates?.results)) {
+            const preferredCountries = ['EG', 'SA', 'US', 'GB'];
+            for (const code of preferredCountries) {
+              const matchCountry = detailsJson.release_dates.results.find(
+                (r) => r.iso_3166_1 === code
+              );
+              const cert = matchCountry?.release_dates?.find((d) =>
+                Boolean(String(d?.certification || '').trim())
+              )?.certification;
+              if (cert) {
+                ageRating = String(cert).trim();
+                break;
+              }
+            }
+            if (!ageRating) {
+              for (const r of detailsJson.release_dates.results) {
+                const cert = r.release_dates?.find((d) =>
+                  Boolean(String(d?.certification || '').trim())
+                )?.certification;
+                if (cert) {
+                  ageRating = String(cert).trim();
+                  break;
+                }
+              }
+            }
+          } else if (searchType === 'tv' && Array.isArray(detailsJson.content_ratings?.results)) {
+            const preferredCountries = ['EG', 'SA', 'US', 'GB'];
+            for (const code of preferredCountries) {
+              const matchCountry = detailsJson.content_ratings.results.find(
+                (r) => r.iso_3166_1 === code && Boolean(String(r.rating || '').trim())
+              );
+              if (matchCountry?.rating) {
+                ageRating = String(matchCountry.rating).trim();
+                break;
+              }
+            }
+            if (!ageRating) {
+              const anyRating = detailsJson.content_ratings.results.find((r) =>
+                Boolean(String(r?.rating || '').trim())
+              );
+              if (anyRating?.rating) ageRating = String(anyRating.rating).trim();
+            }
+          }
         }
       } catch {
         // non-fatal
@@ -1202,6 +1377,10 @@ async function queryTmdbRatingServer(params: {
           return {
             imdb: cinemeta.rating,
             imdbId,
+            tmdbId: best.entry.id,
+            ...(director ? { director } : {}),
+            ...(writer ? { writer } : {}),
+            ...(ageRating ? { ageRating } : {}),
             votes: voteCount > 0 ? voteCount.toLocaleString('en-US') : undefined,
             matchedTitle:
               cinemeta.name || best.entry.title || best.entry.name || best.entry.original_title,
@@ -1216,7 +1395,25 @@ async function queryTmdbRatingServer(params: {
         return {
           imdb: tmdbRating,
           imdbId: imdbId || undefined,
+          tmdbId: best.entry.id,
+          ...(director ? { director } : {}),
+          ...(writer ? { writer } : {}),
+          ...(ageRating ? { ageRating } : {}),
           votes: voteCount.toLocaleString('en-US'),
+          matchedTitle: best.entry.title || best.entry.name || best.entry.original_title,
+          year: best.year || undefined,
+          source: 'tmdb',
+        };
+      }
+      if (director || writer || ageRating || best.entry.id) {
+        return {
+          imdb: tmdbRating || 0,
+          imdbId: imdbId || undefined,
+          tmdbId: best.entry.id,
+          ...(director ? { director } : {}),
+          ...(writer ? { writer } : {}),
+          ...(ageRating ? { ageRating } : {}),
+          votes: voteCount > 0 ? voteCount.toLocaleString('en-US') : undefined,
           matchedTitle: best.entry.title || best.entry.name || best.entry.original_title,
           year: best.year || undefined,
           source: 'tmdb',
@@ -3137,6 +3334,10 @@ export function parseHtmlToMediaWithHints(
     shortUrl: '',
     trailerUrl,
     cast: jsonLdCast,
+    director: undefined as string | undefined,
+    writer: undefined as string | undefined,
+    ageRating: undefined as string | undefined,
+    tmdbId: undefined as number | undefined,
     servers: normalizedServers,
     downloads: Array.from(downloadsMap.values()).slice(0, 12),
     seasons: parsedSeasons,
@@ -3699,10 +3900,24 @@ export async function scrapeFullItemWithSubpages(
 
   media.servers = filteredServers;
   media.trailerUrl = fallbackTrailer || '';
-  if (resolvedRating && resolvedRating.imdb > 0) {
-    media.imdb = resolvedRating.imdb;
+  if (resolvedRating) {
+    if (resolvedRating.imdb > 0) {
+      media.imdb = resolvedRating.imdb;
+    }
     if (!media.imdbId && resolvedRating.imdbId) {
       media.imdbId = resolvedRating.imdbId;
+    }
+    if (resolvedRating.tmdbId && !media.tmdbId) {
+      media.tmdbId = resolvedRating.tmdbId;
+    }
+    if (resolvedRating.director && !media.director) {
+      media.director = resolvedRating.director;
+    }
+    if (resolvedRating.writer && !media.writer) {
+      media.writer = resolvedRating.writer;
+    }
+    if (resolvedRating.ageRating && !media.ageRating) {
+      media.ageRating = resolvedRating.ageRating;
     }
     if (resolvedRating.votes) {
       media.votes = resolvedRating.votes;
@@ -4088,10 +4303,24 @@ async function enrichScrapedMediaFromAdapter(
   ]);
 
   full.trailerUrl = fallbackTrailer || '';
-  if (resolvedRating && resolvedRating.imdb > 0) {
-    full.imdb = resolvedRating.imdb;
+  if (resolvedRating) {
+    if (resolvedRating.imdb > 0) {
+      full.imdb = resolvedRating.imdb;
+    }
     if (!full.imdbId && resolvedRating.imdbId) {
       full.imdbId = resolvedRating.imdbId;
+    }
+    if (resolvedRating.tmdbId && !full.tmdbId) {
+      full.tmdbId = resolvedRating.tmdbId;
+    }
+    if (resolvedRating.director && !full.director) {
+      full.director = resolvedRating.director;
+    }
+    if (resolvedRating.writer && !full.writer) {
+      full.writer = resolvedRating.writer;
+    }
+    if (resolvedRating.ageRating && !full.ageRating) {
+      full.ageRating = resolvedRating.ageRating;
     }
     if (resolvedRating.votes) {
       full.votes = resolvedRating.votes;
@@ -4921,35 +5150,48 @@ async function startServer() {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 7000);
           let response: Response;
+          let finalUrl = parsed.toString();
+          let redirectChain: string[] = [finalUrl];
           try {
-            response = await fetch(parsed.toString(), {
-              method: isDirectMedia ? 'HEAD' : 'GET',
-              redirect: 'follow',
-              signal: controller.signal,
-              headers: {
-                ...baseHeaders,
-                ...(isDirectMedia ? {} : { Range: 'bytes=0-32768' }),
-              },
-            });
-
-            // Some media CDNs reject HEAD (405/501) -> gracefully retry small ranged GET
-            if (isDirectMedia && (response.status === 405 || response.status === 501)) {
-              response = await fetch(parsed.toString(), {
-                method: 'GET',
-                redirect: 'follow',
+            const firstHop = await safeProbeFetchWithRedirects(
+              parsed.toString(),
+              {
+                method: isDirectMedia ? 'HEAD' : 'GET',
                 signal: controller.signal,
                 headers: {
                   ...baseHeaders,
-                  Range: 'bytes=0-4095',
+                  ...(isDirectMedia ? {} : { Range: 'bytes=0-32768' }),
                 },
-              });
+              },
+              5
+            );
+            response = firstHop.response;
+            finalUrl = firstHop.finalUrl;
+            redirectChain = firstHop.redirectChain;
+
+            // Some media CDNs reject HEAD (405/501) -> gracefully retry small ranged GET
+            if (isDirectMedia && (response.status === 405 || response.status === 501)) {
+              const retryHop = await safeProbeFetchWithRedirects(
+                finalUrl,
+                {
+                  method: 'GET',
+                  signal: controller.signal,
+                  headers: {
+                    ...baseHeaders,
+                    Range: 'bytes=0-4095',
+                  },
+                },
+                5
+              );
+              response = retryHop.response;
+              finalUrl = retryHop.finalUrl;
+              redirectChain = retryHop.redirectChain;
             }
           } finally {
             clearTimeout(timer);
           }
 
           const latencyMs = Date.now() - startedAt;
-          const finalUrl = response.url || parsed.toString();
           const httpStatus = response.status;
           const contentType = (response.headers.get('content-type') || '').toLowerCase();
           const xFrame = response.headers.get('x-frame-options') || '';
@@ -4961,30 +5203,37 @@ async function startServer() {
             !isDirectMedia &&
             (contentType.includes('text/html') || contentType.includes('text/plain') || !contentType)
           ) {
-            try {
-              snippet = (await response.text()).slice(0, 32768);
-            } catch {
-              snippet = '';
-            }
+            snippet = await readBoundedResponseText(response, 32768);
           }
 
-          return toApiResult(
-            evaluateHttpProbeResult({
-              rawUrl: targetUrl,
-              finalUrl,
-              httpStatus,
-              contentType,
-              xFrameOptions: xFrame,
-              csp,
-              cfMitigated,
-              snippet,
-              latencyMs,
-              checkedAt,
-              method: 'backend',
-            })
-          );
+          const evaluated = evaluateHttpProbeResult({
+            rawUrl: targetUrl,
+            finalUrl,
+            httpStatus,
+            contentType,
+            xFrameOptions: xFrame,
+            csp,
+            cfMitigated,
+            snippet,
+            latencyMs,
+            checkedAt,
+            method: 'backend',
+          });
+          evaluated.redirectChain = redirectChain;
+          return toApiResult(evaluated);
         } catch (err) {
           const elapsed = Date.now() - startedAt;
+          const errMessage = err instanceof Error ? err.message : '';
+          if (errMessage.startsWith('SSRF_REDIRECT_BLOCKED')) {
+            return toApiResult(
+              createNetworkErrorReport({
+                url: targetUrl,
+                latencyMs: elapsed,
+                checkedAt,
+                detail: 'تم حظر إعادة توجيه غير آمنة نحو نطاق محلي أو محظور',
+              })
+            );
+          }
           const isTimeout = err instanceof Error && err.name === 'AbortError';
           return toApiResult(
             isTimeout
@@ -5022,6 +5271,444 @@ async function startServer() {
     }
   });
 
+  // Admin Batch Server Health Checker Endpoint (Background & Admin Audit Only)
+  app.post('/api/server-health/run-batch', async (req, res) => {
+    try {
+      const body = (req.body || {}) as {
+        items?: Array<{
+          serverId?: string;
+          url?: string;
+          mediaId?: string;
+          episodeNumber?: number;
+          seasonNumber?: number;
+          serverIndex?: number;
+          serverName?: string;
+        }>;
+        ttlHours?: number;
+      };
+      const rawItems = Array.isArray(body.items) ? body.items.slice(0, 60) : [];
+      if (rawItems.length === 0) {
+        return res.status(400).json({ ok: false, error: 'يجب إرسال قائمة السيرفرات (items).' });
+      }
+      const ttlHours = Math.max(1, Math.min(72, Number(body.ttlHours) || 12));
+
+      const checkSingleBatchUrl = async (targetUrl: string): Promise<ServerHealthReport> => {
+        const startedAt = Date.now();
+        const checkedAt = new Date().toISOString();
+        let parsed: URL;
+        try {
+          parsed = new URL(targetUrl);
+        } catch {
+          return evaluateHttpProbeResult({
+            rawUrl: targetUrl,
+            httpStatus: 0,
+            latencyMs: 0,
+            checkedAt,
+            method: 'backend',
+          });
+        }
+
+        if (
+          !['http:', 'https:'].includes(parsed.protocol) ||
+          isBlockedHost(parsed.hostname) ||
+          isBlockedHostEnhanced(parsed.hostname)
+        ) {
+          return createNetworkErrorReport({
+            url: targetUrl,
+            latencyMs: Date.now() - startedAt,
+            checkedAt,
+            detail: 'بروتوكول أو نطاق محظور أمنياً (SSRF guard)',
+          });
+        }
+
+        const isDirectMedia = isDirectMediaExtensionUrl(parsed.toString());
+        const baseHeaders = {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+          Referer: `${parsed.origin}/`,
+          Accept: 'text/html,video/*,application/xhtml+xml,*/*;q=0.8',
+        };
+
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 7000);
+          let response: Response;
+          let finalUrl = parsed.toString();
+          let redirectChain: string[] = [finalUrl];
+          try {
+            const firstHop = await safeProbeFetchWithRedirects(
+              parsed.toString(),
+              {
+                method: isDirectMedia ? 'HEAD' : 'GET',
+                signal: controller.signal,
+                headers: {
+                  ...baseHeaders,
+                  ...(isDirectMedia ? {} : { Range: 'bytes=0-32768' }),
+                },
+              },
+              5
+            );
+            response = firstHop.response;
+            finalUrl = firstHop.finalUrl;
+            redirectChain = firstHop.redirectChain;
+
+            if (isDirectMedia && (response.status === 405 || response.status === 501)) {
+              const retryHop = await safeProbeFetchWithRedirects(
+                finalUrl,
+                {
+                  method: 'GET',
+                  signal: controller.signal,
+                  headers: {
+                    ...baseHeaders,
+                    Range: 'bytes=0-4095',
+                  },
+                },
+                5
+              );
+              response = retryHop.response;
+              finalUrl = retryHop.finalUrl;
+              redirectChain = retryHop.redirectChain;
+            }
+          } finally {
+            clearTimeout(timer);
+          }
+
+          const latencyMs = Date.now() - startedAt;
+          const httpStatus = response.status;
+          const contentType = (response.headers.get('content-type') || '').toLowerCase();
+          const xFrame = response.headers.get('x-frame-options') || '';
+          const csp = response.headers.get('content-security-policy') || '';
+          const cfMitigated = response.headers.get('cf-mitigated') || '';
+
+          let snippet = '';
+          if (
+            !isDirectMedia &&
+            (contentType.includes('text/html') || contentType.includes('text/plain') || !contentType)
+          ) {
+            snippet = await readBoundedResponseText(response, 32768);
+          }
+
+          const evaluated = evaluateHttpProbeResult({
+            rawUrl: targetUrl,
+            finalUrl,
+            httpStatus,
+            contentType,
+            xFrameOptions: xFrame,
+            csp,
+            cfMitigated,
+            snippet,
+            latencyMs,
+            checkedAt,
+            method: 'backend',
+          });
+          evaluated.redirectChain = redirectChain;
+          return evaluated;
+        } catch (err) {
+          const elapsed = Date.now() - startedAt;
+          const errMessage = err instanceof Error ? err.message : '';
+          if (errMessage.startsWith('SSRF_REDIRECT_BLOCKED')) {
+            return createNetworkErrorReport({
+              url: targetUrl,
+              latencyMs: elapsed,
+              checkedAt,
+              detail: 'تم حظر إعادة توجيه غير آمنة نحو نطاق محلي أو محظور',
+            });
+          }
+          const isTimeout = err instanceof Error && err.name === 'AbortError';
+          return isTimeout
+            ? createTimeoutReport({
+                url: targetUrl,
+                latencyMs: elapsed,
+                checkedAt,
+                stage: 'connectivity',
+              })
+            : createNetworkErrorReport({
+                url: targetUrl,
+                latencyMs: elapsed,
+                checkedAt,
+                detail: 'تعذر الاتصال بالخادم المستضيف',
+              });
+        }
+      };
+
+      const urlCache = new Map<string, ServerHealthReport>();
+      const uniqueUrls = Array.from(
+        new Set(rawItems.map((it) => String(it?.url || '').trim()).filter(Boolean))
+      );
+
+      const CONCURRENCY = 6;
+      for (let i = 0; i < uniqueUrls.length; i += CONCURRENCY) {
+        const chunk = uniqueUrls.slice(i, i + CONCURRENCY);
+        const probed = await Promise.all(chunk.map(async (u) => [u, await checkSingleBatchUrl(u)] as const));
+        for (const [u, rep] of probed) {
+          urlCache.set(u, rep);
+        }
+      }
+
+      const records = rawItems
+        .filter((it) => it && typeof it.url === 'string' && it.url.trim())
+        .map((it) => {
+          const url = String(it.url).trim();
+          const report = urlCache.get(url);
+          if (!report) return null;
+          const checkedAt = report.checkedAt || new Date().toISOString();
+          const expiresAt = new Date(Date.now() + ttlHours * 3600 * 1000).toISOString();
+          let status:
+            | 'healthy'
+            | 'healthy_with_mode'
+            | 'embed_blocked'
+            | 'broken_source'
+            | 'needs_repair'
+            | 'unverified' = 'unverified';
+          if (report.status === 'healthy') {
+            status =
+              report.recommendedMode && report.recommendedMode !== 'strict_sandbox'
+                ? 'healthy_with_mode'
+                : 'healthy';
+          } else if (report.status === 'embed_blocked') {
+            status = 'embed_blocked';
+          } else if (report.status === 'broken') {
+            status = 'broken_source';
+          } else if (report.status === 'warning') {
+            status = 'needs_repair';
+          } else {
+            status = 'unverified';
+          }
+
+          return {
+            serverId: String(it.serverId || ''),
+            mediaId: String(it.mediaId || ''),
+            episodeNumber: typeof it.episodeNumber === 'number' ? it.episodeNumber : undefined,
+            seasonNumber: typeof it.seasonNumber === 'number' ? it.seasonNumber : undefined,
+            serverIndex: typeof it.serverIndex === 'number' ? it.serverIndex : undefined,
+            serverName: it.serverName ? String(it.serverName) : undefined,
+            url,
+            status,
+            httpStatus: report.httpStatus || 0,
+            reasonText: report.reasonText || report.statusLabel,
+            latencyMs: report.latencyMs || 0,
+            recommendedMode: (report.recommendedMode || 'strict_sandbox') as
+              | 'strict_sandbox'
+              | 'redirect_guard'
+              | 'direct_unrestricted'
+              | 'direct_media',
+            checkedAt,
+            expiresAt,
+            diagnostics: {
+              corsLimited: Boolean(report.connectivity.corsLimited),
+              xFrameOptions: report.pageLoad.xFrameOptions,
+              csp: report.pageLoad.cspFrameAncestors,
+              sandboxRejected: Boolean(report.pageLoad.sandboxRejected),
+              directStreamUrl: report.directStreamUrl,
+              faultCode: report.faultCode,
+            },
+          };
+        })
+        .filter(Boolean);
+
+      return res.json({ ok: true, records });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'خطأ غير متوقع';
+      return res.status(500).json({ ok: false, error: msg });
+    }
+  });
+
+  // Admin On-Demand TMDB Metadata Enrichment (Credits, Age Rating, TMDB ID, IMDb ID)
+  app.post('/api/metadata/tmdb-enrich', async (req, res) => {
+    try {
+      const body = (req.body || {}) as {
+        title?: string;
+        englishTitle?: string;
+        year?: string;
+        kind?: string;
+        imdbId?: string;
+      };
+      const title = String(body.title || '').trim();
+      const englishTitle = String(body.englishTitle || '').trim();
+      if (!title && !englishTitle && !body.imdbId) {
+        return res.status(400).json({ ok: false, error: 'title or imdbId required' });
+      }
+      const hasTmdbCreds = Boolean(
+        (process.env.TMDB_API_KEY || '').trim() || (process.env.TMDB_READ_ACCESS_TOKEN || '').trim()
+      );
+      const queries = buildRatingSearchQueriesServer(title, englishTitle);
+      const tmdbMeta = await queryTmdbRatingServer({
+        queries,
+        title,
+        englishTitle,
+        year: String(body.year || ''),
+        yearExplicit: Boolean(body.year && /^\d{4}$/.test(String(body.year))),
+        kind: String(body.kind || 'movie'),
+      });
+      if (tmdbMeta) {
+        return res.json({ ok: true, available: true, hasTmdbCreds, metadata: tmdbMeta });
+      }
+      const resolved = await resolveMediaRatingServer({
+        title,
+        englishTitle,
+        year: String(body.year || ''),
+        kind: String(body.kind || 'movie'),
+        imdbId: String(body.imdbId || ''),
+      });
+      return res.json({ ok: true, available: Boolean(resolved), hasTmdbCreds, metadata: resolved });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Metadata enrich failed';
+      return res.status(500).json({ ok: false, error: msg });
+    }
+  });
+
+  // Real Analytics Persistence Store (Atomic JSON Store, Session-Deduplicated)
+  const analyticsFilePath = path.resolve(process.cwd(), '.rahaltv-analytics.json');
+  interface StoredAnalyticsBucket {
+    id: string;
+    playbackStarts: number;
+    playbackCompletes: number;
+    watchlistAdds: number;
+    mediaCounts: Record<string, number>;
+    episodeCounts: Record<string, number>;
+    genreCounts: Record<string, number>;
+    updatedAtMs: number;
+  }
+  interface StoredAnalyticsFile {
+    buckets: Record<string, StoredAnalyticsBucket>;
+    recentDedupeKeys: string[];
+  }
+
+  const readAnalyticsStore = (): StoredAnalyticsFile => {
+    try {
+      if (fs.existsSync(analyticsFilePath)) {
+        const parsed = JSON.parse(fs.readFileSync(analyticsFilePath, 'utf8')) as StoredAnalyticsFile;
+        if (parsed && typeof parsed === 'object' && parsed.buckets) {
+          return {
+            buckets: parsed.buckets || {},
+            recentDedupeKeys: Array.isArray(parsed.recentDedupeKeys) ? parsed.recentDedupeKeys : [],
+          };
+        }
+      }
+    } catch {
+      // fallback cleanly
+    }
+    return { buckets: {}, recentDedupeKeys: [] };
+  };
+
+  const writeAnalyticsStore = (store: StoredAnalyticsFile) => {
+    try {
+      const tmpPath = `${analyticsFilePath}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(store), 'utf8');
+      fs.renameSync(tmpPath, analyticsFilePath);
+    } catch {
+      // ignore disk write issues in read-only runtimes
+    }
+  };
+
+  app.post('/api/analytics/event', (req, res) => {
+    try {
+      const body = (req.body || {}) as {
+        events?: Array<Record<string, unknown>>;
+        sessionId?: string;
+        kind?: string;
+        type?: string;
+        dayKey?: string;
+        mediaId?: string;
+        genres?: string[];
+        episodeKey?: string;
+      };
+      const rawEvents = Array.isArray(body.events) ? body.events.slice(0, 25) : [body];
+      const store = readAnalyticsStore();
+      const dedupeSet = new Set(store.recentDedupeKeys);
+      let recordedCount = 0;
+      const defaultDateKey = new Date().toISOString().slice(0, 10);
+
+      for (const ev of rawEvents) {
+        const kind = String(ev.kind || ev.type || '');
+        if (!['playback_start', 'playback_complete', 'watchlist_add'].includes(kind)) continue;
+        const rawDay = String(ev.dayKey || '');
+        const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(rawDay) ? rawDay : defaultDateKey;
+        const mediaId = String(ev.mediaId || '').trim().slice(0, 120);
+        const episodeKey = String(ev.episodeKey || '').trim().slice(0, 140);
+        const sessionId = String(ev.sessionId || req.ip || 'anon').trim().slice(0, 80);
+        if (!mediaId) continue;
+
+        const dedupeKey = `${dateKey}|${sessionId}|${kind}|${mediaId}|${episodeKey}`;
+        if (dedupeSet.has(dedupeKey)) continue;
+        dedupeSet.add(dedupeKey);
+        store.recentDedupeKeys.push(dedupeKey);
+        recordedCount += 1;
+
+        if (!store.buckets[dateKey]) {
+          store.buckets[dateKey] = {
+            id: dateKey,
+            playbackStarts: 0,
+            playbackCompletes: 0,
+            watchlistAdds: 0,
+            mediaCounts: {},
+            episodeCounts: {},
+            genreCounts: {},
+            updatedAtMs: Date.now(),
+          };
+        }
+        const bucket = store.buckets[dateKey];
+        bucket.updatedAtMs = Date.now();
+        if (kind === 'playback_start') {
+          bucket.playbackStarts += 1;
+          bucket.mediaCounts[mediaId] = (bucket.mediaCounts[mediaId] || 0) + 1;
+          if (episodeKey) {
+            bucket.episodeCounts[episodeKey] = (bucket.episodeCounts[episodeKey] || 0) + 1;
+          }
+          const genres = Array.isArray(ev.genres) ? ev.genres.slice(0, 4) : [];
+          for (const g of genres) {
+            const cleanGenre = String(g || '').trim();
+            if (!cleanGenre) continue;
+            bucket.genreCounts[cleanGenre] = (bucket.genreCounts[cleanGenre] || 0) + 1;
+          }
+        } else if (kind === 'playback_complete') {
+          bucket.playbackCompletes += 1;
+        } else if (kind === 'watchlist_add') {
+          bucket.watchlistAdds += 1;
+        }
+      }
+
+      if (store.recentDedupeKeys.length > 5000) {
+        store.recentDedupeKeys = store.recentDedupeKeys.slice(-3000);
+      }
+      if (recordedCount > 0) {
+        writeAnalyticsStore(store);
+      }
+      return res.json({ ok: true, recordedCount });
+    } catch {
+      return res.status(400).json({ ok: false });
+    }
+  });
+
+  app.get('/api/analytics/summary', (req, res) => {
+    try {
+      const rangeParam = String(req.query.range || 'weekly');
+      const daysQuery = Number(req.query.days);
+      const rangeDays =
+        Number.isFinite(daysQuery) && daysQuery > 0
+          ? Math.min(90, daysQuery)
+          : rangeParam === 'daily'
+            ? 1
+            : rangeParam === 'monthly'
+              ? 30
+              : 7;
+      const store = readAnalyticsStore();
+      const cutoff = new Date(Date.now() - (rangeDays - 1) * 86400000).toISOString().slice(0, 10);
+
+      const days = Object.values(store.buckets)
+        .filter((b) => (b.id || '') >= cutoff)
+        .sort((a, b) => a.id.localeCompare(b.id));
+
+      return res.json({
+        ok: true,
+        days,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Analytics summary failed';
+      return res.status(500).json({ ok: false, error: msg });
+    }
+  });
+
   // Resolve Direct MP4/Video Stream or Detect Frame Block for Embed URLs
   app.get('/api/resolve-stream', async (req, res) => {
     try {
@@ -5046,29 +5733,35 @@ async function startServer() {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 6000);
       let response: Response;
+      let resolvedFinalUrl = parsed.toString();
       try {
-        response = await fetch(parsed.toString(), {
-          redirect: 'follow',
-          signal: controller.signal,
-          headers: {
-            'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-            Referer: parsed.origin + '/',
-            Accept: 'text/html,application/xhtml+xml,*/*',
+        const hopped = await safeProbeFetchWithRedirects(
+          parsed.toString(),
+          {
+            signal: controller.signal,
+            headers: {
+              'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+              Referer: parsed.origin + '/',
+              Accept: 'text/html,application/xhtml+xml,*/*',
+            },
           },
-        });
+          5
+        );
+        response = hopped.response;
+        resolvedFinalUrl = hopped.finalUrl;
       } finally {
         clearTimeout(timer);
       }
 
       const contentType = (response.headers.get('content-type') || '').toLowerCase();
       if (contentType.includes('video/')) {
-        return res.json({ ok: true, directUrl: response.url || parsed.toString(), kind: 'mp4', frameBlocked: false });
+        return res.json({ ok: true, directUrl: resolvedFinalUrl, kind: 'mp4', frameBlocked: false });
       }
 
       const xFrame = (response.headers.get('x-frame-options') || '').toLowerCase();
       const csp = (response.headers.get('content-security-policy') || '').toLowerCase();
-      const html = await response.text();
+      const html = await readBoundedResponseText(response, 48000);
 
       const frameBlocked =
         xFrame.includes('deny') ||
@@ -5202,27 +5895,38 @@ async function startServer() {
         };
 
         try {
-          let response = await fetch(parsed.toString(), {
-            method: isDirectMedia ? 'HEAD' : 'GET',
-            redirect: 'follow',
-            signal: controller.signal,
-            headers: {
-              ...reqHeaders,
-              ...(isDirectMedia ? {} : { Range: 'bytes=0-32768' }),
+          const hopped = await safeProbeFetchWithRedirects(
+            parsed.toString(),
+            {
+              method: isDirectMedia ? 'HEAD' : 'GET',
+              signal: controller.signal,
+              headers: {
+                ...reqHeaders,
+                ...(isDirectMedia ? {} : { Range: 'bytes=0-32768' }),
+              },
             },
-          });
+            5
+          );
+          let response = hopped.response;
+          let finalUrl = hopped.finalUrl;
+          let redirectChain = hopped.redirectChain;
 
           if (isDirectMedia && (response.status === 405 || response.status === 501)) {
-            response = await fetch(parsed.toString(), {
-              method: 'GET',
-              redirect: 'follow',
-              signal: controller.signal,
-              headers: { ...reqHeaders, Range: 'bytes=0-4095' },
-            });
+            const retryHop = await safeProbeFetchWithRedirects(
+              finalUrl,
+              {
+                method: 'GET',
+                signal: controller.signal,
+                headers: { ...reqHeaders, Range: 'bytes=0-4095' },
+              },
+              5
+            );
+            response = retryHop.response;
+            finalUrl = retryHop.finalUrl;
+            redirectChain = retryHop.redirectChain;
           }
 
           const latencyMs = Date.now() - startedAt;
-          const finalUrl = response.url || parsed.toString();
           const httpStatus = response.status;
           const contentType = (response.headers.get('content-type') || '').toLowerCase();
           const xFrame = response.headers.get('x-frame-options') || '';
@@ -5234,11 +5938,7 @@ async function startServer() {
             !isDirectMedia &&
             (contentType.includes('text/html') || contentType.includes('text/plain') || !contentType)
           ) {
-            try {
-              snippet = (await response.text()).slice(0, 32768);
-            } catch {
-              snippet = '';
-            }
+            snippet = await readBoundedResponseText(response, 32768);
           }
 
           const report = evaluateHttpProbeResult({
@@ -5254,6 +5954,7 @@ async function startServer() {
             checkedAt,
             method: 'backend',
           });
+          report.redirectChain = redirectChain;
 
           const directUrl = report.playerCheck.directStreamUrl || null;
 
@@ -5348,6 +6049,23 @@ async function startServer() {
           };
         } catch (err) {
           const elapsed = Date.now() - startedAt;
+          const errMessage = err instanceof Error ? err.message : '';
+          if (errMessage.startsWith('SSRF_REDIRECT_BLOCKED')) {
+            const report = createNetworkErrorReport({
+              url: rawUrl,
+              latencyMs: elapsed,
+              checkedAt,
+              detail: 'تم حظر إعادة توجيه غير آمنة نحو نطاق محلي أو محظور',
+            });
+            return {
+              url: rawUrl,
+              ok: false,
+              faultType: 'error',
+              httpStatus: 0,
+              reason: report.reasonText,
+              health: report,
+            };
+          }
           const isTimeout = err instanceof Error && err.name === 'AbortError';
           const report = isTimeout
             ? createTimeoutReport({ url: rawUrl, latencyMs: elapsed, checkedAt, stage: 'connectivity' })

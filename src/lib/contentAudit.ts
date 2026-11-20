@@ -53,7 +53,7 @@ export interface DuplicateGroup {
   items: MediaItem[];
   keepId: string;
   extraIds: string[];
-  matchReason: 'exact_title_year' | 'english_title_match' | 'title_cross_year';
+  matchReason: 'exact_title_year' | 'english_title_match' | 'title_cross_year' | 'tmdb_id_match';
 }
 
 export function scoreMediaCompleteness(item: MediaItem): number {
@@ -117,11 +117,23 @@ export function findDuplicateGroups(
 
   const tokenBuckets = new Map<string, number[]>();
   const englishMatchSet = new Set<number>();
+  const tmdbMatchSet = new Set<number>();
 
   media.forEach((item, idx) => {
     const yearKey = ignoreYear ? 'any' : (item.year || 'na').trim() || 'na';
     const normTitle = normalizeTitleForDuplicateCheck(item.title || '');
     const normEng = normalizeTitleForDuplicateCheck(item.englishTitle || '');
+
+    if (typeof item.tmdbId === 'number' && item.tmdbId > 0) {
+      const tmdbKey = `${item.kind}::tmdb::${item.tmdbId}`;
+      const list = tokenBuckets.get(tmdbKey) || [];
+      if (list.length > 0) {
+        tmdbMatchSet.add(idx);
+        tmdbMatchSet.add(list[0]);
+      }
+      list.push(idx);
+      tokenBuckets.set(tmdbKey, list);
+    }
 
     if (normTitle.length >= 2) {
       const tKey = `${item.kind}::${yearKey}::t::${normTitle}`;
@@ -175,6 +187,7 @@ export function findDuplicateGroups(
     const hasMixedYears =
       ignoreYear &&
       new Set(groupItems.map((it) => (it.year || '').trim()).filter(Boolean)).size > 1;
+    const usedTmdbMatch = indices.some((idx) => tmdbMatchSet.has(idx));
     const usedEnglishMatch = indices.some((idx) => englishMatchSet.has(idx));
 
     results.push({
@@ -185,11 +198,13 @@ export function findDuplicateGroups(
       items: groupItems,
       keepId: best.id,
       extraIds: groupItems.slice(1).map((it) => it.id),
-      matchReason: hasMixedYears
-        ? 'title_cross_year'
-        : usedEnglishMatch
-          ? 'english_title_match'
-          : 'exact_title_year',
+      matchReason: usedTmdbMatch
+        ? 'tmdb_id_match'
+        : hasMixedYears
+          ? 'title_cross_year'
+          : usedEnglishMatch
+            ? 'english_title_match'
+            : 'exact_title_year',
     });
   }
 

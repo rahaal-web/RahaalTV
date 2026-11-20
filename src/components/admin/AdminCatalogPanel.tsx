@@ -20,7 +20,8 @@ import {
 } from '../../lib/adminPreferences';
 import { findDuplicateGroups } from '../../lib/contentAudit';
 import { getPosterUrl } from '../../lib/mediaImages';
-import { MediaItem, MediaKind } from '../../types/media';
+import { isServerHealthExpired } from '../../lib/serverHealthQueue';
+import { MediaItem, MediaKind, ServerHealthRecord } from '../../types/media';
 import type { AdminTab } from './adminNavigation';
 import { ConfirmDialog, TablePagination } from './AdminSharedUi';
 
@@ -57,6 +58,7 @@ interface AdminCatalogPanelProps {
   tablePrefs: CatalogTablePrefs;
   onUpdateTablePrefs: (patch: Partial<CatalogTablePrefs>) => void;
   serverStatuses: Record<string, CatalogServerStatusEntry>;
+  serverHealthMap?: Record<string, ServerHealthRecord>;
   checkingCatalogLinks: boolean;
   onCheckCatalogLinks: () => void;
   onCheckItemServers: (urls: string[]) => void;
@@ -118,6 +120,7 @@ export function AdminCatalogPanel({
   tablePrefs,
   onUpdateTablePrefs,
   serverStatuses,
+  serverHealthMap,
   checkingCatalogLinks,
   onCheckCatalogLinks,
   onCheckItemServers,
@@ -618,7 +621,20 @@ export function AdminCatalogPanel({
                             const urls = (item.servers || [])
                               .map((s) => resolveWatchServerUrl(s))
                               .filter((u) => /^https?:\/\//i.test(u));
-                            const checked = urls.map((u) => serverStatuses[u]).filter(Boolean);
+                            const checked = urls
+                              .map((u) => {
+                                const live = serverStatuses[u];
+                                if (live) return { status: live.status, expired: false };
+                                const cached = serverHealthMap?.[u];
+                                if (cached) {
+                                  return {
+                                    status: cached.status,
+                                    expired: isServerHealthExpired(cached),
+                                  };
+                                }
+                                return null;
+                              })
+                              .filter((x): x is { status: string; expired: boolean } => Boolean(x));
                             if (checked.length === 0) return null;
                             const confirmedCount = checked.filter(
                               (c) => c.status === 'confirmed_playing' || c.status === 'working'
@@ -637,6 +653,7 @@ export function AdminCatalogPanel({
                             ).length;
                             const brokenCount = checked.filter((c) => c.status === 'broken').length;
                             const checkingCount = checked.filter((c) => c.status === 'checking').length;
+                            const expiredCount = checked.filter((c) => c.expired).length;
                             return (
                               <div className="flex flex-wrap items-center gap-1 text-[10px] font-extrabold">
                                 {checkingCount > 0 && (
@@ -667,6 +684,11 @@ export function AdminCatalogPanel({
                                 {brokenCount > 0 && (
                                   <span className="rounded bg-[#D92321]/20 px-1.5 py-0.5 text-[#ff8a88]">
                                     🔴 {brokenCount} لا يعمل
+                                  </span>
+                                )}
+                                {expiredCount > 0 && (
+                                  <span className="rounded bg-orange-500/15 px-1.5 py-0.5 text-orange-200">
+                                    ⏱ {expiredCount} منتهي TTL
                                   </span>
                                 )}
                               </div>

@@ -1,7 +1,7 @@
 import { Bookmark, Check, Download, Film, Globe, Languages, Play, Star, Tag } from 'lucide-react';
 import { handlePosterError } from '../lib/mediaFilters';
 import { buildPosterSrcSet, getPosterUrl } from '../lib/mediaImages';
-import { MediaItem } from '../types/media';
+import { MediaItem, WatchProgressRecord } from '../types/media';
 
 interface MovieCardProps {
   item: MediaItem;
@@ -9,6 +9,7 @@ interface MovieCardProps {
   isInWatchlist: boolean;
   onToggleWatchlist: (item: MediaItem) => void;
   variant?: 'clean' | 'classic';
+  watchProgress?: WatchProgressRecord;
 }
 
 export function MovieCardSkeleton() {
@@ -29,6 +30,7 @@ export function MovieCard({
   isInWatchlist,
   onToggleWatchlist,
   variant = 'clean',
+  watchProgress,
 }: MovieCardProps) {
   const viewerAvg =
     item.communityRating && item.communityRating.count > 0
@@ -39,6 +41,10 @@ export function MovieCard({
     item.categories?.[0] ||
     (item.kind === 'series' ? 'مسلسلات' : item.kind === 'wrestling' ? 'مصارعة حرة' : 'افلام');
   const genresText = item.genres?.length ? item.genres.slice(0, 2).join('، ') : 'دراما';
+  const progressPct =
+    watchProgress && watchProgress.progressPct > 0
+      ? Math.min(100, Math.max(2, watchProgress.progressPct))
+      : 0;
 
   if (variant === 'classic') {
     return (
@@ -82,6 +88,7 @@ export function MovieCard({
           <div className="absolute inset-x-0 bottom-0 p-2.5 sm:p-3.5 text-right">
             <p className="text-[10.5px] sm:text-[11px] font-semibold text-[#a3a3a3] truncate mb-0.5">
               {primaryCat}
+              {watchProgress?.episodeNumber ? ` • ح ${watchProgress.episodeNumber}` : ''}
             </p>
             <h3
               style={{ fontSize: 'var(--rtv-card-title-size, 13px)' }}
@@ -90,6 +97,12 @@ export function MovieCard({
               {item.title}
             </h3>
           </div>
+
+          {progressPct > 0 && (
+            <div className="absolute inset-x-0 bottom-0 h-1 bg-white/15">
+              <div className="h-full bg-[#E50914]" style={{ width: `${progressPct}%` }} />
+            </div>
+          )}
         </div>
 
         {/* Back Face */}
@@ -241,6 +254,20 @@ export function MovieCard({
         >
           {isInWatchlist ? <Check className="w-4 h-4 sm:w-3.5 sm:h-3.5" /> : <Bookmark className="w-4 h-4 sm:w-3.5 sm:h-3.5" />}
         </button>
+
+        {/* Subtle Episode Progress Chip */}
+        {progressPct > 0 && (
+          <>
+            {watchProgress?.episodeNumber && (
+              <span className="absolute bottom-2 right-2 z-10 rounded-md bg-black/75 border border-white/15 px-1.5 py-0.5 text-[10px] font-extrabold text-[#f9c400]">
+                ح {watchProgress.episodeNumber}
+              </span>
+            )}
+            <div className="absolute inset-x-0 bottom-0 z-10 h-1 bg-white/15">
+              <div className="h-full bg-[#E50914]" style={{ width: `${progressPct}%` }} />
+            </div>
+          </>
+        )}
 
         {/* Center Hover Play Button */}
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">

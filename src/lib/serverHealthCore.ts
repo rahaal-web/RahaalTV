@@ -102,6 +102,34 @@ export interface ServerHealthReport {
   checkMethod: CheckMethodKind;
   canEmbedInIframe: boolean;
   recommendedModes: PopupShieldProfileMode[];
+  redirectChain?: string[];
+  triedModes?: PopupShieldProfileMode[];
+  succeededMode?: PopupShieldProfileMode | null;
+  attemptCount?: number;
+  errorDetail?: string;
+}
+
+export function validateRedirectHopUrl(
+  rawLocation: string,
+  currentBaseUrl: string,
+  isBlockedHostnameFn: (hostname: string) => boolean
+): { ok: true; nextUrl: string } | { ok: false; reason: string } {
+  const location = String(rawLocation || '').trim();
+  if (!location) {
+    return { ok: false, reason: 'Empty redirect location' };
+  }
+  try {
+    const resolved = new URL(location, currentBaseUrl);
+    if (!['http:', 'https:'].includes(resolved.protocol)) {
+      return { ok: false, reason: `Blocked redirect protocol: ${resolved.protocol}` };
+    }
+    if (isBlockedHostnameFn(resolved.hostname)) {
+      return { ok: false, reason: `Blocked private or local redirect target: ${resolved.hostname}` };
+    }
+    return { ok: true, nextUrl: resolved.toString() };
+  } catch {
+    return { ok: false, reason: 'Malformed redirect location' };
+  }
 }
 
 export const SERVER_HEALTH_META: Record<
