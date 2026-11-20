@@ -26,7 +26,14 @@ import { SearchDrawer } from './components/SearchDrawer';
 import { OfflineIndicator } from './components/PWAControls';
 import { SingleDetailView } from './components/SingleDetailView';
 import { CATALOG_ITEMS } from './data/catalog';
-import { loadStoredHomeConfig, saveStoredHomeConfig } from './lib/homeConfig';
+import {
+  extractHomeBaseFromRecord,
+  extractSliderStyleFromRecord,
+  homeConfigHasAllSliderStyleKeys,
+  loadStoredHomeConfig,
+  normalizeHomeConfig,
+  saveStoredHomeConfig,
+} from './lib/homeConfig';
 import { FALLBACK_BACKDROP, FALLBACK_POSTER, resolveMediaAssetUrl } from './lib/mediaFilters';
 import { loadStoredPlayerTheme, saveStoredPlayerTheme } from './lib/playerTheme';
 import {
@@ -98,11 +105,13 @@ import {
   CatalogFilterState,
   CustomFontRecord,
   CustomFontSlot,
+  HomeLayoutConfig,
   MediaItem,
   PopupShieldHostRule,
   SiteSettings,
   UserProfileRecord,
   VisitorRequest,
+  WebsiteBrandingConfig,
 } from './types/media';
 
 const DEFAULT_FILTERS: CatalogFilterState = {
@@ -492,17 +501,64 @@ export default function App() {
     );
 
     const settingsPath = 'settings/general';
+    let cloudGeneralHome: Partial<HomeLayoutConfig> | null = null;
+    let cloudSplitHomeLayout: Partial<HomeLayoutConfig> | null = null;
+    let cloudSplitSliderStyle: Partial<HomeLayoutConfig> | null = null;
+    let cloudGeneralUpdatedMs = 0;
+    let cloudSplitHomeUpdatedMs = 0;
+    let cloudSplitSliderUpdatedMs = 0;
+    let cloudGeneralBranding: WebsiteBrandingConfig | null = null;
+    let cloudSplitBranding: WebsiteBrandingConfig | null = null;
+    let cloudSplitBrandingUpdatedMs = 0;
+
+    const readSnapUpdatedMs = (raw: Record<string, unknown> | undefined): number => {
+      const ts = raw?.updatedAt as { toMillis?: () => number } | undefined;
+      return ts && typeof ts.toMillis === 'function' ? ts.toMillis() : 0;
+    };
+
+    const mergeLiveHomeConfig = (prevHome?: HomeLayoutConfig): HomeLayoutConfig => {
+      const fallbackStored = prevHome || loadStoredHomeConfig();
+      const useSplitLayout =
+        cloudSplitHomeLayout !== null &&
+        (cloudGeneralHome === null || cloudSplitHomeUpdatedMs >= cloudGeneralUpdatedMs);
+      const baseSource = useSplitLayout
+        ? cloudSplitHomeLayout!
+        : cloudGeneralHome
+          ? extractHomeBaseFromRecord(cloudGeneralHome)
+          : extractHomeBaseFromRecord(fallbackStored);
+
+      const generalHasFullStyle = Boolean(
+        cloudGeneralHome && homeConfigHasAllSliderStyleKeys(cloudGeneralHome)
+      );
+      const useSplitSliderStyle =
+        cloudSplitSliderStyle !== null &&
+        (!generalHasFullStyle || cloudSplitSliderUpdatedMs >= cloudGeneralUpdatedMs);
+      const styleSource = useSplitSliderStyle
+        ? cloudSplitSliderStyle!
+        : generalHasFullStyle
+          ? extractSliderStyleFromRecord(cloudGeneralHome)
+          : extractSliderStyleFromRecord(fallbackStored);
+
+      return saveStoredHomeConfig(
+        normalizeHomeConfig({
+          ...fallbackStored,
+          ...baseSource,
+          ...styleSource,
+        })
+      );
+    };
+
     const unsubSettings = onSnapshot(
       doc(activeDb, 'settings', 'general'),
       (snap) => {
         if (snap.exists()) {
-          const data = snap.data() as Partial<SiteSettings>;
+          const data = snap.data() as Partial<SiteSettings> & Record<string, unknown>;
+          cloudGeneralUpdatedMs = readSnapUpdatedMs(data);
+          cloudGeneralHome = data.homeConfig || null;
+
           const syncedTheme = data.playerTheme
             ? saveStoredPlayerTheme(data.playerTheme)
             : loadStoredPlayerTheme();
-          const syncedHome = data.homeConfig
-            ? saveStoredHomeConfig(data.homeConfig)
-            : loadStoredHomeConfig();
           const syncedTypography = data.typography
             ? saveStoredTypographyConfig(data.typography)
             : loadStoredTypographyConfig();
@@ -510,28 +566,40 @@ export default function App() {
             ? saveStoredPopupShieldConfig(data.popupShield)
             : loadStoredPopupShieldConfig();
           const resolvedSiteName = data.siteName || DEFAULT_SETTINGS.siteName;
-          const syncedBranding = data.branding
+          cloudGeneralBranding = data.branding
+            ? normalizeWebsiteBranding(data.branding, resolvedSiteName)
+            : null;
+          const activeBrandingSource =
+            cloudSplitBranding &&
+            (!cloudGeneralBranding || cloudSplitBrandingUpdatedMs >= cloudGeneralUpdatedMs)
+              ? cloudSplitBranding
+              : cloudGeneralBranding;
+          const syncedBranding = activeBrandingSource
             ? saveStoredWebsiteBranding(
-                normalizeWebsiteBranding(data.branding, resolvedSiteName),
+                normalizeWebsiteBranding(activeBrandingSource, resolvedSiteName),
                 resolvedSiteName
               )
             : loadStoredWebsiteBranding(resolvedSiteName);
-          setSiteSettings({
-            siteName: syncedBranding.siteName || resolvedSiteName,
-            tagline: data.tagline || DEFAULT_SETTINGS.tagline,
-            announcementText: data.announcementText || '',
-            tickerEnabled: data.tickerEnabled ?? false,
-            featuredLimit: data.featuredLimit || 5,
-            maintenanceMode: Boolean(data.maintenanceMode),
-            maintenanceMessage:
-              typeof data.maintenanceMessage === 'string' && data.maintenanceMessage.trim()
-                ? data.maintenanceMessage
-                : DEFAULT_SETTINGS.maintenanceMessage,
-            playerTheme: syncedTheme,
-            homeConfig: syncedHome,
-            typography: syncedTypography,
-            popupShield: syncedShield,
-            branding: syncedBranding,
+
+          setSiteSettings((prev) => {
+            const syncedHome = mergeLiveHomeConfig(prev.homeConfig);
+            return {
+              siteName: syncedBranding.siteName || resolvedSiteName,
+              tagline: data.tagline || DEFAULT_SETTINGS.tagline,
+              announcementText: data.announcementText || '',
+              tickerEnabled: data.tickerEnabled ?? false,
+              featuredLimit: data.featuredLimit || 5,
+              maintenanceMode: Boolean(data.maintenanceMode),
+              maintenanceMessage:
+                typeof data.maintenanceMessage === 'string' && data.maintenanceMessage.trim()
+                  ? data.maintenanceMessage
+                  : DEFAULT_SETTINGS.maintenanceMessage,
+              playerTheme: syncedTheme,
+              homeConfig: syncedHome,
+              typography: syncedTypography,
+              popupShield: syncedShield,
+              branding: syncedBranding,
+            };
           });
         }
       },
@@ -541,6 +609,65 @@ export default function App() {
         } catch {
           // Fallback to default settings if settings doc cannot be fetched
         }
+      }
+    );
+
+    const unsubHomeLayout = onSnapshot(
+      doc(activeDb, 'settings', 'home_layout'),
+      (snap) => {
+        if (!snap.exists()) return;
+        const raw = snap.data() as Record<string, unknown>;
+        cloudSplitHomeUpdatedMs = readSnapUpdatedMs(raw);
+        cloudSplitHomeLayout = extractHomeBaseFromRecord(raw);
+        setSiteSettings((prev) => ({
+          ...prev,
+          homeConfig: mergeLiveHomeConfig(prev.homeConfig),
+        }));
+      },
+      () => {
+        // Ignore if split settings/home_layout rule is not yet deployed
+      }
+    );
+
+    const unsubSliderStyle = onSnapshot(
+      doc(activeDb, 'settings', 'slider_style'),
+      (snap) => {
+        if (!snap.exists()) return;
+        const raw = snap.data() as Record<string, unknown>;
+        cloudSplitSliderUpdatedMs = readSnapUpdatedMs(raw);
+        cloudSplitSliderStyle = extractSliderStyleFromRecord(raw);
+        setSiteSettings((prev) => ({
+          ...prev,
+          homeConfig: mergeLiveHomeConfig(prev.homeConfig),
+        }));
+      },
+      () => {
+        // Ignore if split settings/slider_style rule is not yet deployed
+      }
+    );
+
+    const unsubSiteBranding = onSnapshot(
+      doc(activeDb, 'settings', 'site_branding'),
+      (snap) => {
+        if (!snap.exists()) return;
+        const raw = snap.data() as Partial<WebsiteBrandingConfig> & Record<string, unknown>;
+        cloudSplitBrandingUpdatedMs = readSnapUpdatedMs(raw);
+        setSiteSettings((prev) => {
+          const fallbackName = prev.siteName || DEFAULT_SETTINGS.siteName;
+          cloudSplitBranding = normalizeWebsiteBranding(raw, fallbackName);
+          if (cloudGeneralBranding && cloudGeneralUpdatedMs > cloudSplitBrandingUpdatedMs) {
+            return prev;
+          }
+          const syncedBranding = saveStoredWebsiteBranding(cloudSplitBranding, fallbackName);
+          return {
+            ...prev,
+            siteName: syncedBranding.siteName || fallbackName,
+            branding: syncedBranding,
+          };
+        });
+      },
+      () => {
+        // Ignore if split settings/site_branding rule is not yet deployed
       }
     );
 
@@ -616,6 +743,9 @@ export default function App() {
     return () => {
       unsubMedia();
       unsubSettings();
+      unsubHomeLayout();
+      unsubSliderStyle();
+      unsubSiteBranding();
       unsubFonts();
       unsubRatings();
     };

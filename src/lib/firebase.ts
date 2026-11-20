@@ -55,6 +55,7 @@ import {
   normalizeHomeConfig,
   pickLegacyAutoplayHomeConfig,
   pickLegacyCoreHomeConfig,
+  pickSliderStyleHomeConfig,
   saveStoredHomeConfig,
 } from './homeConfig';
 import {
@@ -972,6 +973,63 @@ export interface SaveSiteSettingsResult {
   databaseId: string;
 }
 
+async function writeSplitHomeDocs(
+  activeDb: Firestore,
+  normalizedHome: ReturnType<typeof normalizeHomeConfig>,
+  uid: string
+): Promise<{ homeLayoutOk: boolean; sliderStyleOk: boolean }> {
+  let homeLayoutOk = false;
+  let sliderStyleOk = false;
+
+  try {
+    await setDoc(doc(activeDb, 'settings', 'home_layout'), {
+      ...pickLegacyAutoplayHomeConfig(normalizedHome),
+      updatedBy: uid,
+      updatedAt: serverTimestamp(),
+    });
+    homeLayoutOk = true;
+  } catch (err) {
+    if (!isPermissionDeniedError(err)) {
+      throw err;
+    }
+  }
+
+  try {
+    await setDoc(doc(activeDb, 'settings', 'slider_style'), {
+      ...pickSliderStyleHomeConfig(normalizedHome),
+      updatedBy: uid,
+      updatedAt: serverTimestamp(),
+    });
+    sliderStyleOk = true;
+  } catch (err) {
+    if (!isPermissionDeniedError(err)) {
+      throw err;
+    }
+  }
+
+  return { homeLayoutOk, sliderStyleOk };
+}
+
+async function writeSplitBrandingDoc(
+  activeDb: Firestore,
+  firestoreBranding: ReturnType<typeof sanitizeBrandingForFirestore>,
+  uid: string
+): Promise<boolean> {
+  try {
+    await setDoc(doc(activeDb, 'settings', 'site_branding'), {
+      ...firestoreBranding,
+      updatedBy: uid,
+      updatedAt: serverTimestamp(),
+    });
+    return true;
+  } catch (err) {
+    if (isPermissionDeniedError(err)) {
+      return false;
+    }
+    throw err;
+  }
+}
+
 export async function saveSiteSettingsToFirestore(
   settings: SiteSettings,
   uid: string
@@ -1037,20 +1095,23 @@ export async function saveSiteSettingsToFirestore(
       handleFirestoreError(error, OperationType.WRITE, path);
     }
 
-    // Tier 2: try without branding
+    // Tier 2: try without branding on settings/general (and mirror branding to settings/site_branding if enabled)
     try {
       await setDoc(doc(activeDb, 'settings', 'general'), extendedPayloadWithoutBranding);
-      reportClientError({
-        source: 'firestore.settings.partial_sync',
-        level: 'warn',
-        message: `Settings write rejected branding on ${projectId}/${databaseId} (permission-denied); homeConfig/typography/popupShield synced.`,
-      });
+      const splitBrandingOk = await writeSplitBrandingDoc(activeDb, firestoreBranding, uid);
+      if (!splitBrandingOk) {
+        reportClientError({
+          source: 'firestore.settings.partial_sync',
+          level: 'warn',
+          message: `Settings write rejected branding on ${projectId}/${databaseId} (permission-denied); homeConfig/typography/popupShield synced.`,
+        });
+      }
       return {
         syncedHomeToCloud: true,
         syncedTypographyToCloud: true,
         syncedPopupShieldToCloud: true,
-        syncedBrandingToCloud: false,
-        rejectedSections: ['branding'],
+        syncedBrandingToCloud: splitBrandingOk,
+        rejectedSections: splitBrandingOk ? [] : ['branding'],
         projectId,
         databaseId,
       };
@@ -1060,14 +1121,23 @@ export async function saveSiteSettingsToFirestore(
       }
     }
 
-    // Tier 3: probe each optional section independently so one rejected block (e.g. homeConfig)
-    // does not prevent other allowed sections (e.g. typography or popupShield) from syncing.
+    // Tier 3: First sync Home Layout + Slider Style via dedicated lightweight documents
+    // so Firestore's map-complexity ceiling on settings/general never drops the 19 slider styling keys.
+    let splitHomeSynced = false;
+    try {
+      const splitRes = await writeSplitHomeDocs(activeDb, normalizedHome, uid);
+      splitHomeSynced = splitRes.homeLayoutOk && splitRes.sliderStyleOk;
+    } catch (splitErr) {
+      handleFirestoreError(splitErr, OperationType.WRITE, 'settings/home_layout');
+    }
+
+    // Also persist each optional section on settings/general independently/cumulatively.
     const docRef = doc(activeDb, 'settings', 'general');
     const acceptedPayload: Record<string, unknown> = { ...corePayload };
     const statusMap: Record<SettingsOptionalSection, boolean> = {
       typography: false,
       popupShield: false,
-      homeConfig: false,
+      homeConfig: splitHomeSynced,
       branding: false,
     };
     const optionalEntries: Array<{
@@ -1076,8 +1146,8 @@ export async function saveSiteSettingsToFirestore(
     }> = [
       { key: 'typography', value: normalizedTypography },
       { key: 'popupShield', value: normalizedShield },
-      { key: 'homeConfig', value: normalizedHome },
       { key: 'branding', value: firestoreBranding },
+      ...(!splitHomeSynced ? [{ key: 'homeConfig' as const, value: normalizedHome }] : []),
     ];
 
     let anyOptionalWritten = false;
@@ -1095,6 +1165,14 @@ export async function saveSiteSettingsToFirestore(
         if (!isPermissionDeniedError(secErr)) {
           handleFirestoreError(secErr, OperationType.WRITE, path);
         }
+      }
+    }
+
+    if (!statusMap.branding) {
+      try {
+        statusMap.branding = await writeSplitBrandingDoc(activeDb, firestoreBranding, uid);
+      } catch (brandErr) {
+        handleFirestoreError(brandErr, OperationType.WRITE, 'settings/site_branding');
       }
     }
 
@@ -1118,11 +1196,13 @@ export async function saveSiteSettingsToFirestore(
       ['homeConfig', 'typography', 'popupShield', 'branding'] as SettingsOptionalSection[]
     ).filter((k) => !statusMap[k]);
 
-    reportClientError({
-      source: 'firestore.settings.partial_sync',
-      level: 'warn',
-      message: `Firestore rules on ${projectId}/${databaseId} rejected sections: [${rejectedSections.join(', ')}].`,
-    });
+    if (rejectedSections.length > 0) {
+      reportClientError({
+        source: 'firestore.settings.partial_sync',
+        level: 'warn',
+        message: `Firestore rules on ${projectId}/${databaseId} rejected sections: [${rejectedSections.join(', ')}].`,
+      });
+    }
 
     return {
       syncedHomeToCloud: statusMap.homeConfig,
@@ -1136,7 +1216,7 @@ export async function saveSiteSettingsToFirestore(
   }
 }
 
-export type HomeConfigRulesMode = 'full' | 'autoplay_only' | 'core_only' | 'rejected';
+export type HomeConfigRulesMode = 'full' | 'split_sync' | 'autoplay_only' | 'core_only' | 'rejected';
 
 export type RulesDiagnosticReport =
   | {
@@ -1147,6 +1227,11 @@ export type RulesDiagnosticReport =
       payloadIssueDetected: boolean;
       rejectedHomeKeys: string[];
       homeComplexityLimitDetected: boolean;
+      splitDocsReady: {
+        homeLayout: boolean;
+        sliderStyle: boolean;
+        siteBranding: boolean;
+      };
       userEmail: string | null;
       emailVerified: boolean;
     }
@@ -1201,8 +1286,7 @@ export async function diagnoseFirestoreSettingsRules(
     updatedAt: serverTimestamp(),
   };
 
-  // Probe non-destructively on settings/rules_diagnostic (same security rules as settings/general,
-  // without altering or stripping any live visitor fields in settings/general).
+  // Probe non-destructively on settings/rules_diagnostic first.
   const probeRef = doc(activeDb, 'settings', 'rules_diagnostic');
   const tryProbe = async (payload: Record<string, unknown>): Promise<boolean> => {
     try {
@@ -1229,98 +1313,117 @@ export async function diagnoseFirestoreSettingsRules(
       popupShield: normalizedShield,
     });
 
-    const syncedBrandingToCloud = await tryProbe({
+    const brandingStandaloneOk = await tryProbe({
       ...corePayload,
       branding: firestoreBranding,
     });
 
-    let brandingDefaultOk = syncedBrandingToCloud;
-    if (!syncedBrandingToCloud) {
+    let brandingDefaultOk = brandingStandaloneOk;
+    if (!brandingStandaloneOk) {
       brandingDefaultOk = await tryProbe({
         ...corePayload,
         branding: sanitizeBrandingForFirestore(DEFAULT_WEBSITE_BRANDING, 'RahaL TV'),
       });
     }
 
-    const syncedHomeToCloud = await tryProbe({
+    const combinedGeneralWithBrandingOk =
+      syncedTypographyToCloud && syncedPopupShieldToCloud && brandingStandaloneOk
+        ? await tryProbe({
+            ...corePayload,
+            typography: normalizedTypography,
+            popupShield: normalizedShield,
+            branding: firestoreBranding,
+          })
+        : brandingStandaloneOk;
+
+    const splitBrandingDocOk = await writeSplitBrandingDoc(activeDb, firestoreBranding, uid);
+    const syncedBrandingToCloud = combinedGeneralWithBrandingOk || splitBrandingDocOk;
+
+    const fullHomeOnGeneralOk = await tryProbe({
       ...corePayload,
       homeConfig: normalizedHome,
     });
 
-    let homeConfigMode: HomeConfigRulesMode = syncedHomeToCloud ? 'full' : 'rejected';
-    let homeDefaultFullOk = syncedHomeToCloud;
+    let syncedHomeToCloud = fullHomeOnGeneralOk;
+    let homeConfigMode: HomeConfigRulesMode = fullHomeOnGeneralOk ? 'full' : 'rejected';
+    let homeDefaultFullOk = fullHomeOnGeneralOk;
     const rejectedHomeKeys: string[] = [];
     let homeComplexityLimitDetected = false;
+    let splitHomeResult = { homeLayoutOk: false, sliderStyleOk: false };
 
-    if (!syncedHomeToCloud) {
-      const defaultHome = normalizeHomeConfig(DEFAULT_HOME_CONFIG);
-      homeDefaultFullOk = await tryProbe({
-        ...corePayload,
-        homeConfig: defaultHome,
-      });
-
-      const autoplayBase = pickLegacyAutoplayHomeConfig(defaultHome);
-      const autoplayOk = await tryProbe({
-        ...corePayload,
-        homeConfig: autoplayBase,
-      });
-      if (autoplayOk) {
-        homeConfigMode = 'autoplay_only';
-        // Probe the 19 slider styling keys in 2 halves first; if both halves pass,
-        // Firestore hit a combined key/AST limit; otherwise isolate exact rejected key(s).
-        const halfSplit = Math.ceil(HOME_CONFIG_SLIDER_STYLE_KEYS.length / 2);
-        const firstHalfKeys = HOME_CONFIG_SLIDER_STYLE_KEYS.slice(0, halfSplit);
-        const secondHalfKeys = HOME_CONFIG_SLIDER_STYLE_KEYS.slice(halfSplit);
-
-        const buildWithKeys = (keys: readonly (typeof HOME_CONFIG_SLIDER_STYLE_KEYS)[number][]) => {
-          const obj: Record<string, unknown> = { ...autoplayBase };
-          for (const k of keys) {
-            obj[k] = defaultHome[k];
-          }
-          return obj;
-        };
-
-        const halfAOk = await tryProbe({
-          ...corePayload,
-          homeConfig: buildWithKeys(firstHalfKeys),
-        });
-        const halfBOk = await tryProbe({
-          ...corePayload,
-          homeConfig: buildWithKeys(secondHalfKeys),
-        });
-
-        if (halfAOk && halfBOk) {
-          homeComplexityLimitDetected = true;
-        } else {
-          if (!halfAOk) {
-            for (const key of firstHalfKeys) {
-              const ok = await tryProbe({
-                ...corePayload,
-                homeConfig: buildWithKeys([key]),
-              });
-              if (!ok) rejectedHomeKeys.push(key);
-            }
-          }
-          if (!halfBOk) {
-            for (const key of secondHalfKeys) {
-              const ok = await tryProbe({
-                ...corePayload,
-                homeConfig: buildWithKeys([key]),
-              });
-              if (!ok) rejectedHomeKeys.push(key);
-            }
-          }
-          if (rejectedHomeKeys.length === 0) {
-            homeComplexityLimitDetected = true;
-          }
-        }
+    if (!fullHomeOnGeneralOk) {
+      splitHomeResult = await writeSplitHomeDocs(activeDb, normalizedHome, uid);
+      if (splitHomeResult.homeLayoutOk && splitHomeResult.sliderStyleOk) {
+        syncedHomeToCloud = true;
+        homeConfigMode = 'split_sync';
       } else {
-        const coreOnlyOk = await tryProbe({
+        const defaultHome = normalizeHomeConfig(DEFAULT_HOME_CONFIG);
+        homeDefaultFullOk = await tryProbe({
           ...corePayload,
-          homeConfig: pickLegacyCoreHomeConfig(defaultHome),
+          homeConfig: defaultHome,
         });
-        if (coreOnlyOk) {
-          homeConfigMode = 'core_only';
+
+        const autoplayBase = pickLegacyAutoplayHomeConfig(defaultHome);
+        const autoplayOk = await tryProbe({
+          ...corePayload,
+          homeConfig: autoplayBase,
+        });
+        if (autoplayOk) {
+          homeConfigMode = 'autoplay_only';
+          const halfSplit = Math.ceil(HOME_CONFIG_SLIDER_STYLE_KEYS.length / 2);
+          const firstHalfKeys = HOME_CONFIG_SLIDER_STYLE_KEYS.slice(0, halfSplit);
+          const secondHalfKeys = HOME_CONFIG_SLIDER_STYLE_KEYS.slice(halfSplit);
+
+          const buildWithKeys = (keys: readonly (typeof HOME_CONFIG_SLIDER_STYLE_KEYS)[number][]) => {
+            const obj: Record<string, unknown> = { ...autoplayBase };
+            for (const k of keys) {
+              obj[k] = defaultHome[k];
+            }
+            return obj;
+          };
+
+          const halfAOk = await tryProbe({
+            ...corePayload,
+            homeConfig: buildWithKeys(firstHalfKeys),
+          });
+          const halfBOk = await tryProbe({
+            ...corePayload,
+            homeConfig: buildWithKeys(secondHalfKeys),
+          });
+
+          if (halfAOk && halfBOk) {
+            homeComplexityLimitDetected = true;
+          } else {
+            if (!halfAOk) {
+              for (const key of firstHalfKeys) {
+                const ok = await tryProbe({
+                  ...corePayload,
+                  homeConfig: buildWithKeys([key]),
+                });
+                if (!ok) rejectedHomeKeys.push(key);
+              }
+            }
+            if (!halfBOk) {
+              for (const key of secondHalfKeys) {
+                const ok = await tryProbe({
+                  ...corePayload,
+                  homeConfig: buildWithKeys([key]),
+                });
+                if (!ok) rejectedHomeKeys.push(key);
+              }
+            }
+            if (rejectedHomeKeys.length === 0) {
+              homeComplexityLimitDetected = true;
+            }
+          }
+        } else {
+          const coreOnlyOk = await tryProbe({
+            ...corePayload,
+            homeConfig: pickLegacyCoreHomeConfig(defaultHome),
+          });
+          if (coreOnlyOk) {
+            homeConfigMode = 'core_only';
+          }
         }
       }
     }
@@ -1347,7 +1450,7 @@ export async function diagnoseFirestoreSettingsRules(
         homeConfigMode === 'core_only');
 
     if (rejectedSections.length === 0) {
-      // Also ensure settings/general is synced immediately when all rules pass
+      // Immediately synchronize live settings across settings/general and split docs
       await saveSiteSettingsToFirestore(settings, uid);
     }
 
@@ -1367,6 +1470,11 @@ export async function diagnoseFirestoreSettingsRules(
       payloadIssueDetected,
       rejectedHomeKeys,
       homeComplexityLimitDetected,
+      splitDocsReady: {
+        homeLayout: splitHomeResult.homeLayoutOk,
+        sliderStyle: splitHomeResult.sliderStyleOk,
+        siteBranding: splitBrandingDocOk,
+      },
       userEmail,
       emailVerified,
     };

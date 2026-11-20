@@ -280,6 +280,54 @@ service cloud.firestore {
         && isValidHomeSliderStyleFields(cfg);
     }
 
+    function isValidHomeLayoutDoc(data) {
+      return data.keys().hasAll([
+        'showHero', 'heroMode', 'heroMediaId', 'heroBadgeText', 'heroHeadline',
+        'heroDescription', 'heroPrimaryCta', 'heroShowHighlights',
+        'showQuickFilters', 'showCategoryBar', 'showFullLibrary',
+        'showRequestBanner', 'cardsPerRow', 'cardStyle', 'sections',
+        'updatedBy', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'showHero', 'heroMode', 'heroMediaId', 'heroBadgeText', 'heroHeadline',
+        'heroDescription', 'heroPrimaryCta', 'heroShowHighlights',
+        'heroAutoPlay', 'heroSlideIntervalSec', 'heroShowProgressBar',
+        'heroShowThumbnails', 'heroShowArrows', 'heroPauseOnHover',
+        'heroMaxSlides', 'heroSlideIds',
+        'showQuickFilters', 'showCategoryBar', 'showFullLibrary',
+        'showRequestBanner', 'cardsPerRow', 'cardStyle', 'sections',
+        'updatedBy', 'updatedAt'
+      ])
+      && isValidHomeBaseFields(data)
+      && isValidHomeAutoplayFields(data)
+      && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
+      && data.updatedAt is timestamp;
+    }
+
+    function isValidSliderStyleDoc(data) {
+      return data.keys().hasAll([
+        'heroShowDescription', 'heroTitleSizePx', 'heroDescriptionSizePx',
+        'heroDescriptionLines', 'heroTextAlign', 'heroInfoPosition',
+        'heroTextMaxWidthPx', 'heroImageFit', 'heroBackdropBlurPx', 'heroBackdropDimPct',
+        'heroShowBadge', 'heroShowRating',
+        'heroShowYear', 'heroShowDuration', 'heroShowGenres',
+        'heroShowQuality', 'heroShowWatchBtn', 'heroShowDetailsBtn',
+        'heroShowWatchlistBtn', 'updatedBy', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'heroShowDescription', 'heroTitleSizePx', 'heroDescriptionSizePx',
+        'heroDescriptionLines', 'heroTextAlign', 'heroInfoPosition',
+        'heroTextMaxWidthPx', 'heroImageFit', 'heroBackdropBlurPx', 'heroBackdropDimPct',
+        'heroShowBadge', 'heroShowRating',
+        'heroShowYear', 'heroShowDuration', 'heroShowGenres',
+        'heroShowQuality', 'heroShowWatchBtn', 'heroShowDetailsBtn',
+        'heroShowWatchlistBtn', 'updatedBy', 'updatedAt'
+      ])
+      && isValidHomeSliderStyleFields(data)
+      && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
+      && data.updatedAt is timestamp;
+    }
+
     function isValidTypographyConfig(typo) {
       return typo is map
         && typo.keys().hasAll([
@@ -335,21 +383,8 @@ service cloud.firestore {
         && shield.hostRules is map && shield.hostRules.size() <= 100;
     }
 
-    function isValidWebsiteBranding(b) {
-      return b is map
-        && b.keys().hasAll([
-          'logoMode', 'logoUrl', 'logoWidthPx', 'logoHeightPx', 'logoPlacement',
-          'headerAlign', 'logoTextGapPx', 'siteName', 'siteNameColor', 'siteNameFont',
-          'siteNameSizePx', 'siteNameWeight', 'siteNameLetterSpacingPx',
-          'faviconMode', 'faviconUrl'
-        ])
-        && b.keys().hasOnly([
-          'logoMode', 'logoUrl', 'logoWidthPx', 'logoHeightPx', 'logoPlacement',
-          'headerAlign', 'logoTextGapPx', 'siteName', 'siteNameColor', 'siteNameFont',
-          'siteNameSizePx', 'siteNameWeight', 'siteNameLetterSpacingPx',
-          'faviconMode', 'faviconUrl', 'faviconMimeType'
-        ])
-        && b.logoMode in ['image_and_text', 'image_only', 'text_only', 'hidden']
+    function isValidWebsiteBrandingFields(b) {
+      return b.logoMode in ['image_and_text', 'image_only', 'text_only', 'hidden']
         && b.logoUrl is string && b.logoUrl.size() <= 600
         && (b.logoWidthPx is int || b.logoWidthPx is float) && b.logoWidthPx >= 20 && b.logoWidthPx <= 260
         && (b.logoHeightPx is int || b.logoHeightPx is float) && b.logoHeightPx >= 20 && b.logoHeightPx <= 120
@@ -365,6 +400,41 @@ service cloud.firestore {
         && b.faviconMode in ['default', 'custom', 'none']
         && b.faviconUrl is string && b.faviconUrl.size() <= 600
         && (!('faviconMimeType' in b) || (b.faviconMimeType is string && b.faviconMimeType.size() <= 80));
+    }
+
+    function isValidWebsiteBranding(b) {
+      return b is map
+        && b.keys().hasAll([
+          'logoMode', 'logoUrl', 'logoWidthPx', 'logoHeightPx', 'logoPlacement',
+          'headerAlign', 'logoTextGapPx', 'siteName', 'siteNameColor', 'siteNameFont',
+          'siteNameSizePx', 'siteNameWeight', 'siteNameLetterSpacingPx',
+          'faviconMode', 'faviconUrl'
+        ])
+        && b.keys().hasOnly([
+          'logoMode', 'logoUrl', 'logoWidthPx', 'logoHeightPx', 'logoPlacement',
+          'headerAlign', 'logoTextGapPx', 'siteName', 'siteNameColor', 'siteNameFont',
+          'siteNameSizePx', 'siteNameWeight', 'siteNameLetterSpacingPx',
+          'faviconMode', 'faviconUrl', 'faviconMimeType'
+        ])
+        && isValidWebsiteBrandingFields(b);
+    }
+
+    function isValidWebsiteBrandingDoc(data) {
+      return data.keys().hasAll([
+        'logoMode', 'logoUrl', 'logoWidthPx', 'logoHeightPx', 'logoPlacement',
+        'headerAlign', 'logoTextGapPx', 'siteName', 'siteNameColor', 'siteNameFont',
+        'siteNameSizePx', 'siteNameWeight', 'siteNameLetterSpacingPx',
+        'faviconMode', 'faviconUrl', 'updatedBy', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'logoMode', 'logoUrl', 'logoWidthPx', 'logoHeightPx', 'logoPlacement',
+        'headerAlign', 'logoTextGapPx', 'siteName', 'siteNameColor', 'siteNameFont',
+        'siteNameSizePx', 'siteNameWeight', 'siteNameLetterSpacingPx',
+        'faviconMode', 'faviconUrl', 'faviconMimeType', 'updatedBy', 'updatedAt'
+      ])
+      && isValidWebsiteBrandingFields(data)
+      && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
+      && data.updatedAt is timestamp;
     }
 
     function isValidSiteSettings(data) {
@@ -731,11 +801,42 @@ service cloud.firestore {
       allow delete: if isOwnerAdmin() && isValidId(adminUid);
     }
 
+    match /settings/home_layout {
+      allow get: if true;
+      allow list: if isOwnerAdmin();
+      allow create, update: if isOwnerAdmin()
+        && isValidHomeLayoutDoc(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /settings/slider_style {
+      allow get: if true;
+      allow list: if isOwnerAdmin();
+      allow create, update: if isOwnerAdmin()
+        && isValidSliderStyleDoc(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /settings/site_branding {
+      allow get: if true;
+      allow list: if isOwnerAdmin();
+      allow create, update: if isOwnerAdmin()
+        && isValidWebsiteBrandingDoc(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
     match /settings/{settingId} {
       allow get: if isValidId(settingId);
       allow list: if isOwnerAdmin();
       allow create, update: if isOwnerAdmin()
         && isValidId(settingId)
+        && !(settingId in ['home_layout', 'slider_style', 'site_branding'])
         && isValidSiteSettings(incoming())
         && incoming().updatedBy == request.auth.uid
         && incoming().updatedAt == request.time;

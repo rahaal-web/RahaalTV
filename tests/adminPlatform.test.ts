@@ -19,12 +19,16 @@ import {
 } from '../src/lib/websiteBranding';
 import {
   DEFAULT_HOME_CONFIG,
+  extractHomeBaseFromRecord,
+  extractSliderStyleFromRecord,
   HOME_CONFIG_AUTOPLAY_KEYS,
   HOME_CONFIG_CORE_KEYS,
   HOME_CONFIG_SLIDER_STYLE_KEYS,
+  homeConfigHasAllSliderStyleKeys,
   normalizeHomeConfig,
   pickLegacyAutoplayHomeConfig,
   pickLegacyCoreHomeConfig,
+  pickSliderStyleHomeConfig,
 } from '../src/lib/homeConfig';
 import { DEFAULT_TYPOGRAPHY_CONFIG, normalizeTypographyConfig } from '../src/lib/typographyConfig';
 import { DEFAULT_POPUP_SHIELD_CONFIG, normalizePopupShieldConfig } from '../src/lib/popupShield';
@@ -435,6 +439,21 @@ describe('Firestore Rules Schema Parity for SiteSettings', () => {
       'isValidWebsiteBranding',
       sanitizeBrandingForFirestore(DEFAULT_WEBSITE_BRANDING, 'RahaL TV') as unknown as Record<string, unknown>
     );
+    verifyParity('isValidHomeLayoutDoc', {
+      ...pickLegacyAutoplayHomeConfig(DEFAULT_HOME_CONFIG),
+      updatedBy: 'uid-admin',
+      updatedAt: 'ts',
+    });
+    verifyParity('isValidSliderStyleDoc', {
+      ...pickSliderStyleHomeConfig(DEFAULT_HOME_CONFIG),
+      updatedBy: 'uid-admin',
+      updatedAt: 'ts',
+    });
+    verifyParity('isValidWebsiteBrandingDoc', {
+      ...(sanitizeBrandingForFirestore(DEFAULT_WEBSITE_BRANDING, 'RahaL TV') as unknown as Record<string, unknown>),
+      updatedBy: 'uid-admin',
+      updatedAt: 'ts',
+    });
   });
 
   it('coerces non-boolean values strictly to booleans in homeConfig and playerTheme', () => {
@@ -453,18 +472,38 @@ describe('Firestore Rules Schema Parity for SiteSettings', () => {
     assert.strictEqual(theme.showFooterBar, false);
   });
 
-  it('builds exact 15-key core, 23-key autoplay, and 19-key slider-style homeConfig subsets matching isValidHomeConfig', () => {
+  it('builds exact 15-key core, 23-key autoplay, and 19-key slider-style homeConfig subsets and round-trips split docs', () => {
     const coreSubset = pickLegacyCoreHomeConfig(DEFAULT_HOME_CONFIG);
     const autoplaySubset = pickLegacyAutoplayHomeConfig(DEFAULT_HOME_CONFIG);
+    const customConfig = normalizeHomeConfig({
+      ...DEFAULT_HOME_CONFIG,
+      cardsPerRow: 6,
+      heroAutoPlay: false,
+      heroImageFit: 'contain_blur',
+      heroBackdropBlurPx: 32,
+      heroTitleSizePx: 36,
+      heroShowWatchlistBtn: false,
+    });
+    const layoutDoc = pickLegacyAutoplayHomeConfig(customConfig);
+    const sliderDoc = pickSliderStyleHomeConfig(customConfig);
 
     assert.equal(HOME_CONFIG_CORE_KEYS.length, 15);
     assert.equal(HOME_CONFIG_AUTOPLAY_KEYS.length, 8);
     assert.equal(HOME_CONFIG_SLIDER_STYLE_KEYS.length, 19);
     assert.equal(Object.keys(coreSubset).length, 15);
     assert.equal(Object.keys(autoplaySubset).length, 23);
+    assert.equal(Object.keys(sliderDoc).length, 19);
     assert.equal('heroAutoPlay' in coreSubset, false);
     assert.equal('heroAutoPlay' in autoplaySubset, true);
     assert.equal('heroImageFit' in autoplaySubset, false);
+    assert.equal(homeConfigHasAllSliderStyleKeys(autoplaySubset), false);
+    assert.equal(homeConfigHasAllSliderStyleKeys(sliderDoc), true);
+
+    const merged = normalizeHomeConfig({
+      ...extractHomeBaseFromRecord(layoutDoc),
+      ...extractSliderStyleFromRecord(sliderDoc),
+    });
+    assert.deepEqual(merged, customConfig);
 
     const rulesText = fs.readFileSync(path.resolve(process.cwd(), 'firestore.rules'), 'utf8');
     const idx = rulesText.indexOf('function isValidHomeConfig(');

@@ -298,6 +298,112 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["kind", "config", "updatedBy", "updatedAt"]
+    },
+    "HomeLayoutSettings": {
+      "title": "HomeLayoutSettings",
+      "description": "Dedicated settings document storing core homepage layout and hero autoplay fields.",
+      "type": "object",
+      "properties": {
+        "showHero": { "type": "boolean" },
+        "heroMode": { "type": "string", "enum": ["auto", "manual", "brand"] },
+        "heroMediaId": { "type": "string", "maxLength": 128 },
+        "heroBadgeText": { "type": "string", "maxLength": 50 },
+        "heroHeadline": { "type": "string", "maxLength": 160 },
+        "heroDescription": { "type": "string", "maxLength": 320 },
+        "heroPrimaryCta": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "heroShowHighlights": { "type": "boolean" },
+        "heroAutoPlay": { "type": "boolean" },
+        "heroSlideIntervalSec": { "type": "number" },
+        "heroShowProgressBar": { "type": "boolean" },
+        "heroShowThumbnails": { "type": "boolean" },
+        "heroShowArrows": { "type": "boolean" },
+        "heroPauseOnHover": { "type": "boolean" },
+        "heroMaxSlides": { "type": "number" },
+        "heroSlideIds": { "type": "array" },
+        "showQuickFilters": { "type": "boolean" },
+        "showCategoryBar": { "type": "boolean" },
+        "showFullLibrary": { "type": "boolean" },
+        "showRequestBanner": { "type": "boolean" },
+        "cardsPerRow": { "type": "number" },
+        "cardStyle": { "type": "string", "enum": ["clean", "classic"] },
+        "sections": { "type": "array" },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "showHero", "heroMode", "heroMediaId", "heroBadgeText", "heroHeadline",
+        "heroDescription", "heroPrimaryCta", "heroShowHighlights",
+        "showQuickFilters", "showCategoryBar", "showFullLibrary",
+        "showRequestBanner", "cardsPerRow", "cardStyle", "sections",
+        "updatedBy", "updatedAt"
+      ]
+    },
+    "SliderStyleSettings": {
+      "title": "SliderStyleSettings",
+      "description": "Dedicated settings document storing hero slider typography, alignment, image fit, and element visibility options.",
+      "type": "object",
+      "properties": {
+        "heroShowDescription": { "type": "boolean" },
+        "heroTitleSizePx": { "type": "number" },
+        "heroDescriptionSizePx": { "type": "number" },
+        "heroDescriptionLines": { "type": "number" },
+        "heroTextAlign": { "type": "string", "enum": ["right", "center", "left"] },
+        "heroInfoPosition": { "type": "string", "enum": ["bottom-right", "bottom-center", "bottom-left", "middle-right", "middle-center", "middle-left"] },
+        "heroTextMaxWidthPx": { "type": "number" },
+        "heroImageFit": { "type": "string", "enum": ["contain", "cover", "contain_blur"] },
+        "heroBackdropBlurPx": { "type": "number" },
+        "heroBackdropDimPct": { "type": "number" },
+        "heroShowBadge": { "type": "boolean" },
+        "heroShowRating": { "type": "boolean" },
+        "heroShowYear": { "type": "boolean" },
+        "heroShowDuration": { "type": "boolean" },
+        "heroShowGenres": { "type": "boolean" },
+        "heroShowQuality": { "type": "boolean" },
+        "heroShowWatchBtn": { "type": "boolean" },
+        "heroShowDetailsBtn": { "type": "boolean" },
+        "heroShowWatchlistBtn": { "type": "boolean" },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "heroShowDescription", "heroTitleSizePx", "heroDescriptionSizePx",
+        "heroDescriptionLines", "heroTextAlign", "heroInfoPosition",
+        "heroTextMaxWidthPx", "heroImageFit", "heroBackdropBlurPx", "heroBackdropDimPct",
+        "heroShowBadge", "heroShowRating", "heroShowYear", "heroShowDuration",
+        "heroShowGenres", "heroShowQuality", "heroShowWatchBtn", "heroShowDetailsBtn",
+        "heroShowWatchlistBtn", "updatedBy", "updatedAt"
+      ]
+    },
+    "SiteBrandingSettings": {
+      "title": "SiteBrandingSettings",
+      "description": "Dedicated settings document storing website branding, logo, title typography, and favicon fields.",
+      "type": "object",
+      "properties": {
+        "logoMode": { "type": "string", "enum": ["image_and_text", "image_only", "text_only", "hidden"] },
+        "logoUrl": { "type": "string", "maxLength": 600 },
+        "logoWidthPx": { "type": "number" },
+        "logoHeightPx": { "type": "number" },
+        "logoPlacement": { "type": "string", "enum": ["before_text", "after_text", "above_text"] },
+        "headerAlign": { "type": "string", "enum": ["start", "center"] },
+        "logoTextGapPx": { "type": "number" },
+        "siteName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "siteNameColor": { "type": "string" },
+        "siteNameFont": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "siteNameSizePx": { "type": "number" },
+        "siteNameWeight": { "type": "number" },
+        "siteNameLetterSpacingPx": { "type": "number" },
+        "faviconMode": { "type": "string", "enum": ["default", "custom", "none"] },
+        "faviconUrl": { "type": "string", "maxLength": 600 },
+        "faviconMimeType": { "type": "string", "maxLength": 80 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "logoMode", "logoUrl", "logoWidthPx", "logoHeightPx", "logoPlacement",
+        "headerAlign", "logoTextGapPx", "siteName", "siteNameColor", "siteNameFont",
+        "siteNameSizePx", "siteNameWeight", "siteNameLetterSpacingPx",
+        "faviconMode", "faviconUrl", "updatedBy", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -320,6 +426,18 @@
     "/admins/{adminUid}": {
       "schema": { "$ref": "#/entities/AdminRole" },
       "description": "Trusted administrator registry for dashboard RBAC."
+    },
+    "/settings/home_layout": {
+      "schema": { "$ref": "#/entities/HomeLayoutSettings" },
+      "description": "Dedicated split document storing core homepage layout and hero autoplay settings."
+    },
+    "/settings/slider_style": {
+      "schema": { "$ref": "#/entities/SliderStyleSettings" },
+      "description": "Dedicated split document storing hero slider visual styling and element visibility."
+    },
+    "/settings/site_branding": {
+      "schema": { "$ref": "#/entities/SiteBrandingSettings" },
+      "description": "Dedicated split document storing website branding and favicon settings."
     },
     "/settings/{settingId}": {
       "schema": { "$ref": "#/entities/SiteSettings" },

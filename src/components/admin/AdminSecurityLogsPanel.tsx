@@ -221,6 +221,12 @@ export function AdminSecurityLogsPanel({
                     >
                       <div className="space-y-0.5">
                         <span className="font-bold block">تخطيط الرئيسية والسلايدر</span>
+                        {diagnosticReport.result.syncedHomeToCloud &&
+                          diagnosticReport.homeConfigMode === 'split_sync' && (
+                            <span className="text-[10px] text-emerald-200/90 block">
+                              مزامنة مزدوجة مستقرة (23 + 19 حقلاً منفصلاً)
+                            </span>
+                          )}
                         {!diagnosticReport.result.syncedHomeToCloud &&
                           (diagnosticReport.homeConfigMode === 'autoplay_only' ||
                             diagnosticReport.homeConfigMode === 'core_only') && (
@@ -283,11 +289,11 @@ export function AdminSecurityLogsPanel({
                       <p className="font-extrabold text-white flex items-center gap-1.5">
                         <AlertTriangle className="w-4 h-4 text-[#f9c400] shrink-0" />
                         <span>
-                          تم تحديد السبب بدقة: القاعدة المنشورة تقبل كل حقل من السلايدر منفرداً لكنها ترفض اجتماع الـ 42 حقلاً معاً!
+                          تم تحديد السبب بدقة: القاعدة الحالية في Firebase ترفض اجتماع الـ 42 حقلاً في مستند واحد وتحتاج إلى تفعيل قواعد المستندات المنفصلة!
                         </span>
                       </p>
                       <p className="text-[11px] leading-relaxed">
-                        تم تقسيم دالة <span className="font-latin text-[#f9c400]">isValidHomeConfig</span> في ملف القواعد أدناه إلى 3 دوال فرعية مبسطة لتفادي حد التعقيد داخل محرك Firestore. انسخ النسخة الجديدة من <span className="font-latin">firestore.rules</span> ({rulesLineCount} سطراً) والصقها ثم اضغط <strong className="text-white">Publish / نشر</strong>.
+                        تحتوي النسخة الجديدة من <span className="font-latin text-[#f9c400]">firestore.rules</span> ({rulesLineCount} سطراً) على مستندات منفصلة خفيفة (<span className="font-latin text-white">settings/home_layout</span> و<span className="font-latin text-white">settings/slider_style</span> و<span className="font-latin text-white">settings/site_branding</span>) لتجاوز هذا الحد بالكامل. انسخ النسخة الجديدة والصقها في محرر Firebase ثم اضغط <strong className="text-white">Publish / نشر</strong> وبعدها أعد الضغط على «فحص تطابق القواعد الآن».
                       </p>
                     </div>
                   )}

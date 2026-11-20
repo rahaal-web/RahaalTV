@@ -443,3 +443,43 @@ export function pickLegacyAutoplayHomeConfig(cfg: HomeLayoutConfig): Record<stri
   return out;
 }
 
+export function pickSliderStyleHomeConfig(cfg: HomeLayoutConfig): Record<string, unknown> {
+  const normalized = normalizeHomeConfig(cfg);
+  const out: Record<string, unknown> = {};
+  for (const key of HOME_CONFIG_SLIDER_STYLE_KEYS) {
+    out[key] = normalized[key];
+  }
+  return out;
+}
+
+export function extractHomeBaseFromRecord(raw: unknown): Partial<HomeLayoutConfig> {
+  if (!raw || typeof raw !== 'object') return {};
+  const rec = raw as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of [...HOME_CONFIG_CORE_KEYS, ...HOME_CONFIG_AUTOPLAY_KEYS]) {
+    if (key in rec && rec[key] !== undefined) {
+      out[key] = rec[key];
+    }
+  }
+  return out as Partial<HomeLayoutConfig>;
+}
+
+export function extractSliderStyleFromRecord(raw: unknown): Partial<HomeLayoutConfig> {
+  if (!raw || typeof raw !== 'object') return {};
+  const rec = raw as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of HOME_CONFIG_SLIDER_STYLE_KEYS) {
+    if (key in rec && rec[key] !== undefined) {
+      out[key] = rec[key];
+    }
+  }
+  return out as Partial<HomeLayoutConfig>;
+}
+
+export function homeConfigHasAllSliderStyleKeys(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object') return false;
+  const rec = raw as Record<string, unknown>;
+  return HOME_CONFIG_SLIDER_STYLE_KEYS.every((key) => key in rec && rec[key] !== undefined);
+}
+
+
