@@ -347,13 +347,14 @@ export function CatalogArchiveView({
       ) : (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4">
-            {paginatedItems.map((item) => (
+            {paginatedItems.map((item, idx) => (
               <MovieCard
-                key={item.id}
+                key={`${item.id}::${item.poster_url || item.poster || ''}`}
                 item={item}
                 onSelect={onSelectMedia}
                 isInWatchlist={watchlistIds.includes(item.id)}
                 onToggleWatchlist={onToggleWatchlist}
+                priority={idx < 6}
               />
             ))}
           </div>

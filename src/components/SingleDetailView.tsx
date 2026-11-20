@@ -302,6 +302,7 @@ export function SingleDetailView({
       {/* 1. Compact Single Hero Head */}
       <section className="relative overflow-hidden border-b border-white/[0.08] bg-[#0c1821]">
         <OptimizedImage
+          key={`${item.id}::${getBackdropUrl(item, 'backdrop_detail')}`}
           src={getBackdropUrl(item, 'backdrop_detail')}
           fallbackSrc={FALLBACK_BACKDROP}
           alt={item.title}
@@ -419,6 +420,7 @@ export function SingleDetailView({
                 </div>
 
                 <OptimizedImage
+                  key={`${item.id}::${getPosterUrl(item, 'detail_poster')}`}
                   src={getPosterUrl(item, 'detail_poster')}
                   fallbackSrc={FALLBACK_POSTER}
                   alt={item.title}
@@ -1272,7 +1274,7 @@ export function SingleDetailView({
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
                 {franchiseItems.map((rel) => (
                   <MovieCard
-                    key={rel.id}
+                    key={`${rel.id}::${rel.poster_url || rel.poster || ''}`}
                     item={rel}
                     onSelect={onSelectMedia}
                     isInWatchlist={watchlistIds.includes(rel.id)}
@@ -1325,7 +1327,7 @@ export function SingleDetailView({
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
           {relatedItems.map((rel) => (
             <MovieCard
-              key={rel.id}
+              key={`${rel.id}::${rel.poster_url || rel.poster || ''}`}
               item={rel}
               onSelect={onSelectMedia}
               isInWatchlist={watchlistIds.includes(rel.id)}

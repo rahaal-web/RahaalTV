@@ -594,7 +594,7 @@ export function RecentlyWatchedSection({
 
             return (
               <article
-                key={rec.id}
+                key={`${rec.id}::${posterSrc}`}
                 style={{
                   width: `${layout.cardWidthPx}px`,
                   minWidth: `${layout.cardWidthPx}px`,

@@ -6045,7 +6045,15 @@ async function startServer() {
   } else {
     const distDir = path.resolve(process.cwd(), 'dist');
     app.use(express.static(distDir));
-    app.get('*', (_req, res) => {
+    app.get('*', (req, res) => {
+      if (
+        /\.(?:png|jpe?g|webp|gif|svg|ico|avif|woff2?|css|js|map)$/i.test(req.path) ||
+        req.path.startsWith('/assets/') ||
+        req.path.startsWith('/uploads/')
+      ) {
+        res.status(404).end();
+        return;
+      }
       const indexFile = path.join(distDir, 'index.html');
       if (fs.existsSync(indexFile)) {
         res.sendFile(indexFile);

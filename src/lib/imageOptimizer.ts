@@ -118,12 +118,13 @@ export const IMAGE_SLOT_SPECS: Record<ImageSlotType, SlotOptimizationSpec> = {
 };
 
 const TMDB_PATH_ONLY_REGEX = /^\/[a-zA-Z0-9_-]+\.(jpg|jpeg|png|webp)$/i;
-const TMDB_HOST_REGEX = /^https?:\/\/(?:image\.tmdb\.org|www\.themoviedb\.org)\/t\/p\//i;
-const TMDB_SEGMENT_REGEX = /\/t\/p\/(?:w\d+|h\d+|original)\//i;
+const TMDB_HOST_REGEX = /^(?:https?:)?\/\/(?:image\.tmdb\.org|www\.themoviedb\.org)\/t\/p\//i;
+const TMDB_SEGMENT_REGEX = /\/t\/p\/(?:w\d+|h\d+|original)\/+/i;
+const NULL_LITERAL_REGEX = /^(?:null|undefined|none|n\/a)$/i;
 
 export function isTmdbRelativePath(rawUrl?: string | null): boolean {
   const clean = String(rawUrl || '').trim();
-  if (!clean) return false;
+  if (!clean || NULL_LITERAL_REGEX.test(clean)) return false;
   if (
     clean.startsWith('/src/') ||
     clean.startsWith('/assets/') ||
@@ -137,28 +138,51 @@ export function isTmdbRelativePath(rawUrl?: string | null): boolean {
 
 export function isTmdbImageUrl(rawUrl?: string | null): boolean {
   const clean = String(rawUrl || '').trim();
-  if (!clean) return false;
+  if (!clean || NULL_LITERAL_REGEX.test(clean)) return false;
   return TMDB_HOST_REGEX.test(clean) || isTmdbRelativePath(clean);
 }
 
 /**
  * Safely transforms a TMDB absolute URL or relative path to the desired TMDB configuration size.
+ * Repairs duplicated base URLs, http:// or protocol-relative URLs, and extra slashes.
  * Non-TMDB URLs (local assets, /uploads, data URIs, custom hosts) are returned completely untouched.
  */
 export function normalizeTmdbUrl(rawUrl?: string | null, size: TmdbDisplaySize = 'w342'): string {
   const clean = String(rawUrl || '').trim();
-  if (!clean) return '';
+  if (!clean || NULL_LITERAL_REGEX.test(clean)) return '';
 
   if (isTmdbRelativePath(clean)) {
     return `${TMDB_IMAGE_CONFIG.secureBaseUrl}${size}${clean}`;
   }
 
   if (TMDB_HOST_REGEX.test(clean)) {
-    const httpsClean = clean.replace(/^http:\/\//i, 'https://');
-    if (TMDB_SEGMENT_REGEX.test(httpsClean)) {
-      return httpsClean.replace(TMDB_SEGMENT_REGEX, `/t/p/${size}/`);
+    // Handle accidentally concatenated TMDB URLs by extracting the final /t/p/... segment
+    const lastTpIdx = clean.toLowerCase().lastIndexOf('/t/p/');
+    if (lastTpIdx > clean.toLowerCase().indexOf('/t/p/')) {
+      const tail = clean.slice(lastTpIdx);
+      const repaired = `https://image.tmdb.org${tail}`;
+      if (TMDB_SEGMENT_REGEX.test(repaired)) {
+        return repaired.replace(TMDB_SEGMENT_REGEX, `/t/p/${size}/`).replace(/([^:]\/)\/+/g, '$1');
+      }
     }
-    return httpsClean;
+
+    let httpsClean = clean
+      .replace(/^\/\//, 'https://')
+      .replace(/^http:\/\//i, 'https://')
+      .replace(/^https:\/\/www\.themoviedb\.org\/t\/p\//i, TMDB_IMAGE_CONFIG.secureBaseUrl);
+
+    if (TMDB_SEGMENT_REGEX.test(httpsClean)) {
+      httpsClean = httpsClean.replace(TMDB_SEGMENT_REGEX, `/t/p/${size}/`);
+      return httpsClean.replace(/([^:]\/)\/+/g, '$1');
+    }
+
+    // Missing size segment after /t/p/ (e.g. https://image.tmdb.org/t/p/abc123.jpg)
+    const afterTp = httpsClean.replace(/^https:\/\/image\.tmdb\.org\/t\/p\/+/i, '');
+    if (afterTp && !afterTp.includes('/')) {
+      return `${TMDB_IMAGE_CONFIG.secureBaseUrl}${size}/${afterTp}`;
+    }
+
+    return httpsClean.replace(/([^:]\/)\/+/g, '$1');
   }
 
   return clean;
@@ -217,26 +241,43 @@ export function optimizeImageUrl(
   return normalizeTmdbUrl(rawUrl, slotOrSize as TmdbDisplaySize);
 }
 
-/* ---------------- Bounded Failed Image URL Cache (No Infinite Retry Loops) ---------------- */
+/* ---------------- Bounded Failed & Loaded Image URL Caches ---------------- */
 const MAX_FAILED_URL_CACHE = 300;
+const FAILED_URL_TTL_MS = 3 * 60 * 1000;
 const failedImageUrlCache = new Map<string, number>();
 
-export function isImageUrlFailed(url?: string | null): boolean {
+const MAX_LOADED_URL_CACHE = 500;
+const loadedImageUrlCache = new Set<string>();
+
+export function isImageUrlFailed(url?: string | null, nowMs = Date.now()): boolean {
   const key = String(url || '').trim();
   if (!key) return false;
-  return failedImageUrlCache.has(key);
+  const failedAt = failedImageUrlCache.get(key);
+  if (failedAt === undefined) return false;
+  if (nowMs - failedAt > FAILED_URL_TTL_MS) {
+    failedImageUrlCache.delete(key);
+    return false;
+  }
+  return true;
 }
 
-export function markImageUrlFailed(url?: string | null): void {
+export function markImageUrlFailed(url?: string | null, nowMs = Date.now()): void {
   const key = String(url || '').trim();
   if (!key) return;
+  loadedImageUrlCache.delete(key);
   if (failedImageUrlCache.has(key)) {
     failedImageUrlCache.delete(key);
   } else if (failedImageUrlCache.size >= MAX_FAILED_URL_CACHE) {
     const oldestKey = failedImageUrlCache.keys().next().value;
     if (oldestKey) failedImageUrlCache.delete(oldestKey);
   }
-  failedImageUrlCache.set(key, Date.now());
+  failedImageUrlCache.set(key, nowMs);
+}
+
+export function clearFailedImageUrl(url?: string | null): void {
+  const key = String(url || '').trim();
+  if (!key) return;
+  failedImageUrlCache.delete(key);
 }
 
 export function clearFailedImageUrls(): void {
@@ -245,4 +286,27 @@ export function clearFailedImageUrls(): void {
 
 export function getFailedImageUrlCacheSize(): number {
   return failedImageUrlCache.size;
+}
+
+export function markImageUrlLoaded(url?: string | null): void {
+  const key = String(url || '').trim();
+  if (!key) return;
+  failedImageUrlCache.delete(key);
+  if (loadedImageUrlCache.has(key)) {
+    loadedImageUrlCache.delete(key);
+  } else if (loadedImageUrlCache.size >= MAX_LOADED_URL_CACHE) {
+    const oldestKey = loadedImageUrlCache.keys().next().value;
+    if (oldestKey) loadedImageUrlCache.delete(oldestKey);
+  }
+  loadedImageUrlCache.add(key);
+}
+
+export function isImageUrlCachedSuccess(url?: string | null): boolean {
+  const key = String(url || '').trim();
+  if (!key) return false;
+  return loadedImageUrlCache.has(key);
+}
+
+export function clearLoadedImageUrls(): void {
+  loadedImageUrlCache.clear();
 }

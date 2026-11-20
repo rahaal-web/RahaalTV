@@ -19,13 +19,17 @@ registerHooks({
 
 import {
   buildSlotSrcSet,
+  clearFailedImageUrl,
   clearFailedImageUrls,
+  clearLoadedImageUrls,
   getFailedImageUrlCacheSize,
   getSlotSizesAttr,
+  isImageUrlCachedSuccess,
   isImageUrlFailed,
   isTmdbImageUrl,
   isTmdbRelativePath,
   markImageUrlFailed,
+  markImageUrlLoaded,
   normalizeTmdbUrl,
   optimizeImageUrl,
   resolveImageForSlot,
@@ -247,3 +251,86 @@ test('Component audit: zero UI components render /t/p/original/ in src/component
     assert.equal(hasOriginalLeak, false, `Found /t/p/original/ leak in ${path.basename(file)}`);
   }
 });
+
+test('TMDB optimizer repairs malformed URLs, duplicated prefixes, protocol-relative URLs, and null literals', () => {
+  assert.equal(
+    normalizeTmdbUrl('//image.tmdb.org/t/p/original/poster99.jpg', 'w342'),
+    'https://image.tmdb.org/t/p/w342/poster99.jpg'
+  );
+  assert.equal(
+    normalizeTmdbUrl('https://www.themoviedb.org/t/p/w500//poster99.jpg', 'w342'),
+    'https://image.tmdb.org/t/p/w342/poster99.jpg'
+  );
+  assert.equal(
+    normalizeTmdbUrl(
+      'https://image.tmdb.org/t/p/w500/https://image.tmdb.org/t/p/original/poster99.jpg',
+      'w342'
+    ),
+    'https://image.tmdb.org/t/p/w342/poster99.jpg'
+  );
+  assert.equal(
+    normalizeTmdbUrl('https://image.tmdb.org/t/p/poster99.jpg', 'w185'),
+    'https://image.tmdb.org/t/p/w185/poster99.jpg'
+  );
+  assert.equal(normalizeTmdbUrl('null', 'w342'), '');
+  assert.equal(normalizeTmdbUrl('undefined', 'w342'), '');
+});
+
+test('FailedUrlCache expires transient failures after TTL and LoadedUrlCache tracks verified URLs', () => {
+  clearFailedImageUrls();
+  clearLoadedImageUrls();
+
+  const url = 'https://image.tmdb.org/t/p/w342/transient.jpg';
+  const t0 = 1_000_000;
+  markImageUrlFailed(url, t0);
+  assert.equal(isImageUrlFailed(url, t0 + 10_000), true);
+  // After 3-minute TTL passes, transient failure clears so URL can retry cleanly
+  assert.equal(isImageUrlFailed(url, t0 + 4 * 60 * 1000), false);
+
+  markImageUrlFailed(url, t0);
+  clearFailedImageUrl(url);
+  assert.equal(isImageUrlFailed(url, t0 + 1000), false);
+
+  markImageUrlLoaded(url);
+  assert.equal(isImageUrlCachedSuccess(url), true);
+  markImageUrlFailed(url);
+  assert.equal(isImageUrlCachedSuccess(url), false);
+
+  clearFailedImageUrls();
+  clearLoadedImageUrls();
+});
+
+test('OptimizedImage & useLazyImageInView implement cache detection, safe decode(), IO roots, retry, and no empty src', () => {
+  const optImgPath = path.resolve(process.cwd(), 'src/components/OptimizedImage.tsx');
+  const hookPath = path.resolve(process.cwd(), 'src/hooks/useLazyImageInView.ts');
+
+  const optImgSource = fs.readFileSync(optImgPath, 'utf8');
+  const hookSource = fs.readFileSync(hookPath, 'utf8');
+
+  // Cache check via img.complete && naturalWidth > 0 + useLayoutEffect
+  assert.equal(optImgSource.includes('useLayoutEffect'), true);
+  assert.equal(optImgSource.includes('img.complete'), true);
+  assert.equal(optImgSource.includes('img.naturalWidth > 0'), true);
+
+  // Safe img.decode() with .catch fallback so decode errors never block valid loaded images
+  assert.equal(optImgSource.includes('img.decode'), true);
+  assert.equal(optImgSource.includes('.catch('), true);
+
+  // Bounded retry + watchdog + error fallback guard
+  assert.equal(optImgSource.includes('MAX_TRANSIENT_RETRIES'), true);
+  assert.equal(optImgSource.includes('REMOTE_LOAD_TIMEOUT_MS'), true);
+  assert.equal(optImgSource.includes('setErrorFallbackFailed(true)'), true);
+
+  // Uses IntersectionObserver hook cleanly and never assigns empty src=""
+  assert.equal(optImgSource.includes('useLazyImageInView'), true);
+  assert.equal(optImgSource.includes('{shouldLoadImage ? ('), true);
+  assert.equal(optImgSource.includes('src=""'), false);
+
+  // Hook inspects horizontal/vertical scroll containers and disconnects on activation
+  assert.equal(hookSource.includes('IntersectionObserver'), true);
+  assert.equal(hookSource.includes('findScrollableRoots'), true);
+  assert.equal(hookSource.includes('horizontalRoot'), true);
+  assert.equal(hookSource.includes('verticalRoot'), true);
+  assert.equal(hookSource.includes('disconnect()'), true);
+});
+

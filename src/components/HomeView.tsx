@@ -160,7 +160,7 @@ function RevealSection({
           observer.disconnect();
         }
       },
-      { rootMargin: '80px 0px', threshold: 0.04 }
+      { rootMargin: '220px 0px', threshold: 0.01 }
     );
     observer.observe(el);
     return () => observer.disconnect();
@@ -183,12 +183,14 @@ function SectionHorizontalRow({
   items,
   cardStyle,
   watchlistIds,
+  prioritizeInitialCount = 0,
   onSelectMedia,
   onToggleWatchlist,
 }: {
   items: MediaItem[];
   cardStyle: 'clean' | 'classic';
   watchlistIds: string[];
+  prioritizeInitialCount?: number;
   onSelectMedia: (item: MediaItem, openDownloads?: boolean) => void;
   onToggleWatchlist: (item: MediaItem) => void;
 }) {
@@ -220,9 +222,9 @@ function SectionHorizontalRow({
         ref={scrollerRef}
         className="flex gap-3 sm:gap-4 overflow-x-auto no-scrollbar scroll-smooth snap-x snap-mandatory pb-2"
       >
-        {items.map((item) => (
+        {items.map((item, idx) => (
           <div
-            key={item.id}
+            key={`${item.id}::${item.poster_url || item.poster || ''}`}
             className="w-[46.5%] sm:w-[31%] md:w-[23.5%] lg:w-[19%] shrink-0 snap-start"
           >
             <MovieCard
@@ -231,6 +233,7 @@ function SectionHorizontalRow({
               isInWatchlist={watchlistIds.includes(item.id)}
               onToggleWatchlist={onToggleWatchlist}
               variant={cardStyle}
+              priority={idx < prioritizeInitialCount}
             />
           </div>
         ))}
@@ -532,7 +535,7 @@ export function HomeView({
               {isAmbientBlurMode && (
                 <>
                   <OptimizedImage
-                    key={`hero-blur-bg-${activeHero.id}`}
+                    key={`hero-blur-bg-${activeHero.id}::${heroBgSrc}`}
                     src={heroBgSrc}
                     fallbackSrc={FALLBACK_BACKDROP}
                     alt=""
@@ -554,7 +557,7 @@ export function HomeView({
 
               {/* Layer 2: Foreground Hero Image (Contain Default / Cover / Sharp Contain over Blur) */}
               <OptimizedImage
-                key={activeHero.id}
+                key={`${activeHero.id}::${heroBgSrc}`}
                 src={heroBgSrc}
                 fallbackSrc={FALLBACK_BACKDROP}
                 alt={activeHero.title}
@@ -576,6 +579,7 @@ export function HomeView({
               {/* Subtle blurred poster accent overlay in Cover mode when item lacks a dedicated backdrop */}
               {isCoverMode && !backdropInfo.hasDedicatedBackdrop && (
                 <OptimizedImage
+                  key={`hero-ambient-${activeHero.id}::${ambientPoster}`}
                   src={ambientPoster}
                   fallbackSrc={FALLBACK_POSTER}
                   alt=""
@@ -1086,7 +1090,7 @@ export function HomeView({
                               fallbackSrc={FALLBACK_POSTER}
                               alt={item.title}
                               slot="hero_thumb"
-                              priority={isActiveThumb}
+                              priority={isActiveThumb || Math.abs(idx - activeSlideIndex) <= 1}
                               loading={isActiveThumb || Math.abs(idx - activeSlideIndex) <= 1 ? 'eager' : 'lazy'}
                               className="h-full w-full"
                               imgClassName="object-cover object-top"
@@ -1212,7 +1216,7 @@ export function HomeView({
       {recentlyWatchedSection}
 
       {/* 3. Dynamic Admin-Controlled Content Sections */}
-      {enabledSections.map((section) => {
+      {enabledSections.map((section, sectionIdx) => {
         const items = resolveSectionMediaItems(catalog, section);
         if (items.length === 0) return null;
 
@@ -1252,19 +1256,21 @@ export function HomeView({
                 items={items}
                 cardStyle={homeConfig.cardStyle}
                 watchlistIds={watchlistIds}
+                prioritizeInitialCount={sectionIdx === 0 ? 4 : 0}
                 onSelectMedia={onSelectMedia}
                 onToggleWatchlist={onToggleWatchlist}
               />
             ) : (
               <div className={`grid ${gridColClass} gap-3 sm:gap-4`}>
-                {items.map((item) => (
+                {items.map((item, idx) => (
                   <MovieCard
-                    key={item.id}
+                    key={`${item.id}::${item.poster_url || item.poster || ''}`}
                     item={item}
                     onSelect={onSelectMedia}
                     isInWatchlist={watchlistIds.includes(item.id)}
                     onToggleWatchlist={onToggleWatchlist}
                     variant={homeConfig.cardStyle}
+                    priority={sectionIdx === 0 && idx < 4}
                   />
                 ))}
               </div>
@@ -1348,7 +1354,7 @@ export function HomeView({
             <div className={`grid ${gridColClass} gap-3 sm:gap-4`}>
               {paginatedLibraryItems.map((item) => (
                 <MovieCard
-                  key={item.id}
+                  key={`${item.id}::${item.poster_url || item.poster || ''}`}
                   item={item}
                   onSelect={onSelectMedia}
                   isInWatchlist={watchlistIds.includes(item.id)}
