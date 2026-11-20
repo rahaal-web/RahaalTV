@@ -2,13 +2,16 @@ import { useEffect, useState } from 'react';
 import {
   AlertTriangle,
   Bug,
+  CheckCircle2,
   Copy,
   ExternalLink,
   History,
+  RefreshCw,
   ShieldCheck,
   Trash2,
+  XCircle,
 } from 'lucide-react';
-import { getActiveFirebaseConfig } from '../../lib/firebase';
+import { getActiveFirebaseConfig, SaveSiteSettingsResult } from '../../lib/firebase';
 import firestoreRulesSource from '../../../firestore.rules?raw';
 import {
   AdminActivityLogEntry,
@@ -24,12 +27,33 @@ import {
 import { safeCopyToClipboard } from '../../lib/browserCompat';
 import { AdminActivityLog } from '../AdminActivityLog';
 
+export type RulesDiagnosticReport =
+  | {
+      ok: true;
+      result: SaveSiteSettingsResult;
+      userEmail: string | null;
+      emailVerified: boolean;
+    }
+  | {
+      ok: false;
+      errorMessage: string;
+      projectId: string;
+      databaseId: string;
+      userEmail: string | null;
+      emailVerified: boolean;
+    };
+
 interface AdminSecurityLogsPanelProps {
   mode: 'security_rules' | 'audit_logs';
   onNotify: (msg: string) => void;
+  onRunRulesDiagnostic?: () => Promise<RulesDiagnosticReport>;
 }
 
-export function AdminSecurityLogsPanel({ mode, onNotify }: AdminSecurityLogsPanelProps) {
+export function AdminSecurityLogsPanel({
+  mode,
+  onNotify,
+  onRunRulesDiagnostic,
+}: AdminSecurityLogsPanelProps) {
   const [activityLogs, setActivityLogs] = useState<AdminActivityLogEntry[]>(() =>
     loadActivityLog()
   );
@@ -38,6 +62,8 @@ export function AdminSecurityLogsPanel({ mode, onNotify }: AdminSecurityLogsPane
     loadClientErrorLogs()
   );
   const [subView, setSubView] = useState<'admin' | 'client'>('admin');
+  const [runningDiagnostic, setRunningDiagnostic] = useState(false);
+  const [diagnosticReport, setDiagnosticReport] = useState<RulesDiagnosticReport | null>(null);
 
   useEffect(() => {
     if (mode !== 'audit_logs') return;
@@ -50,6 +76,30 @@ export function AdminSecurityLogsPanel({ mode, onNotify }: AdminSecurityLogsPane
   }, [mode]);
 
   const activeFirebaseConfig = getActiveFirebaseConfig();
+  const activeDbId = activeFirebaseConfig.firestoreDatabaseId || '(default)';
+  const consoleDbSegment = activeDbId === '(default)' ? '-default-' : encodeURIComponent(activeDbId);
+
+  const handleTestRulesNow = async () => {
+    if (!onRunRulesDiagnostic) return;
+    setRunningDiagnostic(true);
+    try {
+      const report = await onRunRulesDiagnostic();
+      setDiagnosticReport(report);
+      if (report.ok) {
+        if (report.result.rejectedSections.length === 0) {
+          onNotify('قواعد firestore.rules المنشورة مطابقة بالكامل لجميع أقسام الإعدادات!');
+        } else {
+          onNotify(
+            `بعض الأقسام مرفوضة من قواعد Firebase (${report.result.rejectedSections.join(', ')}) — راجع نتيجة الفحص أدناه.`
+          );
+        }
+      } else {
+        onNotify(report.errorMessage);
+      }
+    } finally {
+      setRunningDiagnostic(false);
+    }
+  };
 
   if (mode === 'security_rules') {
     return (
@@ -66,15 +116,25 @@ export function AdminSecurityLogsPanel({ mode, onNotify }: AdminSecurityLogsPane
                 <span className="font-latin text-white">
                   media, settings, admins, admin_activity_logs, scraper_adapters, fonts, requests, users, ratings
                 </span>
-                ) وتمنع الكتابة غير المصرح بها على قاعدة{' '}
-                <span className="font-latin text-[#f9c400]">
-                  {activeFirebaseConfig.firestoreDatabaseId}
-                </span>
-                .
+                ) لمشروع{' '}
+                <span className="font-latin text-[#f9c400]">{activeFirebaseConfig.projectId}</span>{' '}
+                وقاعدة البيانات{' '}
+                <span className="font-latin text-[#f9c400]">{activeDbId}</span>.
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {onRunRulesDiagnostic && (
+                <button
+                  type="button"
+                  disabled={runningDiagnostic}
+                  onClick={() => void handleTestRulesNow()}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#4CAF50] hover:bg-emerald-600 disabled:opacity-50 px-4 py-2.5 text-xs font-black text-white cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${runningDiagnostic ? 'animate-spin' : ''}`} />
+                  <span>{runningDiagnostic ? 'جاري الفحص...' : 'فحص تطابق القواعد الآن'}</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={async () => {
@@ -91,7 +151,7 @@ export function AdminSecurityLogsPanel({ mode, onNotify }: AdminSecurityLogsPane
                 <span>نسخ قواعد firestore.rules</span>
               </button>
               <a
-                href={`https://console.firebase.google.com/project/${activeFirebaseConfig.projectId}/firestore/databases/${activeFirebaseConfig.firestoreDatabaseId}/rules`}
+                href={`https://console.firebase.google.com/project/${activeFirebaseConfig.projectId}/firestore/databases/${consoleDbSegment}/rules`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 px-4 py-2.5 text-xs font-extrabold text-white"
@@ -102,13 +162,74 @@ export function AdminSecurityLogsPanel({ mode, onNotify }: AdminSecurityLogsPane
             </div>
           </div>
 
+          {diagnosticReport && (
+            <div
+              className={`rounded-2xl border p-4 space-y-3 text-xs ${
+                diagnosticReport.ok && diagnosticReport.result.rejectedSections.length === 0
+                  ? 'bg-[#4CAF50]/10 border-[#4CAF50]/40 text-emerald-100'
+                  : 'bg-[#f9c400]/10 border-[#f9c400]/40 text-amber-100'
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-extrabold text-white">
+                  نتيجة الفحص الفعلي لـ{' '}
+                  <span className="font-latin text-[#f9c400]">
+                    {diagnosticReport.ok
+                      ? `${diagnosticReport.result.projectId} / ${diagnosticReport.result.databaseId}`
+                      : `${diagnosticReport.projectId} / ${diagnosticReport.databaseId}`}
+                  </span>
+                </p>
+                <span className="font-latin text-[11px] text-[#b7c9ef]">
+                  {diagnosticReport.userEmail || 'بدون بريد'} ·{' '}
+                  {diagnosticReport.emailVerified ? 'email_verified=true' : 'email_verified=false'}
+                </span>
+              </div>
+
+              {diagnosticReport.ok ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                  {(
+                    [
+                      { key: 'homeConfig', label: 'تخطيط الرئيسية والسلايدر', ok: diagnosticReport.result.syncedHomeToCloud },
+                      { key: 'typography', label: 'الخطوط وأحجام النصوص', ok: diagnosticReport.result.syncedTypographyToCloud },
+                      { key: 'popupShield', label: 'درع النوافذ (Popup Shield)', ok: diagnosticReport.result.syncedPopupShieldToCloud },
+                      { key: 'branding', label: 'هوية الموقع (Branding)', ok: diagnosticReport.result.syncedBrandingToCloud },
+                    ] as const
+                  ).map((row) => (
+                    <div
+                      key={row.key}
+                      className={`rounded-xl border px-3 py-2 flex items-center justify-between gap-2 ${
+                        row.ok
+                          ? 'bg-[#4CAF50]/15 border-[#4CAF50]/40 text-white'
+                          : 'bg-[#D92321]/15 border-[#D92321]/45 text-[#ffb4b2]'
+                      }`}
+                    >
+                      <span className="font-bold">{row.label}</span>
+                      {row.ok ? (
+                        <CheckCircle2 className="w-4 h-4 text-[#4CAF50] shrink-0" />
+                      ) : (
+                        <XCircle className="w-4 h-4 text-[#ff8a88] shrink-0" />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[#ffb4b2] font-bold">{diagnosticReport.errorMessage}</p>
+              )}
+            </div>
+          )}
+
           <ol className="list-decimal list-inside space-y-1.5 text-xs text-[#b7c9ef] bg-[#1a242e]/65 border border-white/5 rounded-2xl p-4">
-            <li>اضغط على زر &quot;نسخ قواعد firestore.rules&quot; أعلاه.</li>
+            <li>اضغط على زر &quot;نسخ قواعد firestore.rules&quot; أعلاه ثم حدد كل النص داخل محرر Firebase واستبدله بالكامل (Ctrl+A ثم Ctrl+V).</li>
             <li>
-              افتح محرر Rules في Firebase Console وتأكد من اختيار القاعدة{' '}
-              <span className="font-latin text-[#f9c400]">{activeFirebaseConfig.firestoreDatabaseId}</span>.
+              تأكد أنك في مشروع{' '}
+              <span className="font-latin text-[#f9c400]">{activeFirebaseConfig.projectId}</span>{' '}
+              وداخل قاعدة{' '}
+              <span className="font-latin text-[#f9c400]">{activeDbId}</span>{' '}
+              وليس قاعدة أخرى أو مشروعاً آخر.
             </li>
-            <li>استبدل القواعد بالكامل ثم اضغط Publish لتفعيل التغييرات فوراً.</li>
+            <li>
+              تأكد من الضغط على زر <strong className="text-white">Publish / نشر</strong> في أعلى محرر Firebase Console (اللصق فقط بدون Publish لا يفعّل القواعد)، ثم اضغط &quot;فحص تطابق القواعد الآن&quot;.
+            </li>
           </ol>
 
           <pre

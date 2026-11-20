@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -11,10 +13,14 @@ import { createSiteBackupPayload, validateBackupJson } from '../src/lib/backupRe
 import { createTimeoutSignal, detectClientCapabilities } from '../src/lib/browserCompat';
 import { isLikelyNonVideoWebsiteUrl } from '../src/lib/clientScraper';
 import {
+  DEFAULT_WEBSITE_BRANDING,
   normalizeWebsiteBranding,
   sanitizeBrandingForFirestore,
 } from '../src/lib/websiteBranding';
-import { normalizeHomeConfig } from '../src/lib/homeConfig';
+import { DEFAULT_HOME_CONFIG, normalizeHomeConfig } from '../src/lib/homeConfig';
+import { DEFAULT_TYPOGRAPHY_CONFIG, normalizeTypographyConfig } from '../src/lib/typographyConfig';
+import { DEFAULT_POPUP_SHIELD_CONFIG, normalizePopupShieldConfig } from '../src/lib/popupShield';
+import { DEFAULT_PLAYER_THEME, normalizePlayerTheme } from '../src/lib/playerTheme';
 import {
   applyEyeComfortPresetToConfig,
   buildAdminAppearanceCssVars,
@@ -385,4 +391,59 @@ describe('Admin Eye Comfort Appearance & Sidebar Pinning/Reordering', () => {
     assert.deepEqual(reconciled.pinnedTabs, ['slider_customization']);
   });
 });
+
+describe('Firestore Rules Schema Parity for SiteSettings', () => {
+  it('ensures normalized settings sub-objects match firestore.rules hasAll/hasOnly key lists', () => {
+    const rulesText = fs.readFileSync(path.resolve(process.cwd(), 'firestore.rules'), 'utf8');
+
+    const extractKeys = (fnName: string, check: 'hasAll' | 'hasOnly'): string[] => {
+      const idx = rulesText.indexOf(`function ${fnName}(`);
+      assert.ok(idx !== -1, `Missing function ${fnName} in firestore.rules`);
+      const slice = rulesText.slice(idx, idx + 2500);
+      const regex =
+        check === 'hasAll'
+          ? /\.keys\(\)\.hasAll\(\[([\s\S]*?)\]\)/
+          : /\.keys\(\)\.hasOnly\(\[([\s\S]*?)\]\)/;
+      const m = slice.match(regex);
+      assert.ok(m, `Missing ${check} in ${fnName}`);
+      return Array.from(m[1].matchAll(/'([^']+)'/g)).map((x) => x[1]);
+    };
+
+    const verifyParity = (fnName: string, obj: Record<string, unknown>) => {
+      const objKeys = Object.keys(obj).sort();
+      const hasAllKeys = extractKeys(fnName, 'hasAll');
+      const hasOnlyKeys = extractKeys(fnName, 'hasOnly').sort();
+      for (const reqKey of hasAllKeys) {
+        assert.ok(objKeys.includes(reqKey), `${fnName}: missing required key "${reqKey}"`);
+      }
+      assert.deepEqual(objKeys, hasOnlyKeys, `${fnName}: normalized keys drifted from hasOnly`);
+    };
+
+    verifyParity('isValidPlayerTheme', normalizePlayerTheme(DEFAULT_PLAYER_THEME) as unknown as Record<string, unknown>);
+    verifyParity('isValidHomeConfig', normalizeHomeConfig(DEFAULT_HOME_CONFIG) as unknown as Record<string, unknown>);
+    verifyParity('isValidTypographyConfig', normalizeTypographyConfig(DEFAULT_TYPOGRAPHY_CONFIG) as unknown as Record<string, unknown>);
+    verifyParity('isValidPopupShieldConfig', normalizePopupShieldConfig(DEFAULT_POPUP_SHIELD_CONFIG) as unknown as Record<string, unknown>);
+    verifyParity(
+      'isValidWebsiteBranding',
+      sanitizeBrandingForFirestore(DEFAULT_WEBSITE_BRANDING, 'RahaL TV') as unknown as Record<string, unknown>
+    );
+  });
+
+  it('coerces non-boolean values strictly to booleans in homeConfig and playerTheme', () => {
+    const home = normalizeHomeConfig({
+      showHero: 1 as unknown as boolean,
+      heroAutoPlay: 0 as unknown as boolean,
+    });
+    assert.strictEqual(home.showHero, true);
+    assert.strictEqual(home.heroAutoPlay, false);
+
+    const theme = normalizePlayerTheme({
+      showHeaderBar: 1 as unknown as boolean,
+      showFooterBar: 0 as unknown as boolean,
+    });
+    assert.strictEqual(theme.showHeaderBar, true);
+    assert.strictEqual(theme.showFooterBar, false);
+  });
+});
+
 

@@ -114,9 +114,9 @@ export function normalizePlayerTheme(raw?: Partial<PlayerThemeConfig> | null): P
     modalBgColor: sanitizeHexColor(raw.modalBgColor, DEFAULT_PLAYER_THEME.modalBgColor),
     borderRadius,
     glowIntensity,
-    showHeaderBar: raw.showHeaderBar ?? true,
-    showFooterBar: raw.showFooterBar ?? true,
-    showBrandBadge: raw.showBrandBadge ?? true,
+    showHeaderBar: Boolean(raw.showHeaderBar ?? true),
+    showFooterBar: Boolean(raw.showFooterBar ?? true),
+    showBrandBadge: Boolean(raw.showBrandBadge ?? true),
   };
 }
 

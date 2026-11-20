@@ -953,11 +953,26 @@ export async function saveWatchlistToFirestore(uid: string, watchlistIds: string
   }
 }
 
+export type SettingsOptionalSection = 'homeConfig' | 'typography' | 'popupShield' | 'branding';
+
+export interface SaveSiteSettingsResult {
+  syncedHomeToCloud: boolean;
+  syncedTypographyToCloud: boolean;
+  syncedPopupShieldToCloud: boolean;
+  syncedBrandingToCloud: boolean;
+  rejectedSections: SettingsOptionalSection[];
+  projectId: string;
+  databaseId: string;
+}
+
 export async function saveSiteSettingsToFirestore(
   settings: SiteSettings,
   uid: string
-): Promise<{ syncedHomeToCloud: boolean }> {
+): Promise<SaveSiteSettingsResult> {
   const activeDb = getActiveDatabase();
+  const activeCfg = getActiveFirebaseConfig();
+  const projectId = activeCfg.projectId;
+  const databaseId = activeCfg.firestoreDatabaseId || '(default)';
   const path = 'settings/general';
   const normalizedTheme = saveStoredPlayerTheme(settings.playerTheme || DEFAULT_PLAYER_THEME);
   const normalizedHome = saveStoredHomeConfig(settings.homeConfig || DEFAULT_HOME_CONFIG);
@@ -976,12 +991,12 @@ export async function saveSiteSettingsToFirestore(
     settings.siteName
   );
 
-  const corePayload = {
+  const corePayload: Record<string, unknown> = {
     siteName: settings.siteName.trim().slice(0, 80) || 'RahaL TV',
     tagline: settings.tagline.trim().slice(0, 300) || 'منصة RahaL TV الترفيهية',
     announcementText: settings.announcementText.trim().slice(0, 300),
     tickerEnabled: Boolean(settings.tickerEnabled),
-    featuredLimit: Math.min(20, Math.max(1, Number(settings.featuredLimit) || 5)),
+    featuredLimit: Math.min(20, Math.max(1, Math.round(Number(settings.featuredLimit) || 5))),
     maintenanceMode: Boolean(settings.maintenanceMode),
     maintenanceMessage: (settings.maintenanceMessage || '').trim().slice(0, 500),
     playerTheme: normalizedTheme,
@@ -989,7 +1004,7 @@ export async function saveSiteSettingsToFirestore(
     updatedAt: serverTimestamp(),
   };
 
-  const extendedPayloadWithoutBranding = {
+  const extendedPayloadWithoutBranding: Record<string, unknown> = {
     ...corePayload,
     homeConfig: normalizedHome,
     typography: normalizedTypography,
@@ -1001,25 +1016,154 @@ export async function saveSiteSettingsToFirestore(
       ...extendedPayloadWithoutBranding,
       branding: firestoreBranding,
     });
-    return { syncedHomeToCloud: true };
+    return {
+      syncedHomeToCloud: true,
+      syncedTypographyToCloud: true,
+      syncedPopupShieldToCloud: true,
+      syncedBrandingToCloud: true,
+      rejectedSections: [],
+      projectId,
+      databaseId,
+    };
   } catch (error) {
-    if (isPermissionDeniedError(error)) {
-      try {
-        await setDoc(doc(activeDb, 'settings', 'general'), extendedPayloadWithoutBranding);
-        return { syncedHomeToCloud: true };
-      } catch (midErr) {
-        if (isPermissionDeniedError(midErr)) {
-          try {
-            await setDoc(doc(activeDb, 'settings', 'general'), corePayload);
-            return { syncedHomeToCloud: false };
-          } catch (innerErr) {
-            handleFirestoreError(innerErr, OperationType.WRITE, path);
-          }
-        }
+    if (!isPermissionDeniedError(error)) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+
+    // Tier 2: try without branding
+    try {
+      await setDoc(doc(activeDb, 'settings', 'general'), extendedPayloadWithoutBranding);
+      reportClientError({
+        source: 'firestore.settings.partial_sync',
+        level: 'warn',
+        message: `Settings write rejected branding on ${projectId}/${databaseId} (permission-denied); homeConfig/typography/popupShield synced.`,
+      });
+      return {
+        syncedHomeToCloud: true,
+        syncedTypographyToCloud: true,
+        syncedPopupShieldToCloud: true,
+        syncedBrandingToCloud: false,
+        rejectedSections: ['branding'],
+        projectId,
+        databaseId,
+      };
+    } catch (midErr) {
+      if (!isPermissionDeniedError(midErr)) {
         handleFirestoreError(midErr, OperationType.WRITE, path);
       }
     }
-    handleFirestoreError(error, OperationType.WRITE, path);
+
+    // Tier 3: probe each optional section independently so one rejected block (e.g. homeConfig)
+    // does not prevent other allowed sections (e.g. typography or popupShield) from syncing.
+    const docRef = doc(activeDb, 'settings', 'general');
+    const acceptedPayload: Record<string, unknown> = { ...corePayload };
+    const statusMap: Record<SettingsOptionalSection, boolean> = {
+      typography: false,
+      popupShield: false,
+      homeConfig: false,
+      branding: false,
+    };
+    const optionalEntries: Array<{
+      key: SettingsOptionalSection;
+      value: unknown;
+    }> = [
+      { key: 'typography', value: normalizedTypography },
+      { key: 'popupShield', value: normalizedShield },
+      { key: 'homeConfig', value: normalizedHome },
+      { key: 'branding', value: firestoreBranding },
+    ];
+
+    let anyOptionalWritten = false;
+    for (const entry of optionalEntries) {
+      const candidate: Record<string, unknown> = {
+        ...acceptedPayload,
+        [entry.key]: entry.value,
+      };
+      try {
+        await setDoc(docRef, candidate);
+        acceptedPayload[entry.key] = entry.value;
+        statusMap[entry.key] = true;
+        anyOptionalWritten = true;
+      } catch (secErr) {
+        if (!isPermissionDeniedError(secErr)) {
+          handleFirestoreError(secErr, OperationType.WRITE, path);
+        }
+      }
+    }
+
+    if (!anyOptionalWritten) {
+      try {
+        await setDoc(docRef, corePayload, { merge: true });
+      } catch (mergeErr) {
+        if (isPermissionDeniedError(mergeErr)) {
+          try {
+            await setDoc(docRef, corePayload);
+          } catch (innerErr) {
+            handleFirestoreError(innerErr, OperationType.WRITE, path);
+          }
+        } else {
+          handleFirestoreError(mergeErr, OperationType.WRITE, path);
+        }
+      }
+    }
+
+    const rejectedSections = (
+      ['homeConfig', 'typography', 'popupShield', 'branding'] as SettingsOptionalSection[]
+    ).filter((k) => !statusMap[k]);
+
+    reportClientError({
+      source: 'firestore.settings.partial_sync',
+      level: 'warn',
+      message: `Firestore rules on ${projectId}/${databaseId} rejected sections: [${rejectedSections.join(', ')}].`,
+    });
+
+    return {
+      syncedHomeToCloud: statusMap.homeConfig,
+      syncedTypographyToCloud: statusMap.typography,
+      syncedPopupShieldToCloud: statusMap.popupShield,
+      syncedBrandingToCloud: statusMap.branding,
+      rejectedSections,
+      projectId,
+      databaseId,
+    };
+  }
+}
+
+export async function diagnoseFirestoreSettingsRules(
+  settings: SiteSettings,
+  uid: string
+): Promise<
+  | {
+      ok: true;
+      result: SaveSiteSettingsResult;
+      userEmail: string | null;
+      emailVerified: boolean;
+    }
+  | {
+      ok: false;
+      errorMessage: string;
+      projectId: string;
+      databaseId: string;
+      userEmail: string | null;
+      emailVerified: boolean;
+    }
+> {
+  const activeCfg = getActiveFirebaseConfig();
+  const currentUser = getActiveAuth().currentUser;
+  const userEmail = currentUser?.email ?? null;
+  const emailVerified = Boolean(currentUser?.emailVerified);
+  try {
+    const result = await saveSiteSettingsToFirestore(settings, uid);
+    return { ok: true, result, userEmail, emailVerified };
+  } catch (err) {
+    return {
+      ok: false,
+      errorMessage: formatFirestoreWriteError(err, 'تعذر الكتابة إلى إعدادات Firestore'),
+      projectId: activeCfg.projectId,
+      databaseId: activeCfg.firestoreDatabaseId || '(default)',
+      userEmail,
+      emailVerified,
+    };
   }
 }
 

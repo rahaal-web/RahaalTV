@@ -187,6 +187,7 @@ import {
   deleteCustomFontFromFirestore,
   deleteMediaFromFirestore,
   deleteVisitorRequestFromFirestore,
+  diagnoseFirestoreSettingsRules,
   FirestoreConnectionStatus,
   formatFirestoreWriteError,
   getActiveFirebaseConfig,
@@ -2560,8 +2561,8 @@ export function AdminDashboardView({
         activeActorUid
       );
       onNotify(
-        res?.syncedHomeToCloud === false
-          ? 'تم حفظ الإعدادات الأساسية في Firestore وحفظ التخصيصات محلياً (حدث قواعد Firestore للمزامنة السحابية)'
+        res.rejectedSections.length > 0
+          ? `تم حفظ الإعدادات الأساسية في (${res.projectId}/${res.databaseId}) — الأقسام التالية مرفوضة من قواعد Firebase (${res.rejectedSections.join(', ')}): حدّث وانشر firestore.rules الكاملة`
           : 'تم حفظ الإعدادات وتخصيص الرئيسية والهوية والخطوط ودرع النوافذ وثيم المشغّل بنجاح'
       );
     } catch {
@@ -2606,8 +2607,8 @@ export function AdminDashboardView({
         activeActorUid
       );
       onNotify(
-        res?.syncedHomeToCloud === false
-          ? 'تم تطبيق هوية الموقع محلياً — يرجى نشر تحديث firestore.rules لمزامنة الهوية السحابية لكل الزوار'
+        !res.syncedBrandingToCloud
+          ? `تم تطبيق هوية الموقع محلياً — قواعد (${res.projectId}/${res.databaseId}) رفضت حقل branding؛ انسخ أحدث firestore.rules واضغط Publish`
           : 'تم حفظ هوية الموقع والشعار والأيقونة ومزامنتها لجميع الزوار بنجاح!'
       );
     } catch {
@@ -2642,8 +2643,8 @@ export function AdminDashboardView({
         activeActorUid
       );
       onNotify(
-        res?.syncedHomeToCloud === false
-          ? 'تم تطبيق تخطيط الرئيسية والسلايدر محلياً — يرجى تحديث firestore.rules في لوحة Firebase لمزامنتها لكل الزوار'
+        !res.syncedHomeToCloud
+          ? `تم تطبيق تخطيط الرئيسية والسلايدر محلياً — قواعد (${res.projectId}/${res.databaseId}) رفضت homeConfig؛ تأكد من نشر firestore.rules بالضغط على Publish في Firebase Console`
           : 'تم حفظ تخطيط الصفحة الرئيسية وإعدادات السلايدر ومزامنتها للجميع في Firestore بنجاح!'
       );
     } catch {
@@ -2679,9 +2680,11 @@ export function AdminDashboardView({
         activeActorUid
       );
       onNotify(
-        res?.syncedHomeToCloud === false
-          ? 'تم تطبيق الخطوط وأحجام النصوص محلياً — حدّث firestore.rules في Firebase لمزامنتها مع كل الزوار'
-          : 'تم حفظ أحجام وأنواع الخطوط ومزامنتها لجميع الزوار بنجاح!'
+        !res.syncedTypographyToCloud
+          ? `تم تطبيق الخطوط وأحجام النصوص محلياً — قواعد (${res.projectId}/${res.databaseId}) رفضت typography؛ تأكد من نشر أحدث firestore.rules (Publish) في القاعدة الصحيحة`
+          : res.rejectedSections.length > 0
+            ? `تم حفظ ومزامنة الخطوط وأحجام النصوص لجميع الزوار! (ملاحظة: قواعد Firebase رفضت مزامنة: ${res.rejectedSections.join(', ')})`
+            : 'تم حفظ أحجام وأنواع الخطوط ومزامنتها لجميع الزوار بنجاح!'
       );
     } catch {
       onNotify('تم تطبيق الخطوط محلياً — تعذرت المزامنة السحابية مع Firestore');
@@ -2716,8 +2719,8 @@ export function AdminDashboardView({
         activeActorUid
       );
       onNotify(
-        res?.syncedHomeToCloud === false
-          ? 'تم تفعيل إعدادات Smart Popup Shield محلياً — يرجى نشر تحديث firestore.rules في Firebase لمزامنتها لكل الزوار'
+        !res.syncedPopupShieldToCloud
+          ? `تم تفعيل إعدادات Smart Popup Shield محلياً — قواعد (${res.projectId}/${res.databaseId}) رفضت popupShield؛ انشر أحدث firestore.rules`
           : 'تم حفظ ومزامنة إعدادات Smart Popup Shield لجميع المشاهدين بنجاح!'
       );
     } catch {
@@ -4831,7 +4834,23 @@ export function AdminDashboardView({
 
               {/* GROUP 7 (Logs & Rules), GROUP 8 (System Health & Backup) */}
               {isOwner && activeTab === 'security_rules' && (
-                <AdminSecurityLogsPanel mode="security_rules" onNotify={onNotify} />
+                <AdminSecurityLogsPanel
+                  mode="security_rules"
+                  onNotify={onNotify}
+                  onRunRulesDiagnostic={() =>
+                    diagnoseFirestoreSettingsRules(
+                      {
+                        ...settingsForm,
+                        playerTheme: saveStoredPlayerTheme(activePlayerTheme),
+                        homeConfig: saveStoredHomeConfig(activeHomeConfig),
+                        typography: saveStoredTypographyConfig(activeTypography),
+                        popupShield: saveStoredPopupShieldConfig(activePopupShield),
+                        branding: saveStoredWebsiteBranding(activeBranding),
+                      },
+                      activeActorUid
+                    )
+                  }
+                />
               )}
 
               {isOwner && activeTab === 'audit_logs' && (
