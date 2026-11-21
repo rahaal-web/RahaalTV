@@ -39,11 +39,8 @@ import {
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 import {
-  filterServersInBrowser,
   findTrailerInBrowser,
   isLikelyNonVideoWebsiteUrl,
-  resolveApiEndpoint,
-  shouldSkipBackendApiCalls,
 } from '../lib/clientScraper';
 import {
   buildTrailerSearchQueryUrl,
@@ -75,7 +72,6 @@ import {
   findNextAvailableServerIndex,
   LOAD_TIMEOUT_DIRECT_MS,
   LOAD_TIMEOUT_IFRAME_MS,
-  resolveProactiveFilterDecision,
 } from '../lib/serverFailover';
 import { FALLBACK_BACKDROP, FALLBACK_POSTER } from '../lib/mediaFilters';
 import {
@@ -689,17 +685,11 @@ export function PlayerModal({
   const [seasonIdx, setSeasonIdx] = useState(0);
   const [episodeNum, setEpisodeNum] = useState(initialEpisode);
 
-  // Server Filtering system states
+  // Server runtime fault tracking states (no background probing)
   const [filterMap, setFilterMap] = useState<Record<number, ServerFilterEntry>>({});
-  const [isFiltering, setIsFiltering] = useState(false);
-  const [filterAlert, setFilterAlert] = useState<{
-    kind: 'switched' | 'warning';
-    message: string;
-  } | null>(null);
   const [bypassEpisodeSrc, setBypassEpisodeSrc] = useState(false);
   const [manualBypassFault, setManualBypassFault] = useState<Record<number, boolean>>({});
   const [playerReloadKey, setPlayerReloadKey] = useState(0);
-  const [retryAllNonce, setRetryAllNonce] = useState(0);
   const [allServersFailed, setAllServersFailed] = useState(false);
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [shieldSessionOverrides, setShieldSessionOverrides] = useState<
@@ -813,58 +803,58 @@ export function PlayerModal({
     }
   }, []);
 
-  const flushRecentlyWatched = useCallback(
-    (reason: PlaybackRecordReason) => {
-      const ctx = latestPlaybackContextRef.current;
-      if (!ctx.item) return;
+  const onRecentlyWatchedUpdatedRef = useRef(onRecentlyWatchedUpdated);
+  onRecentlyWatchedUpdatedRef.current = onRecentlyWatchedUpdated;
 
-      const attemptKey = `${ctx.item.id}::s${ctx.seasonIdx}::e${ctx.episodeNum}::srv${ctx.selectedServer}`;
-      if (reason === 'start') {
-        if (startedPlaybackKeyRef.current === attemptKey) return;
-        startedPlaybackKeyRef.current = attemptKey;
-      } else if (!startedPlaybackKeyRef.current) {
-        // Never record heartbeat/episode_switch/close if genuine playback never started
-        return;
-      }
+  const flushRecentlyWatched = useCallback((reason: PlaybackRecordReason) => {
+    const ctx = latestPlaybackContextRef.current;
+    if (!ctx.item) return;
 
-      const now = Date.now();
-      if (reason === 'heartbeat' && now - lastLocalHeartbeatMsRef.current < 8000) {
-        return;
-      }
-      lastLocalHeartbeatMsRef.current = now;
+    const attemptKey = `${ctx.item.id}::s${ctx.seasonIdx}::e${ctx.episodeNum}::srv${ctx.selectedServer}`;
+    if (reason === 'start') {
+      if (startedPlaybackKeyRef.current === attemptKey) return;
+      startedPlaybackKeyRef.current = attemptKey;
+    } else if (!startedPlaybackKeyRef.current) {
+      // Never record heartbeat/episode_switch/close if genuine playback never started
+      return;
+    }
 
-      const vid = videoElementRef.current;
-      const positionSec =
-        vid && Number.isFinite(vid.currentTime) ? Math.max(0, vid.currentTime) : 0;
-      const durationSec =
-        vid && Number.isFinite(vid.duration) && vid.duration > 0 ? vid.duration : 0;
+    const now = Date.now();
+    if (reason === 'heartbeat' && now - lastLocalHeartbeatMsRef.current < 8000) {
+      return;
+    }
+    lastLocalHeartbeatMsRef.current = now;
 
-      const seasonObj = ctx.item.seasons?.[ctx.seasonIdx];
-      const epObj = (seasonObj?.episodes || []).find((e) => e.number === ctx.episodeNum);
-      const hasEpisodes = Boolean(ctx.item.seasons && ctx.item.seasons.length > 0);
+    const vid = videoElementRef.current;
+    const positionSec =
+      vid && Number.isFinite(vid.currentTime) ? Math.max(0, vid.currentTime) : 0;
+    const durationSec =
+      vid && Number.isFinite(vid.duration) && vid.duration > 0 ? vid.duration : 0;
 
-      void recordRecentlyWatchedPlayback({
-        userId: ctx.userId || 'guest',
-        isSignedIn: Boolean(ctx.isSignedIn),
-        media: ctx.item,
-        seasonNumber: hasEpisodes ? seasonObj?.seasonNumber || ctx.seasonIdx + 1 : undefined,
-        episodeNumber: hasEpisodes ? ctx.episodeNum : undefined,
-        episodeTitle: epObj?.title,
-        positionSec,
-        durationSec,
-        lastServerIndex: ctx.selectedServer,
-        lastServerUrl: ctx.streamUrl || undefined,
-        reason,
+    const seasonObj = ctx.item.seasons?.[ctx.seasonIdx];
+    const epObj = (seasonObj?.episodes || []).find((e) => e.number === ctx.episodeNum);
+    const hasEpisodes = Boolean(ctx.item.seasons && ctx.item.seasons.length > 0);
+
+    void recordRecentlyWatchedPlayback({
+      userId: ctx.userId || 'guest',
+      isSignedIn: Boolean(ctx.isSignedIn),
+      media: ctx.item,
+      seasonNumber: hasEpisodes ? seasonObj?.seasonNumber || ctx.seasonIdx + 1 : undefined,
+      episodeNumber: hasEpisodes ? ctx.episodeNum : undefined,
+      episodeTitle: epObj?.title,
+      positionSec,
+      durationSec,
+      lastServerIndex: ctx.selectedServer,
+      lastServerUrl: ctx.streamUrl || undefined,
+      reason,
+    })
+      .then(() => {
+        onRecentlyWatchedUpdatedRef.current?.();
       })
-        .then(() => {
-          onRecentlyWatchedUpdated?.();
-        })
-        .catch(() => {
-          // Silent safeguard
-        });
-    },
-    [onRecentlyWatchedUpdated]
-  );
+      .catch(() => {
+        // Silent safeguard
+      });
+  }, []);
 
   const confirmServerLoadReady = useCallback(
     (serverIdx: number, expectedToken?: number) => {
@@ -919,7 +909,6 @@ export function PlayerModal({
     setEpisodeNum(initialEpisode);
     setSelectedServer(initialServerIndex);
     setFilterMap({});
-    setFilterAlert(null);
     setBypassEpisodeSrc(initialServerIndex > 0);
     setManualBypassFault({});
     setAllServersFailed(false);
@@ -1015,197 +1004,26 @@ export function PlayerModal({
           candidateIdx,
           effectiveServers[candidateIdx]?.url
         );
-        setFilterAlert({
-          kind: 'switched',
-          message: `${faultName} غير متاح حالياً — تم التبديل تلقائياً إلى ${nextName}.`,
-        });
+        onNotify?.(`${faultName} غير متاح حالياً — تم التبديل تلقائياً إلى ${nextName}.`);
       } else {
         setAllServersFailed(true);
-        setFilterAlert({
-          kind: 'warning',
-          message: 'تعذر تشغيل المحتوى حاليًا — لم تستجب السيرفرات المتاحة. يمكنك إعادة المحاولة.',
-        });
+        onNotify?.('تعذر تشغيل المحتوى حاليًا — لم تستجب السيرفرات المتاحة.');
       }
     },
-    [item, seasonIdx, episodeNum, clearLoadTimeout]
+    [item, seasonIdx, episodeNum, clearLoadTimeout, onNotify]
   );
 
-  // Mark iframe frame load separately: cancels hang timer without locking out proactive 404/403 detection
+  // Mark iframe frame load ready immediately without background server probing
   const markIframeLoaded = useCallback(
     (serverIdx: number, expectedToken?: number) => {
       if (expectedToken !== undefined && attemptTokenRef.current !== expectedToken) return;
       iframeLoadedRef.current = true;
       clearLoadTimeout();
       setAllServersFailed(false);
-      const existing = filterMapRef.current[serverIdx];
-      if (existing?.ok) {
-        confirmServerLoadReady(serverIdx, expectedToken);
-      } else if (existing && !existing.ok && !manualBypassFault[serverIdx]) {
-        handleServerFaultFailover(serverIdx, existing.reason || 'السيرفر غير متاح', expectedToken);
-      }
+      confirmServerLoadReady(serverIdx, expectedToken);
     },
-    [clearLoadTimeout, confirmServerLoadReady, handleServerFaultFailover, manualBypassFault]
+    [clearLoadTimeout, confirmServerLoadReady]
   );
-
-  // Proactive Server Filtering scan on open / episode change / manual retry (backend + browser/Worker fallback)
-  useEffect(() => {
-    if (!item) return;
-
-    const episodesList = item.seasons?.[seasonIdx]?.episodes || item.seasons?.[0]?.episodes || [];
-    const activeEp = episodesList.find((e) => e.number === episodeNum);
-    const hasPerEpisodeServers = Boolean(activeEp?.servers && activeEp.servers.length > 0);
-    const targetServers = hasPerEpisodeServers
-      ? activeEp!.servers!
-      : Array.isArray(item.servers)
-        ? item.servers
-        : [];
-
-    const rawEpSrc =
-      hasPerEpisodeServers || bypassEpisodeSrc
-        ? null
-        : extractSafeStreamSrc(activeEp?.embedCode, activeEp?.watchUrl);
-    const epSrc = rawEpSrc && !isLikelyNonVideoWebsiteUrl(rawEpSrc) ? rawEpSrc : null;
-
-    const serverUrls = targetServers.map((srv) => extractSafeStreamSrc(srv.embedCode, srv.url) || '');
-    const allUrls = epSrc ? [...serverUrls, epSrc] : serverUrls;
-
-    if (allUrls.every((u) => !u)) return;
-
-    let cancelled = false;
-    setIsFiltering(true);
-
-    (async () => {
-      try {
-        let filterResults: ServerFilterEntry[] | null = null;
-
-        if (!shouldSkipBackendApiCalls()) {
-          try {
-            const res = await fetch(resolveApiEndpoint('/api/filter-servers'), {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ urls: allUrls }),
-            });
-            const contentType = res.headers.get('content-type') || '';
-            if (res.ok && contentType.includes('application/json')) {
-              const data = (await res.json()) as { ok?: boolean; results?: ServerFilterEntry[] };
-              if (data.ok && Array.isArray(data.results)) {
-                filterResults = data.results;
-              }
-            }
-          } catch {
-            // Static hosting -> fall through to browser/Worker filter
-          }
-        }
-
-        if (!filterResults) {
-          filterResults = await filterServersInBrowser(allUrls);
-        }
-
-        if (cancelled || !filterResults) return;
-
-        const nextMap: Record<number, ServerFilterEntry> = {};
-
-        targetServers.forEach((_, idx) => {
-          const entry = filterResults?.[idx];
-          if (entry) {
-            nextMap[idx] = entry;
-          }
-        });
-
-        const prev = filterMapRef.current;
-        const merged: Record<number, ServerFilterEntry> = { ...nextMap };
-        // Preserve runtime confirmations or runtime failures discovered while filter was running
-        Object.entries(prev).forEach(([k, v]) => {
-          const numIdx = Number(k);
-          if (!merged[numIdx] || (v && !v.ok)) {
-            merged[numIdx] = v;
-          }
-        });
-        filterMapRef.current = merged;
-        setFilterMap(merged);
-
-        const safeCurrentIdx =
-          selectedServerRef.current < targetServers.length ? selectedServerRef.current : 0;
-        const epResult = epSrc ? filterResults[targetServers.length] : null;
-        const decision = resolveProactiveFilterDecision({
-          currentIndex: safeCurrentIdx,
-          totalServers: targetServers.length,
-          triedIndices: triedServersRef.current,
-          filterMap: merged,
-          playbackConfirmed: playbackConfirmedRef.current,
-          manuallyBypassedCurrent: Boolean(manualBypassFault[safeCurrentIdx]),
-          hasEpisodeOverrideUrl: Boolean(epSrc),
-          episodeUrlOk: Boolean(epResult?.ok),
-        });
-
-        if (decision.action === 'switch') {
-          decision.nextTriedIndices.forEach((i) => triedServersRef.current.add(i));
-          triedServersRef.current.add(decision.nextIndex);
-          attemptTokenRef.current += 1;
-          clearLoadTimeout();
-          playbackConfirmedRef.current = false;
-          hasStartedPlayingRef.current = false;
-          iframeLoadedRef.current = false;
-          userPausedRef.current = false;
-          setAutoplayBlocked(false);
-          setAllServersFailed(false);
-          if (decision.bypassEpisodeUrl) {
-            setBypassEpisodeSrc(true);
-          }
-          selectedServerRef.current = decision.nextIndex;
-          setSelectedServer(decision.nextIndex);
-
-          const currentName = formatShortServerName(
-            targetServers[safeCurrentIdx]?.name,
-            safeCurrentIdx,
-            targetServers[safeCurrentIdx]?.url
-          );
-          const nextName = formatShortServerName(
-            targetServers[decision.nextIndex]?.name,
-            decision.nextIndex,
-            targetServers[decision.nextIndex]?.url
-          );
-          setFilterAlert({
-            kind: 'switched',
-            message:
-              decision.bypassEpisodeUrl
-                ? `تم التبديل تلقائياً إلى ${nextName} لضمان تشغيل الحلقة.`
-                : `${currentName} غير متاح حالياً — تم التبديل تلقائياً إلى ${nextName}.`,
-          });
-        } else if (decision.action === 'all_failed') {
-          decision.nextTriedIndices.forEach((i) => triedServersRef.current.add(i));
-          clearLoadTimeout();
-          setAllServersFailed(true);
-          setFilterAlert({
-            kind: 'warning',
-            message: 'تعذر تشغيل المحتوى حاليًا — لم تستجب السيرفرات المتاحة.',
-          });
-        } else if (
-          iframeLoadedRef.current &&
-          merged[safeCurrentIdx]?.ok &&
-          (!epSrc || epResult?.ok)
-        ) {
-          confirmServerLoadReady(safeCurrentIdx, attemptTokenRef.current);
-        }
-      } catch {
-        // Silent fallback
-      } finally {
-        if (!cancelled) setIsFiltering(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    item?.id,
-    seasonIdx,
-    episodeNum,
-    initialServerIndex,
-    retryAllNonce,
-    clearLoadTimeout,
-    confirmServerLoadReady,
-  ]);
 
   const effectiveShieldConfig = normalizePopupShieldConfig(
     popupShieldConfig || loadStoredPopupShieldConfig()
@@ -1351,10 +1169,7 @@ export function PlayerModal({
           previewServerIndex,
           currentActiveStreamSrc || previewServerObj?.url
         );
-        setFilterAlert({
-          kind: 'switched',
-          message: `تم ضبط التوافق لـ ${resolvedShortName} تلقائياً لضمان التشغيل.`,
-        });
+        onNotify?.(`تم ضبط التوافق لـ ${resolvedShortName} تلقائياً لضمان التشغيل.`);
         return;
       }
 
@@ -1809,7 +1624,6 @@ export function PlayerModal({
     setAutoplayBlocked(false);
     setAllServersFailed(false);
     setBypassEpisodeSrc(idx > 0);
-    setFilterAlert(null);
     if (filterMapRef.current[idx] && !filterMapRef.current[idx].ok) {
       setManualBypassFault((prev) => ({ ...prev, [idx]: true }));
     }
@@ -1845,13 +1659,11 @@ export function PlayerModal({
     userPausedRef.current = false;
     setAutoplayBlocked(false);
     setAllServersFailed(false);
-    setFilterAlert(null);
     setBypassEpisodeSrc(startIdx > 0);
     setManualBypassFault({});
     setFilterMap({});
     setSelectedServer(startIdx);
     setPlayerReloadKey((k) => k + 1);
-    setRetryAllNonce((n) => n + 1);
   };
 
   const handleSelectEpisodeOrSeason = (nextSeasonIdx: number, nextEpisodeNum: number) => {
@@ -1876,7 +1688,6 @@ export function PlayerModal({
     setEpisodeNum(nextEpisodeNum);
     setSelectedServer(0);
     setFilterMap({});
-    setFilterAlert(null);
     setManualBypassFault({});
     setPlayerReloadKey((k) => k + 1);
   };
@@ -2027,15 +1838,6 @@ export function PlayerModal({
                 <span className="font-extrabold text-white">سيرفر {safeServerIndex + 1}</span>
                 <span>·</span>
                 <span className="font-latin font-black text-[#f9c400]">{activeQuality}</span>
-                {isFiltering && (
-                  <>
-                    <span>·</span>
-                    <span className="inline-flex items-center gap-1 text-[10px] font-bold" style={{ color: 'var(--pt-accent)' }}>
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      <span>فحص السيرفرات...</span>
-                    </span>
-                  </>
-                )}
               </p>
             </div>
           </div>
@@ -2049,30 +1851,6 @@ export function PlayerModal({
             <X className="w-4 h-4" />
           </button>
         </div>
-
-        {/* Desktop Auto Server Filtering Alert Banner */}
-        {filterAlert && (
-          <div
-            className={`hidden lg:flex items-center justify-between gap-2 px-4 py-2 text-xs font-bold border-b shrink-0 ${
-              filterAlert.kind === 'switched'
-                ? 'bg-[#f9c400]/10 border-[#f9c400]/25 text-[#f9c400]'
-                : 'bg-[#D92321]/12 border-[#D92321]/25 text-[#ff9b99]'
-            }`}
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              <span>{filterAlert.message}</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setFilterAlert(null)}
-              className="rounded p-1 hover:bg-white/10 cursor-pointer shrink-0"
-              aria-label="إخفاء التنبيه"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
 
         {/* Main Body: Mobile Edge-to-Edge Watch First | Desktop Server Rail + Video Stage */}
         <div className="rtv-mobile-watch-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-0 lg:p-4">
@@ -2094,12 +1872,6 @@ export function PlayerModal({
                     <span>سيرفرات المشاهدة</span>
                   </span>
                   <div className="flex items-center gap-2">
-                    {isFiltering && (
-                      <span className="lg:hidden inline-flex items-center gap-1 text-[10px] font-bold text-[#9fb2d4]">
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                        <span>فحص</span>
-                      </span>
-                    )}
                     <span className="font-latin tabular-nums text-[11px] font-black text-[#b7c9ef]">
                       {serversList.length}
                     </span>
@@ -2863,30 +2635,6 @@ export function PlayerModal({
                   <span>{serversList.length > 1 ? 'تغيير السيرفر' : 'إعادة التحميل'}</span>
                 </button>
               </div>
-
-              {/* Mobile Non-Intrusive Auto-Switch Alert (Placed Below Player) */}
-              {filterAlert && (
-                <div
-                  className={`flex lg:hidden items-center justify-between gap-2 mx-3 mt-2.5 rounded-xl px-3 py-2 text-[11px] font-bold border ${
-                    filterAlert.kind === 'switched'
-                      ? 'bg-[#f9c400]/10 border-[#f9c400]/25 text-[#f9c400]'
-                      : 'bg-[#D92321]/12 border-[#D92321]/25 text-[#ff9b99]'
-                  }`}
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                    <span className="leading-snug">{filterAlert.message}</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setFilterAlert(null)}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg hover:bg-white/10 cursor-pointer shrink-0"
-                    aria-label="إخفاء التنبيه"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              )}
 
               {/* Desktop Series Episodes Switcher */}
               {episodes.length > 0 && (
